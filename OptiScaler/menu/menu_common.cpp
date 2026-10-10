@@ -3600,10 +3600,9 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     {
         if (ImGui::Checkbox("Built-in RTX 40 MFG unlock (experimental; restart)", &adaUnlock))
             config->FGDLSSGAdaMfgUnlock = adaUnlock;
-        ShowHelpMarker("Optional RTX 40 (Ada) unlock. Save Settings and restart to enable or remove it.\n"
-                       "Requires a supported DLSSG runtime and Streamline 2.7.1+ for multiplier overrides.\n"
-                       "Do not combine with another MFG unlocker. Does not add FG to an unsupported game.\n"
-                       "Not validated on RTX 40 hardware here; RTX 20/30/50 are left unchanged.");
+        ShowHelpMarker("Unlocks multi-frame generation on RTX 40. Save and restart to apply. Needs a supported DLSSG "
+                       "runtime and Streamline 2.7.1+. Don't combine with other unlockers. Not tested on RTX 40 "
+                       "here.");
     }
     if (adaUnlock && !disableAda)
     {
@@ -6808,11 +6807,8 @@ void MenuCommon::RenderThemeSettings(RenderMenuContext& ctx)
         }
 
         ImGui::SameLine(0.0f, 6.0f);
-        ShowHelpMarker(
-            "Rounder, roomier layout with Inter text, section cards and an accent bar on the selected page.\n"
-            "The performance overlay keeps the fixed-width font so its numbers stay steady.\n"
-            "A custom TTFFontPath still replaces the text font, and with HQ font off only the layout and "
-            "colors change.");
+        ShowHelpMarker("Rounder layout with section cards and the Inter font. The performance overlay keeps its "
+                       "fixed-width font.");
 
         ImGui::SeparatorText("Accent Colour");
 

@@ -277,26 +277,18 @@ void NativeDriver::DrawFlowTuning()
     ImGui::Checkbox("Match within what looks alike##flowlook", &tune.lookWeights);
 
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(
-            "%s", "The match counts the pixels around each one by how close their brightness is to its own,\n"
-                  "so a moving thing's edge does not drag its motion onto what lies beside it. Without depth it\n"
-                  "does what depth would; with depth it keeps a misaligned depth from doing harm.");
+        ImGui::SetTooltip("%s", "Matches motion only against neighbours of similar brightness, so a moving edge "
+                                "doesn't drag its motion onto what's beside it.");
     ImGui::Checkbox("Camera motion where the picture is flat##flowglobal", &tune.globalCandidate);
 
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s",
-                          "Where nothing in the picture says how it moved (a plain wall, sky), use what the whole\n"
-                          "picture did last frame. It also moves the flat inside of a still HUD panel while the\n"
-                          "camera turns; switch it off to compare.");
+        ImGui::SetTooltip("%s", "Gives flat areas (walls, sky) the whole picture's motion. Off: they get none.");
     ImGui::SetNextItemWidth(160.0f);
     ImGui::SliderInt("Frames unchanged before it counts as still (0 = off)##flowstill", &tune.stillFrames, 0, 60);
 
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s",
-                          "Where the picture has not changed at all for this many frames (a HUD panel), the camera\n"
-                          "motion above no longer wins a tie with no motion, so the HUD stays still while the\n"
-                          "picture pans behind it. Near a line or an edge a panning wall changes, so it keeps moving\n"
-                          "with the camera; a plain patch far from any is held still too. 0 switches the rule off.");
+        ImGui::SetTooltip("%s", "After this many unchanged frames, an area (a HUD panel) stays still while the "
+                                "picture pans. Higher: waits longer. 0: off.");
     ImGui::SetNextItemWidth(160.0f);
     ImGui::SliderFloat("Still: largest change allowed##flowstilleps", &tune.stillEpsilon, 0.0005f, 0.05f, "%.4f",
                        ImGuiSliderFlags_Logarithmic);
@@ -305,33 +297,25 @@ void NativeDriver::DrawFlowTuning()
     ImGui::Checkbox("Cheaper sub-pixel refinement##flowinverse", &tune.inverseRefinement);
 
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s",
-                          "Finds the picture's gradients once from the current frame and stops early. Faster, but\n"
-                          "less exact on thin lines and grain; switch it on and off to compare.");
+        ImGui::SetTooltip("%s", "Faster motion refinement; less exact on thin lines and grain.");
     ImGui::Checkbox("Perceptual luma (HDR and SDR)##flowluma", &tune.perceptualLuma);
 
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s",
-                          "Matches on a lightness that follows how the eye sees it: an SDR picture as it is, an HDR\n"
-                          "one (scRGB, PQ) after dividing by a white of 203 nits and a lightness curve, so dark\n"
-                          "detail counts like bright. Off: the older tone-mapped luma.");
+        ImGui::SetTooltip("%s", "Matches motion on perceived lightness, so dark detail counts like bright (HDR and "
+                                "SDR). Off: the older method.");
     bool preferStill = tune.zeroMargin > 0.0f;
 
     if (ImGui::Checkbox("Prefer no motion in flat ground (experimental)##flowzero", &preferStill))
         tune.zeroMargin = preferStill ? 0.001f : 0.0f;
 
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s",
-                          "Where no motion matches almost as well as the best offset, keep the flow at zero. Holds a\n"
-                          "still HUD panel still while the picture pans behind it, but also stops a plain wall\n"
-                          "from moving with the pan; off by default.");
+        ImGui::SetTooltip("%s", "Keeps flat areas still when no motion fits almost as well. Holds HUD panels still, "
+                                "but plain walls may not follow the camera. Off by default.");
     ImGui::Checkbox("Find a hard cut on its own frame##flowscene", &tune.sceneCutDetector);
 
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s",
-                          "Compares the picture's brightness histograms with the last frame's on the GPU. On a cut\n"
-                          "the flow is zero and every pixel is distrusted on that very frame, instead of a few\n"
-                          "frames later. A fade or an exposure change is not a cut.");
+        ImGui::SetTooltip("%s", "Detects camera cuts on the frame they happen, so old motion isn't trusted across "
+                                "them. Fades and exposure changes don't count.");
     ImGui::SetNextItemWidth(160.0f);
     ImGui::SliderFloat("Confidence knee##flowknee", &tune.confidenceKnee, 0.0005f, 0.05f, "%.4f",
                        ImGuiSliderFlags_Logarithmic);

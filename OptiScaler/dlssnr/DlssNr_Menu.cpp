@@ -211,11 +211,9 @@ static void RenderBrightnessPoints(CustomOptional<std::string>& table, float neu
             table = text;
         }
 
-        HelpMarker("Each point is the Model input brightness Tune found for a scene this bright. Automatic uses the"
-                   "\nnearest points, blended smoothly between two, so tune once in a bright scene and once in a dark one."
-                   "\nTune again in the same brightness (within 2%) to replace a point. Eight points at most."
-                   "\nWith no points the Model input brightness slider applies again."
-                   "\nA point belongs to the meter it was tuned with: after switching Meter, tune again.");
+        HelpMarker("Brightness settings Tune saved for scenes of different brightness. Automatic blends the nearest "
+                   "two. Tune once in a bright and once in a dark scene; tuning again at the same brightness "
+                   "replaces a point. Up to 8. Re-tune after changing Meter.");
         ImGui::TreePop();
     }
 
@@ -335,7 +333,8 @@ static void RenderTuneForThisScene(uint32_t source, CustomOptional<float>& trim,
             }
 
             if (ImGui::IsItemHovered())
-                ImGui::SetTooltip("%s", "Keeps this result for scenes about this bright and blends toward other points, instead of one value for every scene.");
+                ImGui::SetTooltip("%s", "Keeps this result for scenes about this bright. Automatic blends between "
+                                        "saved points.");
         }
         else
         {
@@ -405,16 +404,9 @@ static void RenderTuneForThisScene(uint32_t source, CustomOptional<float>& trim,
             DlssNr::StartExposureCalibration(source);
 
         ImGui::EndDisabled();
-        HelpMarker("Finds the Model input brightness above that gives NR the most detail on the scene on screen."
-                   "\nTries the slider across its useful range twice over, about 12 frames a step, and checks each step"
-                   "\nfor detail, flicker and clipping, offering a change only when both sweeps agree. Hold the camera still while it runs: the picture gets brighter"
-                   "\nand darker on purpose. Nothing changes until you press Apply or Save as point. The result is an offset on the"
-                   "\nexposure, so it keeps following the scene afterwards. With more than one model pass, it runs"
-                   "\nand measures the first pass only: that is the one that sees the game's picture, so the result"
-                   "\nholds for any number of passes. With Follow the game's exposure on, it tunes against Automatic's"
-                   "\nown exposure and learns Follow again during the run, so the result holds once Follow takes over."
-                   "\nWith NR before Super Resolution, the run itself happens after SR (the picture changes for a"
-                   "\nmoment) and NR goes back before SR when it ends; the setting is not changed.");
+        HelpMarker("Finds the Model input brightness that gives the most detail in this scene. Hold the camera still "
+                   "for a few seconds; the picture gets brighter and darker while it runs. Nothing changes until you "
+                   "press Apply or Save as point.");
 
         if (!cal.available && !cal.unavailable.empty())
             ImGui::TextDisabled("Not available: %s", cal.unavailable.c_str());
@@ -460,16 +452,9 @@ static void RenderMeasureDetail()
         DlssNr::StartMeasureDetail();
 
     ImGui::EndDisabled();
-    HelpMarker("Measures NR's output on the scene on screen at the current settings, for about a second, against the"
-               "\ngame's own frame:"
-               "\n  Detail - how much fine detail NR adds (50% more = half as much again as the game had)."
-               "\n  Flicker - how much the picture changes from frame to frame, as a multiple of the game's own change"
-               "\n    (1x = NR adds no flicker; on a paused, perfectly still frame it is shown as a small number)."
-               "\n  Colour - whether NR makes the picture more or less saturated, warmer or cooler."
-               "\n  Shadows - whether NR lifts or darkens the darkest parts, and how much it crushes to black."
-               "\nTo compare settings: on a still scene (a paused replay, photo mode) press it, change ONE setting, press"
-               "\nit again. The line below says what changed; differences of a few percent are noise (press it twice"
-               "\nwithout changing anything to see how much). The raw numbers are greyed out and go to OptiScaler.log.");
+    HelpMarker("Measures NR against the game's picture for about a second: Detail (added fine detail), Flicker (1x = "
+               "none added), Colour, Shadows.\n"
+               "To compare: on a still scene press it, change one setting, press again. A few percent is noise.");
 
     if (!cal.measureAvailable && !cal.measureUnavailable.empty())
         ImGui::TextDisabled("Not available: %s", cal.measureUnavailable.c_str());
@@ -571,13 +556,17 @@ static bool DeferredSlider(const char* label, Option* opt, float mn, float mx,
     }
 
     if (std::strcmp(label, "Intensity") == 0)
-        HelpMarker("Overall enhancement strength for this pass. 1 = default; results depend on the profile.\nValues above 1 are experimental; the runtime may clamp or ignore them.");
+        HelpMarker("Strength of this pass. Higher: stronger effect. Lower: closer to the game's picture. Default: 1. "
+                   "Above 1 is experimental.");
     else if (std::strcmp(label, "Local structure") == 0)
-        HelpMarker("Fine detail and local contrast requested from the model (high-frequency structure).\n1 = default; values above 1 are experimental.");
+        HelpMarker("Fine detail and local contrast. Higher: crisper texture. Lower: smoother. Default: 1. Above 1 is "
+                   "experimental.");
     else if (std::strcmp(label, "Local tone") == 0)
-        HelpMarker("Broad brightness and lighting changes requested from the model (low-frequency tone).\nLater passes default to 0. Values above 1 are experimental.");
+        HelpMarker("Broad lighting changes. Higher: stronger relighting. Lower: keeps the game's lighting. Default: "
+                   "1 (0 on later passes). Above 1 is experimental.");
     else if (std::strcmp(label, "Skin structure") == 0)
-        HelpMarker("Fine detail for pixels the model identifies as skin. -1 follows Local structure; 0 reduces skin detail.\nSkin colour is controlled separately. Values above 1 are experimental.");
+        HelpMarker("Fine detail on skin. Higher: more skin detail. 0: smooth skin. -1: same as Local structure. "
+                   "Above 1 is experimental.");
     return changed;
 }
 
@@ -1041,26 +1030,12 @@ static void RenderNativeMode(Config* config, bool nrEnabled, bool& finishedPictu
         }
     }
 
-    HelpMarker(
-        "For a game that makes no upscaler call of its own. Optical F5Low works out the motion of the finished picture "
-        "itself, so NR can still run.\n"
-        "NR only: NR runs on the finished picture. Costs less, no frame generation. Sets NR Pass at: to "
-        "Finished Picture.\n"
-        "NR + upscaler & frame generation: also runs OptiScaler's upscaler (your choice in the menu, FSR when "
-        "none) on the picture at the same size, to keep it steady. Frame generation needs this, and it unlocks "
-        "the upscaler settings. Costs more. Moves NR Pass at: off Finished Picture.\n"
-        "Both use the game's depth when Optical F5Low finds it (Advanced). Depth is optional: without it NR uses "
-        "motion only. Choosing a mode turns depth on (Off turns it off); if depth was not running when the "
-        "game started, restart the game to use it.\n"
-        "NR runs only with Enable Neural Rendering on. Changes apply at once.\n"
-        "Not for a game that calls an upscaler of its own: while it does, only Off can be chosen, and a mode "
-        "already on stands aside.\n"
-        "FG only (game's upscaler), Vulkan games only: the reverse, for a game that calls DLSS, FSR or XeSS of its "
-        "own. Frame generation runs from that call, with the game's own motion and depth; no motion is estimated. "
-        "The game's upscaler runs through a D3D12 copy of it (DLSS on D3D12 where DLSS can run, FSR otherwise), "
-        "chosen for you; leaving the mode puts your upscaler back.\n"
-        "D3D11, D3D12 and Vulkan games. On Vulkan, frame generation needs the Frame Generation input (OptiFG, "
-        "Upscaler) and an output set when the game starts; the mode itself can be switched on later.");
+    HelpMarker("For games that don't call an upscaler: Optical F5Low works out the motion itself so NR can run.\n"
+               "NR only: NR on the finished picture. Cheapest; no frame generation.\n"
+               "NR + upscaler & frame generation: adds OptiScaler's upscaler to keep the picture steady; needed for "
+               "frame generation. Costs more.\n"
+               "FG only (Vulkan): frame generation for Vulkan games that call DLSS, FSR or XeSS themselves.\n"
+               "Needs Enable Neural Rendering. On Vulkan, set up frame generation before the game starts.");
 
     if (shown == Shown::Off)
     {
@@ -1185,7 +1160,7 @@ static void RenderEnableToggle(Config* config)
     if (ImGui::Checkbox("Enable Neural Rendering", &enabled))
         config->DlssNrEnabled = enabled;
 
-    HelpMarker("Enhance lighting and material appearance with the NR model. Placement selects before or after upscaling.\nRequires nvngx_dlssnr.dll plus the included nvngx.dll_dlssnr.dll helper.");
+    HelpMarker("Turns DLSS Neural Rendering on. Needs nvngx_dlssnr.dll and the included nvngx.dll_dlssnr.dll.");
 }
 
 // The full running-status block, for the Status & Presets page.
@@ -1278,7 +1253,8 @@ static void RenderRunningStatus(Config* config, const NrCommon& nr)
         ImGui::SameLine();
         ImGui::TextDisabled("(?)");
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("Time between the start and end of NR on the GPU, including delays while other work runs.\nCompare FPS to check the effect on game performance.");
+            ImGui::SetTooltip("%s", "NR's GPU time per frame, including waits for other GPU work. Check FPS for the "
+                                    "real cost.");
         if (finishedPicture)
             ImGui::TextDisabled("Includes time shared with other GPU work.");
 
@@ -1442,19 +1418,9 @@ static bool RenderDetailReuseToggle(Config* config)
     bool detailReuse = config->DlssNrDetailReuse.value_or_default();
     if (ImGui::Checkbox("Reuse detail between frames (experimental)", &detailReuse))
         config->DlssNrDetailReuse = detailReuse;
-    HelpMarker("Runs the model every other frame. In between, the last result's detail is moved onto the new frame "
-               "with the motion vectors, and dropped where depth or colour disagree.\nRoughly halves NR's GPU cost at "
-               "any pass count. Detail can pop where objects move and reveal new areas.\n"
-               "Best with one pass. What a reused frame can get wrong is the part of the picture with no detail to "
-               "move times how much the model changes the picture, and passes build on each other, so with two or "
-               "three passes the same dropped areas flicker visibly in fast motion (The Witcher 3; not seen there "
-               "with frame generation on). Pause while moving fast, under Debug, is what limits it.\n"
-               "D3D12 and Vulkan with NR after SR, and with Optical F5Low (D3D11, D3D12 and Vulkan games), which also tells "
-               "it where the last frame cannot be trusted. Not with NR before SR, nor in Finished Picture without "
-               "Optical F5Low. Reuse bottleneck is off while this runs.\n"
-               "It keeps running while frame generation is on (Debug > Keep on with frame generation). Full and "
-               "reused frames cost differently, so the game's frame times alternate: a limiter just below the "
-               "average rate evens them out.");
+    HelpMarker("Runs the model every other frame and moves its last result onto the frame between. About halves NR's "
+               "GPU cost. Detail can pop where things move or appear; best with 1 pass. Not with NR before SR. "
+               "Fine-tune under Debug.");
     return detailReuse;
 }
 
@@ -1476,13 +1442,8 @@ static void RenderSceneCutToggle(Config* config)
         config->DlssNrSceneCut = act ? 2u : 1u;
     ImGui::EndDisabled();
 
-    HelpMarker("Finds hard cuts in the picture (a camera cut, a new scene) on the frame they happen, by comparing how "
-               "bright each of nine areas of the picture is with the last frame. Fades, exposure changes and fast "
-               "pans are not cuts.\nMost games tell NR about their cuts. In one that does not, the old scene fades "
-               "out of NR's picture over several frames. With this on, NR starts over a few frames after such a cut, "
-               "and Reuse detail between frames drops the moved detail on the cut frame itself.\nOff, the cuts are "
-               "only counted below, which shows whether this game needs it. D3D12 games; not with Optical F5Low, "
-               "which finds its own cuts. SceneCut=0 in OptiScaler.ini stops the counting too.");
+    HelpMarker("Restarts NR on camera cuts the game doesn't report, so the old scene doesn't fade through. Off: cuts "
+               "are only counted below, to show whether this game needs it. D3D12 only.");
 
     const DlssNr::SceneCutInfo status = DlssNr::SceneCutStatus();
 
@@ -1515,11 +1476,8 @@ static void RenderLowLatencySection(Config* config)
     if (ImGui::Checkbox("Lower the game's latency##nativelowlatency", &on))
         config->DlssNrNativeLowLatency = on ? Setting::Auto : Setting::Off;
 
-    HelpMarker("A game running Optical F5Low makes no call to lower its latency, so Optical F5Low makes them for it: "
-               "NVIDIA Reflex on NVIDIA cards, and on other cards Anti-Lag 2, XeLL or LatencyFlex through fakenvapi. It "
-               "keeps the GPU's queue short, which matters most when the GPU is the limit, as it is with NR and frame "
-               "generation on.\n"
-               "It stands aside as soon as the game calls Reflex itself. Takes effect at once.");
+    HelpMarker("Makes the latency calls the game doesn't: Reflex on NVIDIA, Anti-Lag 2 / XeLL / LatencyFlex on other "
+               "cards. Helps most when the GPU is the limit. Steps aside if the game uses Reflex itself.");
 
     const auto status = native::lowlatency::GetStatus();
 
@@ -1572,9 +1530,8 @@ static void RenderF5LowPage(Config* config, const NrCommon& nr)
         else
             ImGui::TextUnformatted("Reuse detail between frames: On");
     }
-    HelpMarker("Runs the model every other frame and moves the last result's detail onto the frames in between, "
-               "which roughly halves NR's GPU cost. With Optical F5Low it also uses the trust mask to drop detail "
-               "where the last frame cannot be trusted.\nTurned on and tuned on the NR Options page.");
+    HelpMarker("Runs the model every other frame to about halve NR's cost; with Optical F5Low it skips detail where "
+               "the motion can't be trusted. Set on the NR Options page.");
     if (ImGui::SmallButton("Set in NR Options##f5lowdetailreuse"))
         MenuPages::RequestPage(MenuPages::Page::NrOptions);
 
@@ -1584,9 +1541,8 @@ static void RenderF5LowPage(Config* config, const NrCommon& nr)
         const EdgeCompressionLine line = EdgeCompressionText(config, nr);
         const std::string text = std::string("Compress screen edges: ") + (compress ? line.text : std::string("Off"));
         EdgeCompressionDrawText({ compress ? line.tone : EdgeCompressionLine::Tone::Grey, text });
-        HelpMarker("NR works on a smaller picture: the middle of the screen stays sharp and the edges are squeezed, "
-                   "then the result is stretched back. It costs a little softness at the edges and saves GPU time.\n"
-                   "Turned on and tuned on the NR Input page.");
+        HelpMarker("NR works on fewer pixels: the middle stays sharp, the edges are squeezed. Saves GPU time; edges "
+                   "slightly softer. Set on the NR Input page.");
         if (ImGui::SmallButton("Set in NR Input##f5lowcompress"))
             MenuPages::RequestPage(MenuPages::Page::NrInput);
     }
@@ -1600,10 +1556,8 @@ static void RenderF5LowPage(Config* config, const NrCommon& nr)
             config->DlssNrNativeDebugView = pictures;
 
         if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s",
-                              "Draws the motion estimate and the trust mask on this page while it is open (a little\n"
-                              "GPU work while they are shown; D3D12 games). The picked depth also needs \"Show the\n"
-                              "picked depth here\" below and a restart.");
+            ImGui::SetTooltip("%s", "Shows the motion estimate and trust mask on this page (small GPU cost, D3D12). "
+                                    "The depth picture also needs \"Show the picked depth here\" and a restart.");
 
         switch (CurrentNativeApi())
         {
@@ -1648,15 +1602,9 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
     ImGui::SameLine();
     if (PresetButton("3 Pass", PassPresetActive(config, 3u)))
         ApplyPassPreset(config, 3u);
-    HelpMarker("Set this fork's recommended starting point for the chosen pass count: FP8 "
-               "precision and game-exposure white point. "
-               "Upscale Method, Upscale Mode and Final Image Composition are left alone; use the Pre-SR or "
-               "Post-SR presets for those. 2 Pass also sets Pass "
-               "2's overrides; 3 Pass sets Pass 2 and Pass 3's overrides. Overwrites those settings on the "
-               "other Neural Rendering pages; anything not listed here, including NR Pass at:, is left as you "
-               "have it.\n"
-               "The green button is the pass count currently in effect; changing the pass count "
-               "or a pass's Style, Intensity, Local structure, Local tone or Skin structure clears it.");
+    HelpMarker("Sets this fork's recommended start for that pass count: FP8 precision, game-exposure white point, "
+               "and the extra passes' overrides. Leaves upscaling and composition alone. Green = in effect; changing "
+               "a pass setting clears it.");
 
     // Directly under the pass presets, since those buttons set this slider's value. This page
     // has no page-wide item width, so this block pushes its own to keep the slider's width.
@@ -1688,7 +1636,7 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
         if (ImGui::SmallButton("Reset##modelpasses"))
             config->DlssNrPasses = 1u;
 
-        HelpMarker("Process the image repeatedly. More passes strengthen the effect and increase GPU cost.\nEach pass has its own settings and history. Start with 1.");
+        HelpMarker("How often the model runs per frame. Higher: stronger effect, more GPU time. Default: 1.");
     }
 
     {
@@ -1706,13 +1654,8 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
             config->DlssNrPassFeedback = 1.0f;
         ImGui::EndDisabled();
 
-        HelpMarker("How much of an extra pass's raw answer the next pass actually receives.\n\n"
-                   "1.0 is what every configuration has always done: the next pass gets the full "
-                   "answer. Every pass after the first is already being shown something the model "
-                   "was never trained on -- its own previous output instead of a raw frame -- so "
-                   "lower values hold each pass closer to that training distribution instead of "
-                   "drifting further from it with every extra pass, at the cost of a smaller "
-                   "cumulative edit.\n\nNo effect at Passes = 1: there is no boundary to damp.");
+        HelpMarker("How much of each extra pass's change reaches the next. Higher (1.0): full effect. Lower: "
+                   "gentler, steadier extra passes. Default: 1.0. No effect with 1 pass.");
     }
 
     ImGui::PopItemWidth();
@@ -1733,17 +1676,15 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
 
     ImGui::SeparatorText("Pre-SR Presets");
     tierRow("pre", true);
-    HelpMarker("Quality tiers for running NR before Super Resolution at a lower model resolution, from High (100%, best quality) down to Potato (50%, cheapest).\n"
-               "Each sets Upscale Mode, Upscale Method, Model resolution and Final Image Composition (High also sets Detail and Colour strength to 1; Medium, Low and Potato also set Restore Sharpness), and turns Auto model resolution off so the resolution applies.\n"
-               "It also sets NR Pass at: to Before Super Resolution. Anything not listed here is left as you have it.\n"
-               "The green button is the tier currently in effect; changing NR Pass at:, Upscale Mode, Upscale Method, Model resolution or Final Image Composition clears it.");
+    HelpMarker("Quality tiers for NR before SR, from High (full resolution, best) to Potato (50%, cheapest). Sets "
+               "Upscale Mode and Method, Model resolution and Final Image Composition. Green = in effect; changing "
+               "those clears it.");
 
     ImGui::SeparatorText("Post-SR Presets");
     tierRow("post", false);
-    HelpMarker("Quality tiers for running NR after Super Resolution at a lower model resolution, from High (100%, best quality) down to Potato (50%, cheapest).\n"
-               "Each sets Upscale Mode, Upscale Method, Model resolution and Final Image Composition (High also sets Detail and Colour strength to 1; Medium, Low and Potato also set Restore Sharpness), and turns Auto model resolution off so the resolution applies.\n"
-               "It also sets NR Pass at: to After Super Resolution. Anything not listed here is left as you have it.\n"
-               "The green button is the tier currently in effect; changing NR Pass at:, Upscale Mode, Upscale Method, Model resolution or Final Image Composition clears it.");
+    HelpMarker("Quality tiers for NR after SR, from High (full resolution, best) to Potato (50%, cheapest). Sets "
+               "Upscale Mode and Method, Model resolution and Final Image Composition. Green = in effect; changing "
+               "those clears it.");
 }
 
 // NR Exposure, drawn at the end of the NR Input page.
@@ -1796,7 +1737,11 @@ static void RenderExposureSection(Config* config, float menuResScale)
             // step, and so no way for the two to disagree.
         }
 
-        HelpMarker("Manual: use Paper white. Game exposure: use exposure supplied by the game.\nScanned exposure: estimate it from game buffers; requires calibration and may select the wrong buffer.\nAutomatic exposure: OptiScaler meters the linear HDR frame itself, so it needs nothing from the game.");
+        HelpMarker("Where NR's brightness reference comes from.\n"
+                   "Manual: Paper white.\n"
+                   "Game exposure: the game's own value.\n"
+                   "Scanned exposure: read from game buffers; needs calibration.\n"
+                   "Automatic exposure: OptiScaler measures the frame itself.");
 
         // Availability, in colour, for the option currently chosen. Two lines at most, whichever source.
         if (ImGui::TreeNode("Exposure readout##autoexposure"))
@@ -1848,8 +1793,7 @@ static void RenderExposureSection(Config* config, float menuResScale)
                     ImGui::TextColored(ImVec4(0.45f, 0.8f, 0.45f, 1.0f),
                                        "Scene brightness %.3f  ->  model white at %.2f",
                                        0.18f / (0.82f * autoEx.exposure), baseWhitePoint * trim);
-                    HelpMarker("Measured from the linear HDR frame before NR runs (raw exposure value shown below).\n"
-                               "Model white is the brightness level the picture is scaled to: anything at or above it counts as full white.");
+                    HelpMarker("Measured on the frame before NR. Model white: the brightness treated as full white.");
                     ImGui::TextDisabled("Automatic exposure %.4f", autoEx.exposure);
                 }
                 else
@@ -1991,7 +1935,8 @@ static void RenderExposureSection(Config* config, float menuResScale)
                     config->DlssNrWhitePointScale = pw;
             }
 
-            HelpMarker("Adjust the selected calibration point, or set the value for the next point.\nUse Anchor here to save the current lighting condition.");
+            HelpMarker("Adjusts the selected calibration point, or the next one. Anchor here saves the current "
+                       "lighting.");
         }
 
         // The trim multiplies the interpolated result, and in the steady state it is the control
@@ -2010,7 +1955,8 @@ static void RenderExposureSection(Config* config, float menuResScale)
             if (ImGui::SmallButton("Reset##scantrim"))
                 config->DlssNrScanTrim = 1.0f;
 
-            HelpMarker("Multiply the calibrated white point. Anchor here saves the adjusted value and resets this multiplier to 1.");
+            HelpMarker("Multiplies the calibrated white point. Higher: darker NR input. Lower: brighter. Anchor here "
+                       "saves it and resets this to 1.");
         }
     }
     else if (wpSource == 1)
@@ -2032,11 +1978,9 @@ static void RenderExposureSection(Config* config, float menuResScale)
             config->DlssNrWhitePointTrim = DlssNrExposureCalibrate::kGameExposureNeutralTrim;
         }
 
-        HelpMarker("Native look: NR sees the picture the same way it does in games with built-in Neural Rendering"
-                   "\n(such as NBA 2K27). Try this first."
-                   "\nGame's setting: uses the brightness value the game reports. Pick this if Native look is far"
-                   "\ntoo dark (for example Red Dead Redemption 2)."
-                   "\nChanging this sets the brightness below back to 0.");
+        HelpMarker("Native look: like games with built-in NR (e.g. NBA 2K27). Try first.\n"
+                   "Game's setting: the game's brightness value. Use if Native look is far too dark (e.g. RDR2).\n"
+                   "Changing it resets the brightness slider to 0.");
 
         RenderTrimEvSlider(config->DlssNrWhitePointTrim, DlssNrExposureCalibrate::kGameExposureNeutralTrim,
                            DlssNrTrim::Parse(config->DlssNrGameExposureTrimAnchors.value_or_default()).size(),
@@ -2078,15 +2022,9 @@ static void RenderExposureSection(Config* config, float menuResScale)
             if (ImGui::Checkbox("Follow the game's exposure", &follow))
                 config->DlssNrAutoExposureFollowGame = follow;
 
-            HelpMarker("For games that hand over their frame before applying their own exposure: on by default"
-                       "\nfor those known to (RDR2), off for every other game. Automatic learns how its own metering"
-                       "\nrelates to the game's exposure in the first seconds of play, then follows the game's exposure,"
-                       "\nso brightness moves exactly with the game: cutscenes, menus, fades. In a game whose own"
-                       "\nexposure never moves, if the two stay more than 0.75 EV apart for a moment, the calibration"
-                       "\neases toward Automatic (0.25 EV a second at most)."
-                       "\nThe brightness slider keeps its meaning. Leave it off for games that expose their frame"
-                       "\nthemselves (most games): it would apply their exposure twice. On Vulkan it follows a few"
-                       "\nframes behind the game.");
+            HelpMarker("Automatic follows the game's own exposure, so brightness moves with the game (cutscenes, "
+                       "fades). For games that hand over the frame before exposure; on by default for RDR2. Leave "
+                       "off for most games: their exposure would apply twice.");
 
             // Status and Re-learn only while following: off, the checkbox already says so, and a second
             // "calibrate" button next to Tune for this scene read as the same thing.
@@ -2151,10 +2089,8 @@ static void RenderExposureSection(Config* config, float menuResScale)
                     LOG_INFO("DLSS-NR automatic exposure: re-learning the calibration against the game's exposure");
                 }
 
-                HelpMarker("Learns the calibration against the game's exposure again, for example when it was"
-                           "\nlearned during a cutscene or a loading screen. Plain Automatic is used meanwhile (about 2 s)."
-                           "\nRe-learn in an ordinary daylight scene, not snow, night or indoors. Afterwards the"
-                           "\ncalibration eases toward Automatic by itself whenever the two stay more than 0.75 EV apart.");
+                HelpMarker("Re-learns how Automatic relates to the game's exposure (about 2 s). Do it in a normal "
+                           "daylight scene, e.g. if it learned during a cutscene.");
                 ImGui::Unindent();
             }
         }
@@ -2165,11 +2101,11 @@ static void RenderExposureSection(Config* config, float menuResScale)
         if (ImGui::Combo("Meter", &meter, meterNames, IM_ARRAYSIZE(meterNames)))
             config->DlssNrAutoExposureMeter = (uint32_t) meter;
 
-        HelpMarker("How the scene's brightness is read.\nAverage: the plain average of the frame with the brightest"
-                   "\nareas counted less (Ignore bright highlights).\nPercentile (log): the log-average of the picture"
-                   "\nbetween two brightness percentiles, as Unreal and Unity meter. A lamp or the sky cannot pull it"
-                   "\nup, and the darkest and brightest tails are left out. It reads about"
-                   "\ndifferently from Average, so re-check Model input brightness after switching.");
+        HelpMarker("How scene brightness is measured.\n"
+                   "Average: the whole frame, bright areas counted less.\n"
+                   "Percentile: the middle of the brightness range, as Unreal and Unity do; lamps and sky don't pull "
+                   "it up.\n"
+                   "Re-check Model input brightness after switching.");
 
         if (meter == (int) DlssNrExposureMeter::kPercentile)
         {
@@ -2179,12 +2115,13 @@ static void RenderExposureSection(Config* config, float menuResScale)
             if (ImGui::SliderFloat("Ignore darkest", &low, 0.0f, 50.0f, "%.0f%%"))
                 config->DlssNrAutoExposureMeterLowPercent = std::clamp(low, 0.0f, 50.0f);
 
-            HelpMarker("The darkest share of the picture left out of the reading. Default 10%.");
+            HelpMarker("Darkest share of the picture left out of the reading. Higher: ignores more shadow. Default: "
+                       "10%.");
 
             if (ImGui::SliderFloat("Ignore brightest", &high, 50.0f, 100.0f, "%.0f%%"))
                 config->DlssNrAutoExposureMeterHighPercent = std::clamp(high, 50.0f, 100.0f);
 
-            HelpMarker("The brightest share of the picture is whatever lies above this percentile and is left out. Default 90%.");
+            HelpMarker("Readings above this brightness are left out. Lower: ignores more highlights. Default: 90%.");
         }
         else
         {
@@ -2192,9 +2129,8 @@ static void RenderExposureSection(Config* config, float menuResScale)
             if (ImGui::SliderFloat("Ignore bright highlights", &protection, 0.0f, 100.0f, "%.0f%%"))
                 config->DlssNrAutoExposureShadowProtection = std::clamp(protection, 0.0f, 100.0f);
 
-            HelpMarker("Stops the sky, lamps and reflections from darkening the rest of the picture."
-                       "\n0% averages the whole frame as it is; 100% counts bright areas the least."
-                       "\nBlack bars and black borders are always left out.");
+            HelpMarker("Stops sky, lamps and reflections darkening the rest. Higher: highlights count less. 0%: "
+                       "everything counts equally.");
         }
 
         // DlssNr_ExposureAdapt.h: a pass of its own on D3D12 and Vulkan.
@@ -2207,18 +2143,15 @@ static void RenderExposureSection(Config* config, float menuResScale)
             config->DlssNrAutoExposureAdaptBrighterSeconds =
                 DlssNrExposureAdapt::Seconds(adaptBrighter, DlssNrExposureAdapt::kDefaultBrighterSeconds);
 
-        HelpMarker("How quickly Automatic follows the scene getting brighter, like an eye adapting."
-                   "\nStops a camera zoom or a brief shot of a bright floor from pumping the brightness and tone"
-                   "\nof the picture. A cut the game announces is followed at once."
-                   "\nAbout two thirds of a change is followed after this long. Off follows every frame at once."
-                   "\nNot used while following the game's exposure: the game's own adapts.");
+        HelpMarker("How fast brightness follows the scene getting brighter. Higher: slower, steadier. Lower: faster. "
+                   "Off: instant. Not used while following the game's exposure.");
 
         if (ImGui::SliderFloat("Eye adaptation, to darker", &adaptDarker, 0.0f, DlssNrExposureAdapt::kMaxSeconds,
                                adaptDarker > 0.0f ? "%.2f s" : "off"))
             config->DlssNrAutoExposureAdaptDarkerSeconds = DlssNrExposureAdapt::Seconds(adaptDarker);
 
-        HelpMarker("The same for the scene getting darker. Slower than brighter by default: an eye adapts to dark"
-                   "\nmore slowly than to light, and a quick flash should not darken the picture for long.");
+        HelpMarker("The same for the scene getting darker. Slower by default, so a brief flash doesn't darken the "
+                   "picture for long.");
     }
     else
     {
@@ -2237,7 +2170,8 @@ static void RenderExposureSection(Config* config, float menuResScale)
         if (ImGui::SmallButton("Reset##paperwhite"))
             config->DlssNrWhitePointScale = 1.0f;
 
-    HelpMarker("Brightness reference used to prepare HDR colour for NR. Higher values darken the model input; lower values brighten it.\nAdjust if NR loses detail or produces colour shifts.");
+    HelpMarker("Brightness reference for NR's input. Higher: darker input. Lower: brighter input. Change it if NR "
+               "loses detail or shifts colours.");
     }
 
     // Highlight guard, directly under the white point / trim -- it bounds the model's edit and
@@ -2250,7 +2184,8 @@ static void RenderExposureSection(Config* config, float menuResScale)
     if (ImGui::SmallButton("Reset##guard"))
         config->DlssNrMaxRatio = 2.0f;
 
-    HelpMarker("Limit how much NR can brighten a pixel; darkening is not capped. Lower values restrict highlight changes; higher values allow more.\nReplace mode still bounds darkening too -- a different guard, for a different reason.");
+    HelpMarker("Limits how much NR can brighten a pixel. Lower: fewer highlight changes. Higher: more. In Replace "
+               "mode it limits darkening too.");
 
     // Directly under the white point, because that is the number it moves and the number the
     // anchor captures. It used to sit under Inspect, a whole section away from the slider it
@@ -2284,7 +2219,7 @@ static void RenderExposureSection(Config* config, float menuResScale)
                 ImGui::Checkbox("Show exposure meter", &meter))
                 config->DlssNrScanMeter = meter;
 
-            HelpMarker("Show the scanned exposure value and a colour indicator. Display only; does not change the image.");
+            HelpMarker("Shows the scanned exposure and a colour indicator. Display only.");
 
         // Shown when the scan is actually running, whichever way it got switched on.
         if (DlssNr::ExposureScan::Scanning())
@@ -2335,7 +2270,8 @@ static void RenderExposureSection(Config* config, float menuResScale)
 
             ImGui::EndDisabled();
 
-            HelpMarker("Save the current exposure and white point as a calibration point.\nAdjust Paper white for the first point, then Trim for additional lighting conditions. Up to 8 points.");
+            HelpMarker("Saves the current exposure and white point as a calibration point (up to 8). Set Paper white "
+                       "for the first, Trim for the rest.");
 
             if (!isSource)
                 ImGui::TextDisabled("Scanned exposure is not the selected white point source.");
@@ -2404,7 +2340,7 @@ static void RenderExposureSection(Config* config, float menuResScale)
                 if (ImGui::Checkbox("Invert exposure tracking", &inverted))
                     config->DlssNrScanInverted = inverted;
 
-                HelpMarker("Reverse how scanned exposure changes the white point. Only needed with one calibration point.");
+                HelpMarker("Reverses how scanned exposure moves the white point. Only with one calibration point.");
             }
 
             // The scan -> white point readout is shown above the sliders now, not here.
@@ -2519,7 +2455,12 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
     if (deferredActive)
         ImGui::EndDisabled();
 
-    HelpMarker("Choose where in the pipeline NR runs.\nAfter Super Resolution (default): apply NR once SR has upscaled the frame.\nBefore Super Resolution: apply NR to the smaller pre-upscale image instead. No effect when the game's Ray Reconstruction is active -- RR always runs NR after RR+SR, and unsupported input layouts fall back to after SR.\nFinished Picture: apply NR after the game has finished its lighting and effects, which may help with green noise. Works with frame generation on or off in native DirectX 12 games (SDR, HDR10, scRGB), and can also change the HUD and menus.");
+    HelpMarker("Where NR runs.\n"
+               "After Super Resolution (default): on the upscaled picture.\n"
+               "Before Super Resolution: on the smaller picture; cheaper.\n"
+               "Finished Picture: after the game's effects; may help green noise, but also changes HUD and menus "
+               "(DirectX 12).\n"
+               "With Ray Reconstruction, NR always runs after.");
 
     if (finishedPicture && enabled)
     {
@@ -2540,7 +2481,8 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
             config->DlssNrRunBeforeSr = beforeSr;
             config->DlssNrDeferredDlss = false;
         }
-        HelpMarker("Run the model at the smaller input size, upscale its changes with DLSS, then apply them to the finished picture.\nExperimental: the colour transfer is approximate and may look different. Requires DLSS SR; does not support RR.");
+        HelpMarker("Runs the model on the smaller input, upscales its changes with DLSS and applies them to the "
+                   "final picture. Experimental; colours may differ. Needs DLSS SR, not RR.");
     }
 
     bool deferredDlss = config->DlssNrDeferredDlss.value_or_default();
@@ -2548,7 +2490,8 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
     const char* precisions[] = { "NVIDIA (FP8)", "Experimental (FP8+NVFP4 hybrid)" };
     if (ImGui::Combo("Model precision", &precisionChoice, precisions, IM_ARRAYSIZE(precisions)))
         config->DlssNrPrecision = precisionChoice == 1 ? 4u : 0u;
-    HelpMarker("NVIDIA: original FP8 model (default), with some sensitive operations kept at higher precision.\nExperimental: this fork's FP8+NVFP4 hybrid for RTX 50 GPUs; output may differ slightly. D3D12 only.");
+    HelpMarker("NVIDIA: the original FP8 model. Default.\n"
+               "FP8+NVFP4: this fork's mixed-precision model for RTX 50; output may differ slightly. D3D12 only.");
     // One setting per kernel set: the fp8 kernels (NVIDIA's DLL and fp8-based builds) and the plain FP16 kernels (used by some modified DLSS-NR DLLs).
     // Only the one for the kernels actually running is used.
     const char* kernelSet = DlssNrNative::VitKernelSet();
@@ -2559,11 +2502,8 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
     bool vitReuse = !vitReuseVk && config->DlssNrVitEvery.value_or_default() > 1;
     if (ImGui::Checkbox("Reuse bottleneck: FP8 kernels", &vitReuse))
         config->DlssNrVitEvery = vitReuse ? 2u : 1u;
-    HelpMarker("Recomputes the model's coarsest stage (its 32x18 bottleneck) only every other frame and reuses the last result in between, "
-               "which saves roughly a tenth of the model's GPU time.\nThat stage changes slowly, so the picture usually barely differs, "
-               "but fast camera motion can look slightly softer. Scene cuts always recompute. With several passes, all passes compute on the same frame "
-               "and all reuse on the next.\nOn by default. Applies immediately, NVIDIA's own model only.\n"
-               "Used when the model runs NVIDIA's FP8 kernels (NVIDIA's DLL and FP8-based builds).");
+    HelpMarker("Reuses the model's slowest-changing stage every other frame. Saves about a tenth of NR's GPU time; "
+               "fast motion can look slightly softer. On by default.");
     bool vitReusePlain = !vitReuseVk && config->DlssNrVitEveryPlain.value_or_default() > 1;
     if (ImGui::Checkbox("Reuse bottleneck: plain FP16 kernels", &vitReusePlain))
         config->DlssNrVitEveryPlain = vitReusePlain ? 2u : 1u;
@@ -2595,68 +2535,49 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
             float fill = config->DlssNrDetailReuseFill.value_or_default();
             if (ImGui::SliderFloat("Fill dropped detail", &fill, 0.0f, 1.0f, "%.2f"))
                 config->DlssNrDetailReuseFill = std::clamp(fill, 0.0f, 1.0f);
-            HelpMarker("Where the moved detail had to be dropped (a body uncovered the background), fills in the "
-                       "NR detail of nearby pixels on the same surface instead of showing the frame without NR "
-                       "there.\nMatters most with several passes. With Show dropped detail on, filled areas are "
-                       "cyan. Default 1.");
+            HelpMarker("Fills areas where moved detail was dropped with NR detail from nearby pixels of the same "
+                       "surface. Higher: fills more. 0: those areas show the game's picture. Default: 1.");
             float steady = config->DlssNrDetailReuseSteady.value_or_default();
             if (ImGui::SliderFloat("Steady full frames", &steady, 0.0f, 1.0f, "%.2f"))
                 config->DlssNrDetailReuseSteady = std::clamp(steady, 0.0f, 1.0f);
-            HelpMarker("Pulls the model's new detail on full frames toward the detail moved from the frame before, "
-                       "where that is trusted, so full and reused frames differ less and detail pumps less.\n"
-                       "Adds a little lag to detail on motion. 0 = off (default).");
+            HelpMarker("Pulls full frames toward the reused detail so the two differ less. Higher: less pumping, a "
+                       "little lag on motion. Default: 0 (off).");
             ImGui::SeparatorText("How far a moved sample is trusted");
             float depthTolerance = DlssNr::DetailReuseDepthToleranceEffective(*config);
             if (ImGui::SliderFloat("Depth tolerance", &depthTolerance, 0.0f, 1.0f, "%.3f"))
                 config->DlssNrDetailReuseDepthTolerance = std::clamp(depthTolerance, 0.0f, 1.0f);
-            HelpMarker("How far this pixel's surface may lie outside the depth the saved detail came from, as a "
-                       "share of the nearer of the two, and still be trusted in full; trust is gone at twice "
-                       "it.\nRaise it where detail is dropped on a surface the depth guide does not describe "
-                       "well, such as water or glass.\nFill uses three times this as the depth window it borrows detail "
-                       "over, so this widens that too.\nDefault 0.051, raised from 0.020 because distant water "
-                       "blinked between the model's picture and the game's own. RDR2 defaults to 0.267 instead: "
-                       "its own distant water needed far more than other games measured so far.");
+            HelpMarker("How different the depth may be before moved detail is dropped. Higher: keeps detail on water "
+                       "and glass, may smear. Lower: drops more. Default: 0.051 (RDR2: 0.267).");
             float clipGamma = config->DlssNrDetailReuseClipGamma.value_or_default();
             if (ImGui::SliderFloat("Colour box", &clipGamma, 0.0f, 10.0f, "%.2f sigma"))
                 config->DlssNrDetailReuseClipGamma = std::clamp(clipGamma, 0.0f, 10.0f);
-            HelpMarker("Half-width of the box around this pixel's 3x3 average that the saved colour must fall "
-                       "in, in standard deviations.\nRaise it where detail is dropped on fine, busy content "
-                       "whose colour never sits still. Default 1.25.");
+            HelpMarker("How different the colour may be before moved detail is dropped. Higher: keeps detail on "
+                       "busy, noisy content. Lower: drops more. Default: 1.25.");
             float clipFalloff = config->DlssNrDetailReuseClipFalloff.value_or_default();
             if (ImGui::SliderFloat("Colour falloff", &clipFalloff, 0.01f, 10.0f, "%.2f sigma"))
                 config->DlssNrDetailReuseClipFalloff = std::clamp(clipFalloff, 0.01f, 10.0f);
-            HelpMarker("How far outside that box trust fades to nothing, in standard deviations. Small values "
-                       "make trust all-or-nothing, which is what speckles.\nNever 0. Default 1.00.");
+            HelpMarker("How gradually trust fades past that limit. Higher: softer. Lower: all-or-nothing (speckles). "
+                       "Never 0. Default: 1.00.");
             float sigmaFloor = config->DlssNrDetailReuseSigmaFloor.value_or_default();
-            if (ImGui::SliderFloat("Sigma floor", &sigmaFloor, 0.0f, 1.0f, "%.3f"))
+            if (ImGui::SliderFloat("Flat area floor", &sigmaFloor, 0.0f, 1.0f, "%.3f"))
                 config->DlssNrDetailReuseSigmaFloor = std::clamp(sigmaFloor, 0.0f, 1.0f);
-            HelpMarker("Smallest standard deviation the colour box is allowed to use, so a flat area does not "
-                       "reject its own detail over noise. Default 0.010.");
+            HelpMarker("Smallest colour range used on flat areas, so their noise doesn't drop their detail. Higher: "
+                       "keeps more on flat areas. Default: 0.010.");
             bool withFg = config->DlssNrDetailReuseWithFg.value_or_default();
             if (ImGui::Checkbox("Keep on with frame generation", &withFg))
                 config->DlssNrDetailReuseWithFg = withFg;
-            HelpMarker("Keeps reusing detail while frame generation is on. On by default: generated frames are "
-                       "built from pairs of full and reused frames, which used to flicker at the edges of the "
-                       "screen in fast motion, and Pause while moving fast is what stopped that.\nTurn it off to "
-                       "have reuse stand aside whenever frame generation is running.");
+            HelpMarker("Keeps detail reuse running with frame generation. Off: reuse pauses while frame generation "
+                       "runs. On by default.");
             float minFps = config->DlssNrDetailReuseMinFps.value_or_default();
             if (ImGui::SliderFloat("Minimum frame rate", &minFps, 0.0f, 120.0f, "%.0f fps"))
                 config->DlssNrDetailReuseMinFps = std::clamp(minFps, 0.0f, 240.0f);
-            HelpMarker("Reuse runs only while the rendered frame rate (before frame generation) is at least this; "
-                       "below it every frame runs the model. At low frame rates things move farther between "
-                       "frames and the moved detail trails around moving bodies.\nComes back 15% above the "
-                       "minimum. 0 = no minimum. Default 25.");
+            HelpMarker("Reuse runs only above this rendered frame rate; below it every frame runs the model. Higher: "
+                       "stops reusing sooner. 0: no minimum. Default: 25.");
             float maxDropped = config->DlssNrDetailReuseMaxDropped.value_or_default();
             if (ImGui::SliderFloat("Pause while moving fast", &maxDropped, 0.0f, 50.0f, "%.0f%% dropped"))
                 config->DlssNrDetailReuseMaxDropped = std::clamp(maxDropped, 0.0f, 50.0f);
-            HelpMarker("Detail can only be moved to where the picture already was: what comes in from off-screen, "
-                       "and what a moving body uncovers, has none, and Fill reaches only a few dozen pixels into "
-                       "it.\nRunning or turning fast brings in more than that every frame, so the edges of the "
-                       "screen flicker between the model's picture and the game's own. Above this share of the "
-                       "picture, every frame runs the model, until the share has stayed at or under it for a third "
-                       "of a second.\nThe frames it gives up are the ones reuse looked wrong on. The share is "
-                       "measured on the GPU, so the pause starts two or three frames into a fast turn (more on "
-                       "Vulkan): the first frames of it still flicker.\n0 = never paused. Default 10%.");
+            HelpMarker("Runs the model every frame while more than this share of the picture is new (fast turns), "
+                       "where reuse flickers at the edges. Lower: pauses sooner. 0: never. Default: 10%.");
             ImGui::TreePop();
         }
         const auto& status = detailReuseStatus;
@@ -2688,8 +2609,8 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
                 {
                     ImGui::Text("NR GPU: %.2f ms avg (%.2f to %.2f)", status.averageMs,
                                 status.lightMs, status.heavyMs);
-                    HelpMarker("Full and reused frames cost differently, so the game's frame times alternate. If "
-                               "motion judders, a frame limiter just below the average frame rate evens them out.");
+                    HelpMarker("Full and reused frames take different time. If motion judders, cap the frame rate "
+                               "just below the average.");
                 }
             }
             StatusSlotEnd(reuseSlot, 4);
@@ -2724,7 +2645,9 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
     {
         if (ImGui::Checkbox("Generate before SR, apply after SR (DLSS)", &deferredDlss))
             config->DlssNrDeferredDlss = deferredDlss;
-        HelpMarker("Compute NR at input resolution, upscale its changes with DLSS, then apply them after SR.\nExperimental: may flicker and adds GPU cost. Requires DLSS on DX12 or its bridges; does not support RR.\nOverrides Apply before SR. Disable Hold frame, Compare and Debug view.");
+        HelpMarker("Computes NR on the small input, upscales its changes with DLSS, applies them after SR. "
+                   "Experimental: may flicker, costs more. Needs DLSS on D3D12; not RR. Turns off Hold frame, "
+                   "Compare and Debug view.");
         if (deferredDlss && rayReconstruction)
             ImGui::TextWrapped("Generate before / apply after is unavailable with RR. Apply before SR "
                                "controls NR placement.");
@@ -2786,13 +2709,8 @@ static void RenderLutSection(Config* config)
     if (ImGui::SmallButton("Rescan##lut"))
         lutFiles = ScanLutFolder();
 
-    HelpMarker("A 3D LUT (.cube file -- Adobe/DaVinci/ReShade format) graded onto the NR input image "
-               "before the model ever sees it. Drop files into OptiScaler\\LUTs (the OptiScaler folder "
-               "beside the game's exe) and press Rescan to list them here, or set LutFile in the ini to "
-               "any path directly.\nThis "
-               "grades the image NR works from, not the final picture -- a strong or unusual grade can "
-               "affect auto-exposure, skin-tone masking and detail reuse the same way an unusual game "
-               "colour grade would.");
+    HelpMarker("Applies a colour grade (.cube LUT) to the picture NR works from. Put files in OptiScaler\\LUTs and "
+               "press Rescan. Strong grades also affect exposure, skin detection and reuse.");
 
     if (!current.empty())
     {
@@ -2882,11 +2800,8 @@ static void RenderEdgeCompression(Config* config, float menuResScale, const NrCo
     if (ImGui::Checkbox("Compress screen edges (experimental)", &on))
         config->DlssNrSpatialCompression = on;
 
-    HelpMarker("NR works on a smaller picture: the middle of the screen stays at full sharpness and the edges are "
-               "squeezed into the rest of the space, then NR's result is stretched back. The edges lose a little "
-               "sharpness and can shimmer a little in motion; the middle is untouched. NR costs less because it has fewer "
-               "pixels to work on.\nModel resolution still scales the whole picture first. Reuse detail between frames "
-               "does not run while this is applied. Not used with the driver-proxy backend. Applies at once.");
+    HelpMarker("NR works on fewer pixels: the middle stays sharp, the edges are squeezed and stretched back. Saves "
+               "GPU time; edges a bit softer and may shimmer. Not with Reuse detail.");
 
     if (!on)
         return;
@@ -2926,12 +2841,8 @@ static void RenderEdgeCompression(Config* config, float menuResScale, const NrCo
         ImGui::EndCombo();
     }
 
-    HelpMarker("How much of the picture stays sharp, and how much of it NR works on. The first number is the sharp "
-               "middle's share of the width and of the height, the second is the share NR works on; the rest is the "
-               "squeezed edge. At full Model resolution Light works on about 90% of the pixels, Balanced about 81% and "
-               "Strong about 64%. How much GPU time that saves has not been measured for every layout yet.\nPicking one "
-               "puts every advanced value back to that layout's own. Custom is what the advanced values below add up "
-               "to; it cannot be picked.");
+    HelpMarker("How much stays sharp and how much NR works on. Light: about 90% of the pixels, Balanced: about 81%, "
+               "Strong: about 64%. Picking one resets the advanced values; Custom means they were changed.");
 
     // What is happening. A slot of two lines, so the controls below do not move when this changes length.
     const float slot = StatusSlotBegin();
@@ -2978,28 +2889,28 @@ static void RenderEdgeCompression(Config* config, float menuResScale, const NrCo
             const auto r = range(1.0f, settings.workX - 0.5f);
             changed |= DeferredSlider("Sharp middle width", &config->DlssNrSpatialCenterX, r.first, r.second, 80.0f,
                                       "%.1f%%");
-            HelpMarker("How wide the part of the picture is that stays at full sharpness, as a share of the frame. "
-                       "Wider keeps more of the picture sharp and saves less.");
+            HelpMarker("Width of the full-sharpness middle. Higher: more stays sharp, saves less. Lower: saves more.");
         }
         {
             const auto r = range(1.0f, settings.workY - 0.5f);
             changed |= DeferredSlider("Sharp middle height", &config->DlssNrSpatialCenterY, r.first, r.second, 80.0f,
                                       "%.1f%%");
-            HelpMarker("How tall the part of the picture is that stays at full sharpness, as a share of the frame.");
+            HelpMarker("Height of the full-sharpness middle. Higher: more stays sharp, saves less. Lower: saves "
+                       "more.");
         }
         {
             const auto r = range(std::max(minimumWork, settings.centerX + 0.5f), 100.0f);
             changed |= DeferredSlider("NR picture width", &config->DlssNrSpatialWorkX, r.first, r.second, 90.0f,
                                       "%.1f%%");
-            HelpMarker("How much of the width NR works on, as a share of the frame. Smaller saves more and squeezes the "
-                       "edges harder. The lowest value keeps the whole NR picture at a quarter of the frame or more, "
-                       "counting Model resolution.");
+            HelpMarker("How much of the width NR works on. Lower: saves more, edges squeezed harder. Higher: "
+                       "gentler.");
         }
         {
             const auto r = range(std::max(minimumWork, settings.centerY + 0.5f), 100.0f);
             changed |= DeferredSlider("NR picture height", &config->DlssNrSpatialWorkY, r.first, r.second, 90.0f,
                                       "%.1f%%");
-            HelpMarker("How much of the height NR works on, as a share of the frame.");
+            HelpMarker("How much of the height NR works on. Lower: saves more, edges squeezed harder. Higher: "
+                       "gentler.");
         }
         {
             const auto r = range(-xOffset, xOffset);
@@ -3018,10 +2929,8 @@ static void RenderEdgeCompression(Config* config, float menuResScale, const NrCo
             const auto r = range(xShift.first, xShift.second);
             changed |= DeferredSlider("Edge pixels left/right", &config->DlssNrSpatialShiftX, r.first, r.second, 0.0f,
                                       "%+.1f%%");
-            HelpMarker("Gives one side edge more of NR's pixels and the other fewer; the total stays the same. "
-                       "Positive gives the right edge more and the left edge fewer, negative the other way round. The "
-                       "ends of the range leave one edge with almost nothing and compression then turns off, and says "
-                       "so above.");
+            HelpMarker("Shifts NR's edge pixels between the sides. Positive: right edge sharper, left softer. "
+                       "Negative: the reverse. At the very ends compression turns off.");
         }
         {
             const auto r = range(yShift.first, yShift.second);
@@ -3102,7 +3011,8 @@ static void RenderInputPage(Config* config, float menuResScale, const NrCommon& 
         // the layout's own sliders).
     }
 
-    HelpMarker("NR resolution relative to the image it processes. 50% halves width and height; 100% uses the full size.\nLower values reduce cost and fine detail. Above 100% increases cost. Game output resolution is unchanged.\nThe model averages its input 2x2 before its main network runs, so that network always works at half of this size: cost follows the halved size, and so does the finest detail it can add.");
+    HelpMarker("Size NR works at, relative to its input. Lower: faster, less fine detail. Above 100%: costs more. "
+               "The game's resolution is unchanged.");
 
     {
         unsigned int modelWidth = 0;
@@ -3121,7 +3031,8 @@ static void RenderInputPage(Config* config, float menuResScale, const NrCommon& 
 
     if (ImGui::Checkbox("Auto (post-SR only)", &resolutionAuto))
         config->DlssNrModelResolutionAuto = resolutionAuto;
-    HelpMarker("When NR runs after SR -- Apply before SR off, or Ray Reconstruction, which always runs it after -- derive the working scale from the render:output ratio the upscaler itself already reconstructed detail at, instead of the slider above.\nThat output already reconstructed detail at that ratio, so NR running at the same reduced scale costs nothing extra to tune for. No effect while NR runs before SR -- the slider applies as usual.");
+    HelpMarker("Sets Model resolution to the upscaler's own render-to-output ratio when NR runs after SR. Ignored "
+               "when NR runs before SR.");
 
     if (autoActive)
         ImGui::TextDisabled("NR scale: %.2fx, derived from the upscaler's render:output ratio.",
@@ -3193,7 +3104,10 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
         if (!reduced)
             ImGui::EndDisabled();
 
-        HelpMarker("Below 100% model resolution: Classic enlarges the model output; Matched residual enlarges only its changes.\nMatched residual can reduce blur and colour shifts. NVIDIA residual enlarges the changes in OkLab (luminance as a ratio, chroma as a difference).\nNo effect at 100% or above.");
+        HelpMarker("Below 100% Model resolution, how NR's result is enlarged.\n"
+                   "Classic: the whole output.\n"
+                   "Matched residual: only NR's changes; less blur and colour shift.\n"
+                   "NVIDIA residual: only the changes, NVIDIA's way.");
 
         if (!reduced)
             ImGui::BeginDisabled();
@@ -3207,7 +3121,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
         if (!reduced)
             ImGui::EndDisabled();
 
-        HelpMarker("Below 100% model resolution: filter used to enlarge the model's answer back to native before it's applied.\nBilinear is the cheapest, softest, pre-SGSR1 default. SGSR1 does an edge-directed upscale of the answer instead. No effect at 100% or above.");
+        HelpMarker("Below 100% Model resolution, the filter that enlarges NR's result. Bilinear: cheapest, softest. "
+                   "SGSR1: edge-aware, sharper.");
     }
 
     // How the game's colour is decoded (DlssNr_ColourEncoding.h). Auto trusts the game; a forced choice is applied
@@ -3224,10 +3139,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
             config->DlssNrColourEncoding = (uint32_t) encoding;
             LOG_INFO("DLSS-NR colour encoding set to {}", encodingNames[encoding]);
         }
-        HelpMarker("How NR reads the game's colour.\nAuto trusts the game: its DLSS HDR flag and the buffer format "
-                   "(on Finished Picture, the screen's colour space).\nChoose another only when the picture looks "
-                   "washed out, too dark or banded because the game reports its colour wrongly. Tone-mapped gamma "
-                   "2.2 and PQ are converted for the model and back.");
+        HelpMarker("How NR reads the game's colour. Auto: trust the game (default). Pick another only if the picture "
+                   "looks washed out, too dark or banded.");
 
         const auto status = DlssNr::ReadColourEncodingStatus();
         // The line and the warning are wrapped and the warning comes and goes with the detected format: a fixed slot.
@@ -3273,7 +3186,14 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
         ImGui::EndCombo();
     }
 
-    HelpMarker("Choose how HDR brightness is mapped for NR.\nSoft knee compresses highlights. Reversible curve uses a reversible mapping. Balanced preserves midtones and compresses highlights.\nHLG and PQ are the broadcast HDR curves: white sits at 75% (HLG) or 58% (PQ), leaving more room for highlights (HLG up to about 4x white, PQ about 50x), but the model sees midtones differently.\nLinear: gives NR the picture exactly the way games with built-in Neural Rendering do, for NVIDIA's own look. Use it with White point source = Game exposure and Starting point = Native look. Very bright coloured lights can shift a little in colour, and some games may show banding in dark areas.\nIf you used Tune, run it again after changing the curve.\nComposed uses the strength control and the Highlight guard below (brightening only; darkening is not capped in Composed). Replace bypasses the strength control (the model's answer applies directly, uncomposited) but the same Highlight guard number still bounds it in both directions -- lower it if Replace flickers or shows banding near bright highlights.");
+    HelpMarker("How NR's brightness range is mapped, and how its result is blended back.\n"
+               "Soft knee / Balanced: compress highlights, keep midtones.\n"
+               "Reversible curve: an exactly reversible mapping.\n"
+               "HLG / PQ: more room for highlights; midtones look different to the model.\n"
+               "Linear: NVIDIA's own look; use with Game exposure and Native look.\n"
+               "Composed: blended with the strength controls. Replace: NR's answer directly; lower Highlight guard "
+               "if it flickers.\n"
+               "Re-run Tune after changing.");
 
     if (DlssNrProxyCurve::IsReplace((uint32_t) reversible))
     {
@@ -3285,7 +3205,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
         if (ImGui::SmallButton("Reset##replacedetail"))
             config->DlssNrReplaceDetailStrength = 0.5f;
 
-        HelpMarker("Sharpens fine edges and textures using brightness from the original frame. Helps when Final Image Composition uses a Replace mode and NR runs below 100% resolution, where the image can otherwise look soft.\nNo effect at 100% resolution or above, or when set to 0.");
+        HelpMarker("Sharpens fine edges using the original frame. Higher: sharper. 0: off. Only below 100% Model "
+                   "resolution; most useful with Replace.");
     }
 
     ImGui::SeparatorText("Effect strength");
@@ -3298,7 +3219,7 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
     if (ImGui::SmallButton("Reset##detail"))
         config->DlssNrTransferStrength = 1.0f;
 
-    HelpMarker("Overall NR detail strength: 0 = no effect, 1 = normal, above 1 = exaggerated.");
+    HelpMarker("Higher: more NR detail (above 1 exaggerated). Lower: less. 0: none. Default: 1.");
 
     float colour = config->DlssNrColourStrength.value_or_default();
     if (ImGui::SliderFloat("Colour strength", &colour, 0.0f, 4.0f, "%.2f"))
@@ -3308,7 +3229,7 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
     if (ImGui::SmallButton("Reset##colour"))
         config->DlssNrColourStrength = 1.0f;
 
-    HelpMarker("NR colour strength: 0 = preserve game colours, 1 = model colours, above 1 = stronger saturation.");
+    HelpMarker("Higher: stronger NR colour (above 1 more saturated). 0: keeps the game's colours. Default: 1.");
 
     ImGui::PopItemWidth();
 }
@@ -3331,7 +3252,7 @@ static void RenderPassesPage(Config* config, float menuResScale)
         int style = (int) std::min(config->DlssNrStyle.value_or_default(), 2u);
         if (ImGui::Combo("Style", &style, styles, IM_ARRAYSIZE(styles)))
             config->DlssNrStyle = (uint32_t) style;
-        HelpMarker("Select the appearance profile: Standard, Natural or Cinematic. Intensity controls its strength.");
+        HelpMarker("Look profile: Standard, Natural or Cinematic. Intensity sets its strength.");
         DeferredSlider("Intensity", &config->DlssNrIntensity, 0.0f, 2.0f, 1.0f);
         DeferredSlider("Local structure", &config->DlssNrLocalStructure, 0.0f, 2.0f, 1.0f);
         DeferredSlider("Local tone", &config->DlssNrLocalTone, 0.0f, 2.0f, 1.0f);
@@ -3339,7 +3260,8 @@ static void RenderPassesPage(Config* config, float menuResScale)
         bool mask = config->DlssNrAutoMask.value_or_default();
         if (ImGui::Checkbox("Auto skin mask", &mask))
             config->DlssNrAutoMask = mask;
-        HelpMarker("Use the model's learned skin selection to apply Skin structure without an authored mask.\nAccuracy varies. This is separate from the colour-based mask below.");
+        HelpMarker("Uses the model's own skin detection for Skin structure. Accuracy varies. Separate from the "
+                   "colour mask below.");
         ImGui::TreePop();
     }
 
@@ -3433,7 +3355,7 @@ static void RenderPassesPage(Config* config, float menuResScale)
             const std::string resetId = std::string("Reset##") + label;
             if (ImGui::SmallButton(resetId.c_str()))
                 option = 1.0f;
-            HelpMarker("NR strength in this region: 0 = no change, 1 = full effect.");
+            HelpMarker("NR strength in this region. Higher: more effect. 0: none. Default: 1 (full).");
         };
         slider("Skin detail / lighting", config->DlssNrSkinDetail);
         ImGui::BeginDisabled(!tone);
@@ -3465,13 +3387,13 @@ static void RenderDebugPage(Config* config, float menuResScale)
     if (ImGui::Checkbox("Hold frame", &held))
         config->DlssNrHoldFrame = held;
 
-    HelpMarker("Freeze NR's input to compare its settings. The game's HUD and later effects may keep updating.\nDoes not re-run SR/RR or show changes to their settings. Turn off to resume.");
+    HelpMarker("Freezes NR's input to compare settings. HUD may keep updating; SR/RR changes don't show.");
 
     bool frameStats = config->DlssNrFrameStats.value_or_default();
     if (ImGui::Checkbox("Log frame brightness stats", &frameStats))
         config->DlssNrFrameStats = frameStats;
 
-    HelpMarker("Diagnostic. Every 2 seconds or so, writes a line to OptiScaler.log describing the frame NR is given: format, luminance percentiles, the game's exposure value and the white point in use.");
+    HelpMarker("Writes the frame's brightness stats to OptiScaler.log about every 2 s. For diagnosis.");
 
     RenderMeasureDetail();
 
@@ -3479,7 +3401,7 @@ static void RenderDebugPage(Config* config, float menuResScale)
     if (ImGui::Checkbox("Log NR kernel profile", &kernelProfile))
         config->DlssNrKernelProfile = kernelProfile;
 
-    HelpMarker("Diagnostic. Every 4 seconds or so, writes a line to OptiScaler.log with the NVIDIA kernels one NR evaluation launched (fp8-named or plain fp16) and where its GPU time went, by kernel group. Approximate: chained kernels overlap.");
+    HelpMarker("Writes where NR's GPU time goes to OptiScaler.log about every 4 s. For diagnosis.");
 
     static const char* compareNames[] = { "Off", "Side by side", "Wipe" };
     int compare = (int) config->DlssNrCompare.value_or_default();
@@ -3516,7 +3438,7 @@ static void RenderDebugPage(Config* config, float menuResScale)
         if (ImGui::SliderFloat("Zoom", &zoom, 1.0f, 2.0f, "%.2f"))
             config->DlssNrCompareZoom = std::clamp(zoom, 1.0f, 2.0f);
 
-        HelpMarker("Side-by-side zoom: 1 = fit the whole image, 2 = fill each half by cropping the sides.");
+        HelpMarker("Side by side only. 1: fits the whole image. 2: fills each half, cropping the sides.");
     }
 
     if (compare == 2)
@@ -3525,7 +3447,7 @@ static void RenderDebugPage(Config* config, float menuResScale)
         if (ImGui::SliderFloat("Split", &split, 0.0f, 1.0f, "%.2f"))
             config->DlssNrCompareSplit = std::clamp(split, 0.0f, 1.0f);
 
-        HelpMarker("Position of the comparison boundary. Swap sides reverses which image appears on each side.");
+        HelpMarker("Where the dividing line sits.");
     }
 
     static const char* debugNames[] = { "Off", "Proxy (what the model sees)", "Model output (raw)",
@@ -3534,7 +3456,7 @@ static void RenderDebugPage(Config* config, float menuResScale)
     if (ImGui::Combo("Debug view", &debugView, debugNames, IM_ARRAYSIZE(debugNames)))
         config->DlssNrDebugView = (uint32_t) debugView;
 
-    HelpMarker("Show the model input, raw output, or a 20x amplified difference. Grey in Difference means no change.\nShown at the game's own brightness, so Model input brightness makes the view brighter or darker by the amount it changes what the model is given.");
+    HelpMarker("Shows the model input, its raw output, or the difference x20 (grey = no change).");
 
     ImGui::PopItemWidth();
 }
