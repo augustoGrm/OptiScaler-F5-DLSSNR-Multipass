@@ -1123,6 +1123,12 @@ bool Dx11wDx12SC::_RequestSharedBackBuffer(UINT index)
         desc.CPUAccessFlags = 0;
         desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
+        // A game with MSAA on has a multisampled swap chain (_real keeps the samples it asked for); the D3D12 side cannot
+        // open or present a multisampled texture, so the copy is single-sample and the samples are resolved into it
+        // (_CopyDx11BackBufferToShared).
+        desc.SampleDesc.Count = 1;
+        desc.SampleDesc.Quality = 0;
+
         result = _dx11Device->CreateTexture2D(&desc, nullptr, &_sharedDx11BackBufferCopies[_currentFakeIndex]);
         if (FAILED(result) || _sharedDx11BackBufferCopies[_currentFakeIndex] == nullptr)
         {
@@ -1203,7 +1209,26 @@ bool Dx11wDx12SC::_CopyDx11BackBufferToShared(UINT index)
     LOG_DEBUG("Copying DX11 backbuffer {} sourceTexture: {:X} to shadow copy {:X}", index, (size_t) sourceTexture,
               (size_t) _sharedDx11BackBufferCopies[_currentFakeIndex]);
 
-    _dx11Context->CopyResource(_sharedDx11BackBufferCopies[_currentFakeIndex], sourceTexture);
+    D3D11_TEXTURE2D_DESC sourceDesc {};
+    sourceTexture->GetDesc(&sourceDesc);
+
+    if (sourceDesc.SampleDesc.Count > 1)
+    {
+        // The back buffer is multisampled and the shared copy is not: a copy would be dropped by D3D11 without a word.
+        ID3D11Texture2D* sharedCopy = _sharedDx11BackBufferCopies[_currentFakeIndex];
+
+        if (const char* why = _msaaResolve.ResolveIn(_dx11Context, sourceTexture, sharedCopy))
+        {
+            LOG_ERROR("resolving the multisampled back buffer {} into the shadow copy failed: {}", index, why);
+            sourceTexture->Release();
+            return false;
+        }
+    }
+    else
+    {
+        _dx11Context->CopyResource(_sharedDx11BackBufferCopies[_currentFakeIndex], sourceTexture);
+    }
+
     sourceTexture->Release();
     return true;
 }

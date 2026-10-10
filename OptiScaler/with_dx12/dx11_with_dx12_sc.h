@@ -7,6 +7,8 @@
 #include "d3d11_4.h"
 #include "d3d12.h"
 
+#include <native/MsaaPictureDx11.h>
+
 #include <vector>
 
 using Microsoft::WRL::ComPtr;
@@ -111,6 +113,7 @@ class DECLSPEC_UUID("23b064bb-482d-416c-93b1-829acedfb3d0") Dx11wDx12SC final : 
     ID3D11Device* _dx11Device = nullptr;
     ID3D11Device5* _dx11Device5 = nullptr;
     ID3D11DeviceContext* _dx11Context = nullptr;
+    native::MsaaPictureDx11 _msaaResolve; // resolves a multisampled game back buffer into the single-sample shared copy
     ID3D11DeviceContext4* _dx11Context4 = nullptr;
 
     ID3D12Device* _dx12Device = nullptr;
