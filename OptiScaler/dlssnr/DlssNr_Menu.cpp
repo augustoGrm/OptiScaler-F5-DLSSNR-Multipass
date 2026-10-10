@@ -2517,6 +2517,13 @@ static void RenderOptionsPage(Config* config, float menuResScale, const NrCommon
         // The settings a player may want; the trust limits below are for tuning a game that drops too much detail.
         ImGui::Indent();
 
+        // Whether it runs, right under the checkbox: on but blocked (Compress screen edges, NR before SR, too low a
+        // frame rate...) must not look like on. The counters are on Compare & Debug.
+        if (!detailReuseStatus.why.empty())
+            ImGui::TextColored(ImVec4(1.0f, 0.75f, 0.3f, 1.0f), "Reuse detail: %s", detailReuseStatus.why.c_str());
+        else if (detailReuseStatus.active)
+            ImGui::TextDisabled("Running%s", detailReuseStatus.holding ? ", paused while moving fast" : "");
+
         bool withFg = config->DlssNrDetailReuseWithFg.value_or_default();
         if (ImGui::Checkbox("Keep on with frame generation", &withFg))
             config->DlssNrDetailReuseWithFg = withFg;
