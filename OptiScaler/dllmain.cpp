@@ -353,6 +353,12 @@ void LoadAsiPlugins()
     }
 }
 
+// nvapi64.dll is loaded only because the startup check below (isNvidiaViaNvapi) keeps it loaded after NvAPI_Initialize.
+// CheckWorkingMode must not take that for the game's own nvapi: it runs inside DLL_PROCESS_ATTACH, where GPU detection
+// fails, and LoadNvApi would then pick fakenvapi as the main nvapi on an NVIDIA card. The game's own load of nvapi goes
+// through the LoadLibrary hooks later, when the GPU is known.
+static bool nvapiHeldByStartupCheck = false;
+
 static void CheckWorkingMode()
 {
     if (!_passThruMode)
@@ -948,7 +954,7 @@ static void CheckWorkingMode()
 
     // NVAPI
     // Doesn't seem to like GetModuleHandle for some reason, so call our load to make sure
-    if (GetDllNameWModule(&nvapiNamesW) != nullptr)
+    if (!nvapiHeldByStartupCheck && GetDllNameWModule(&nvapiNamesW) != nullptr)
     {
         // This hooks nvapi as well when possible
         auto nvapi64 = LibraryLoadHooks::LoadNvApi();
@@ -1913,6 +1919,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         auto isNvidiaViaNvapi = [&]()
         {
             bool nvidiaDetected = false;
+            const bool nvapiWasLoaded = GetDllNameWModule(&nvapiNamesW) != nullptr;
 
             // Only try to load the real nvapi which is located in system32
             auto nvapiModule = NtdllProxy::LoadLibraryExW_Ldr(L"nvapi64.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -1965,6 +1972,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                         // nvapi64.dll stays loaded once NvAPI_Initialize ran (no NvAPI_Unload, no FreeLibrary): it
                         // leaves driver work scheduled inside nvapi64_impl.dll, and in a game that never loads nvapi
                         // itself (BeamNG.drive on Vulkan) unloading it here lets that work crash the game later.
+                        nvapiHeldByStartupCheck = !nvapiWasLoaded;
                         spdlog::debug("Nvidia detected: {}", nvidiaDetected);
                         return nvidiaDetected;
                     }
