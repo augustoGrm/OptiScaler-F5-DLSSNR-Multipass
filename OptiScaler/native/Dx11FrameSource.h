@@ -6,6 +6,7 @@
 // call an upscaler (with_dx12/with_dx12.h); no game call is needed to start it here.
 
 #include "FrameContract.h"
+#include "MsaaPictureDx11.h"
 #include "SharedFrame.h"
 
 #include <d3d11_4.h>
@@ -52,6 +53,9 @@ class Dx11FrameSource : public IFrameSource
     SharedFence _fence;
     SharedTexture _picture;
     SharedTexture _depth;
+    // A multisampled swap chain (the game's MSAA setting) cannot be copied to or from the single-sample picture: the picture
+    // is resolved in, and the result is drawn back into every sample. Unused for a single-sample back buffer.
+    MsaaPictureDx11 _msaa;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> _backBuffer; // held between Acquire and Return
 
     uint64_t _frame = 0;
