@@ -12,7 +12,7 @@
 //   - with the debug layer installed, the runtime reports no error or warning for any of it.
 //
 //   vcvars64, then from the repo root:
-//   cl /std:c++20 /EHsc /O2 tests\nr_msaa_picture_dx11_gpu.cpp OptiScaler\native\MsaaPictureDx11.cpp d3d11.lib d3dcompiler.lib dxgi.lib
+//   cl /std:c++20 /EHsc /O2 tests\nr_msaa_picture_dx11_gpu.cpp OptiScaler\native\MsaaPictureDx11.cpp d3d11.lib d3dcompiler.lib dxgi.lib user32.lib
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
