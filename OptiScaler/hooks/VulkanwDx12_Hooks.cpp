@@ -6311,11 +6311,16 @@ static const VkTimelineSemaphoreSubmitInfo* FindTimelineSubmitInfo(const void* p
 VkResult Vulkan_wDx12::hk_vkQueueSubmit(VkQueue queue, uint32_t submitCount, const VkSubmitInfo* pSubmits,
                                         VkFence fence)
 {
-    if (pSubmits == nullptr || o_vkQueueSubmit == nullptr)
+    if (o_vkQueueSubmit == nullptr)
     {
         LOG_ERROR("Invalid parameters to hk_vkQueueSubmit");
         return VK_ERROR_INITIALIZATION_FAILED;
     }
+
+    // No batches (submitCount 0, pSubmits may be null) is a valid submit that only signals the fence: BeamNG.drive's
+    // "extra signal fence". Refusing it left that fence unsignalled and the game waiting on it.
+    if (submitCount == 0 || pSubmits == nullptr)
+        return o_vkQueueSubmit(queue, submitCount, pSubmits, fence);
 
 #ifdef LOG_ALL_RECORDS
     LOG_DEBUG("queue: {:X}, submitCount: {}, fence: {:X}", (size_t) queue, submitCount, (size_t) fence);
@@ -6601,11 +6606,15 @@ static VkResult Submit2WithDx12Interop(SubmitFn originalSubmit, VkQueue queue, u
 VkResult Vulkan_wDx12::hk_vkQueueSubmit2(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2* pSubmits,
                                          VkFence fence)
 {
-    if (pSubmits == nullptr || o_vkQueueSubmit2 == nullptr)
+    if (o_vkQueueSubmit2 == nullptr)
     {
         LOG_ERROR("Invalid parameters to hk_vkQueueSubmit2");
         return VK_ERROR_INITIALIZATION_FAILED;
     }
+
+    // A fence-only submit (no batches) is valid; see hk_vkQueueSubmit
+    if (submitCount == 0 || pSubmits == nullptr)
+        return o_vkQueueSubmit2(queue, submitCount, pSubmits, fence);
 
     PendingSubmission pending {};
     uint32_t submitIndex = UINT32_MAX;
@@ -6642,11 +6651,15 @@ VkResult Vulkan_wDx12::hk_vkQueueSubmit2(VkQueue queue, uint32_t submitCount, co
 VkResult Vulkan_wDx12::hk_vkQueueSubmit2KHR(VkQueue queue, uint32_t submitCount, const VkSubmitInfo2* pSubmits,
                                             VkFence fence)
 {
-    if (pSubmits == nullptr || o_vkQueueSubmit2KHR == nullptr)
+    if (o_vkQueueSubmit2KHR == nullptr)
     {
         LOG_ERROR("Invalid parameters to hk_vkQueueSubmit2KHR");
         return VK_ERROR_INITIALIZATION_FAILED;
     }
+
+    // A fence-only submit (no batches) is valid; see hk_vkQueueSubmit
+    if (submitCount == 0 || pSubmits == nullptr)
+        return o_vkQueueSubmit2KHR(queue, submitCount, pSubmits, fence);
 
     PendingSubmission pending {};
     uint32_t submitIndex = UINT32_MAX;
