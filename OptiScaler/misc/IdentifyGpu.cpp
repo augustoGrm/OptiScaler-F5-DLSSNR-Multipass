@@ -225,11 +225,19 @@ void IdentifyGpu::queryNvapi(GpuInformation& gpuInfo)
         return;
     }
 
+    // From here on nvapi64.dll stays loaded. NvAPI_Initialize leaves driver work scheduled inside nvapi64_impl.dll;
+    // in a game that never loads nvapi itself (BeamNG.drive on Vulkan) NvAPI_Unload or the FreeLibrary below drop the
+    // last reference, and that work then runs in unloaded code and crashes the game.
     auto* init = GET_INTERFACE(NvAPI_Initialize, o_NvAPI_QueryInterface);
-    if (!init || init() != NVAPI_OK)
+    if (!init)
+    {
+        NtdllProxy::FreeLibrary_Ldr(nvapiModule);
+        return;
+    }
+
+    if (init() != NVAPI_OK)
     {
         LOG_ERROR("Failed to init NvApi");
-        NtdllProxy::FreeLibrary_Ldr(nvapiModule);
         return;
     }
 
@@ -285,11 +293,7 @@ void IdentifyGpu::queryNvapi(GpuInformation& gpuInfo)
         gpuInfo.noDisplayConnected = true;
     }
 
-    auto* unload = GET_INTERFACE(NvAPI_Unload, o_NvAPI_QueryInterface);
-    if (!unload || unload() != NVAPI_OK)
-        LOG_ERROR("Failed to unload NvApi");
-
-    NtdllProxy::FreeLibrary_Ldr(nvapiModule);
+    // No NvAPI_Unload and no FreeLibrary: see NvAPI_Initialize above
 
     // assumes GTX16xx to be capable due to our spoofing
     if (Config::Instance()->DLSSEnabled.value_or_default())

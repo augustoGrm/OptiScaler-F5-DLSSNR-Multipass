@@ -1958,12 +1958,15 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 {
                     spdlog::debug("Using Nvidia's nvapi");
                     auto init = GET_INTERFACE(NvAPI_Initialize, o_NvAPI_QueryInterface);
-                    if (init && init() == NVAPI_OK)
+                    if (init)
                     {
-                        nvidiaDetected = true;
+                        nvidiaDetected = init() == NVAPI_OK;
 
-                        if (auto unload = GET_INTERFACE(NvAPI_Unload, o_NvAPI_QueryInterface))
-                            unload();
+                        // nvapi64.dll stays loaded once NvAPI_Initialize ran (no NvAPI_Unload, no FreeLibrary): it
+                        // leaves driver work scheduled inside nvapi64_impl.dll, and in a game that never loads nvapi
+                        // itself (BeamNG.drive on Vulkan) unloading it here lets that work crash the game later.
+                        spdlog::debug("Nvidia detected: {}", nvidiaDetected);
+                        return nvidiaDetected;
                     }
                 }
             }
