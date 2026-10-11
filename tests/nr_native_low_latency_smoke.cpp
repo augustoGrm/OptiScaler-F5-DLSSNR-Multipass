@@ -302,9 +302,34 @@ int main()
 
         // XeFG's XeLL counts shown frames
         cap.method = Method::XellWithXefg;
+        cap.xefgGenerating = true;
         cap.capFps = 120.0f;
         CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
         CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+
+        // XeFG paused or off on NVIDIA/AMD: XeLL does nothing, the limiter keeps the cap and XeLL gets no interval
+        cap.xefgGenerating = false;
+        cap.intelGpu = false;
+        CHECK(XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::Limiter);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // ... XeFG generating again: XeLL keeps it
+        cap.xefgGenerating = true;
+        CHECK(!XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+
+        // ... on Intel XeLL works without XeFG generating
+        cap.xefgGenerating = false;
+        cap.intelGpu = true;
+        CHECK(!XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+
+        // Only XeFG's XeLL depends on XeFG: real Reflex with XeFG off is never idle
+        cap.intelGpu = false;
+        cap.method = Method::RealReflex;
+        CHECK(!XellIdle(cap));
 
         CHECK(IntervalUs(0.0f) == 0);
         CHECK(IntervalUs(-5.0f) == 0);

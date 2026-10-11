@@ -1348,6 +1348,20 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
             if (SyncInterval < 1)
                 SyncInterval = 1;
 
+            // XeFG runs with XeLL, and XeLL needs sync interval 1 with VSync on (Intel's XeLL guide)
+            if (SyncInterval > 1 && state.activeFgOutput == FGOutput::XeFG)
+            {
+                static bool logged = false;
+
+                if (!logged)
+                {
+                    logged = true;
+                    LOG_WARN("VsyncInterval {} with XeFG: using 1, XeLL needs sync interval 1", SyncInterval);
+                }
+
+                SyncInterval = 1;
+            }
+
             LOG_DEBUG("Removing DXGI_PRESENT_ALLOW_TEARING");
             Flags &= ~DXGI_PRESENT_ALLOW_TEARING;
         }

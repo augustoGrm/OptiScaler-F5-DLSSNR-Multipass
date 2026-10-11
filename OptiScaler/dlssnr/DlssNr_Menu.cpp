@@ -1489,7 +1489,8 @@ static void RenderLowLatencySection(Config* config)
 
     HelpMarker("Makes the latency calls the game doesn't: Reflex on NVIDIA, Anti-Lag 2 / XeLL / LatencyFlex on other "
                "cards. Helps most when the GPU is the limit. Steps aside if the game uses Reflex itself.\n"
-               "On + Boost: the GPU keeps its clocks up. A little lower latency, a little more power.");
+               "On + Boost: the GPU keeps its clocks up. A little lower latency, a little more power. NVIDIA Reflex "
+               "only; the others ignore it.");
 
     const auto status = native::lowlatency::GetStatus();
 
@@ -1501,6 +1502,10 @@ static void RenderLowLatencySection(Config* config)
 
     if (status.decision == Decision::Run && status.hasLatency)
         ImGui::Text("Measured latency: %.1f ms", status.latencyMs);
+
+    // On NVIDIA and AMD XeLL does nothing while XeFG generates no frames (paused, off, exclusive full screen)
+    if (status.decision == Decision::Run && status.xellIdle)
+        ImGui::TextDisabled("XeLL is idle until XeFG generates frames again (on this GPU it needs XeFG).");
 
     // Who keeps the frame cap while we run: one wait per frame (NativeLowLatencyRule.h PlanCap)
     if (const float cap = config->FramerateLimit.value_or_default();

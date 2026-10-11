@@ -191,7 +191,16 @@ struct CapInputs
     Method method = Method::RealReflex;
     bool fsrFgActive = false;        // FSR frame generation is generating frames
     bool limiterBeforeSleep = false; // the limiter's wait comes before our Sleep on this present path (FGPresent)
+    bool intelGpu = false;           // XeLL works on its own only on Intel GPUs
+    bool xefgGenerating = false;     // XeFG is on and generating frames (not paused, not off)
 };
+
+// XeLL on an NVIDIA or AMD GPU does nothing unless XeFG generates frames (Intel: "XeLL will not perform latency
+// reduction"): neither the latency nor the cap can be left to it then.
+inline bool XellIdle(const CapInputs& in)
+{
+    return in.method == Method::XellWithXefg && !in.intelGpu && !in.xefgGenerating;
+}
 
 struct CapPlan
 {
@@ -212,10 +221,15 @@ inline CapPlan PlanCap(const CapInputs& in)
     if (in.method == Method::RealReflex && in.fsrFgActive && in.limiterBeforeSleep)
         return { CapOwner::Limiter, 0 };
 
+    // XeFG paused or off on a non-Intel GPU: XeLL does nothing, the limiter keeps the cap until XeFG generates again
+    if (XellIdle(in))
+        return { CapOwner::Limiter, 0 };
+
     if (in.capFps <= 0.0f)
         return { CapOwner::LowLatency, 0 };
 
-    // XeLL, told by XeFG that frame generation runs, counts shown frames
+    // XeLL counts shown frames (rendered + generated) while XeFG generates; with XeFG paused on an Intel GPU shown
+    // frames are the rendered ones, so the same interval holds
     if (in.method == Method::XellWithXefg)
         return { CapOwner::LowLatency, IntervalUs(in.capFps) };
 

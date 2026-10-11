@@ -11,6 +11,7 @@
 #include <hooks/LibraryLoad_Hooks.h>
 #include <hooks/Reflex_Hooks.h>
 #include <hooks/Vulkan_Hooks.h>
+#include <misc/IdentifyGpu.h>
 #include <nvapi/NvApiHooks.h>
 #include <nvapi/fakenvapi.h>
 
@@ -45,6 +46,7 @@ std::atomic<const void*> g_gameQueue = nullptr;       // the queue the game's fr
 std::atomic<double> g_frameGenerationPresentAt = 0.0; // last PresentSource::FrameGeneration call, ms
 std::atomic<Decision> g_decision = Decision::NoF5Low;
 std::atomic<CapOwner> g_capOwner = CapOwner::NotOurs; // PlanCap's answer on the last present we ran on
+std::atomic<bool> g_xellIdle = false;                 // XellIdle on the last present we ran on
 
 // Only the game's present thread touches these.
 Table g_table = Table::Unknown;
@@ -291,6 +293,7 @@ void Stop(Api api, IUnknown* device)
 {
     g_running = false;
     g_capOwner = CapOwner::NotOurs;
+    g_xellIdle = false;
     g_sentIntervalUs = 0;
     g_sentBoost = false;
     g_sentXellContext = nullptr;
@@ -344,20 +347,25 @@ Method CurrentMethod(Api api)
     return fakenvapi::isUsingAsMainNvapi() ? Method::Fakenvapi : Method::RealReflex;
 }
 
-CapPlan PlanFrameCap(Api api)
+CapInputs FrameCapInputs(Api api)
 {
     auto& state = State::Instance();
+    const bool fgGenerating =
+        state.currentFG != nullptr && state.currentFG->IsActive() && !state.currentFG->IsPaused();
 
     CapInputs in;
     in.running = true;
     in.capFps = Config::Instance()->FramerateLimit.value_or_default();
     in.method = CurrentMethod(api);
-    in.fsrFgActive = state.activeFgOutput == FGOutput::FSRFG && state.currentFG != nullptr &&
-                     state.currentFG->IsActive() && !state.currentFG->IsPaused();
+    in.fsrFgActive = state.activeFgOutput == FGOutput::FSRFG && fgGenerating;
+    in.xefgGenerating = state.activeFgOutput == FGOutput::XeFG && fgGenerating;
+    // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
+    static const bool intelGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::Intel;
+    in.intelGpu = intelGpu;
     // FGHooks::FGPresent's limiter waits before our OnPresentEnd there; the Vulkan bridge's D3D12 present (and its
     // limiter) comes after the game's present, our Sleep included
     in.limiterBeforeSleep = state.swapchainInteropApi != SwapchainInteropApi::VkwDx12;
-    return PlanCap(in);
+    return in;
 }
 
 const char* PathText(Api api)
@@ -425,7 +433,8 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         return;
     }
 
-    const auto cap = PlanFrameCap(api);
+    const auto capInputs = FrameCapInputs(api);
+    const auto cap = PlanCap(capInputs);
     const bool boost = Config::Instance()->DlssNrNativeLowLatencyBoost.value_or_default();
     // XeFG makes a new XeLL context (and sets its sleep mode, with no limit) when its swap chain is made again
     void* xellContext = CurrentMethod(api) == Method::XellWithXefg ? fakenvapi::getCurrentContext() : nullptr;
@@ -453,6 +462,7 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     }
 
     g_capOwner = cap.owner;
+    g_xellIdle = XellIdle(capInputs);
 
     if (g_presentStarted)
         Marker(api, device, PRESENT_END);
@@ -583,6 +593,7 @@ Status GetStatus()
         return status;
 
     status.capOwner = g_capOwner.load();
+    status.xellIdle = g_xellIdle.load();
 
     const auto api = g_deviceApi.load();
     status.path = PathText(api);
