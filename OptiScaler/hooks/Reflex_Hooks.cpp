@@ -6,6 +6,7 @@
 #include <nvapi/fakenvapi.h>
 
 #include <native/VkPresentBridge.h>
+#include <misc/IdentifyGpu.h>
 #include <proxies/Streamline_Proxy.h>
 
 #include <magic_enum.hpp>
@@ -77,6 +78,17 @@ native::bridgedreflex::SleepMode ToMode(const NV_VULKAN_SET_SLEEP_MODE_PARAMS& p
 bool ForceDisabled() { return Config::Instance()->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable; }
 
 bool XefgOutput() { return State::Instance().activeFgOutput == FGOutput::XeFG; }
+
+// BridgedReflexRule.h XellHoldsCap, from frame generation's own state: update()'s fgActive is false on every generated
+// frame's present, and the answer must not flip with it
+bool XellHoldsCap()
+{
+    auto& state = State::Instance();
+    static const bool intelGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::Intel;
+    const bool xefgGenerating = XefgOutput() && state.currentFG != nullptr && state.currentFG->IsActive() &&
+                                !state.currentFG->IsPaused() && !state.realExclusiveFullscreen;
+    return native::bridgedreflex::XellHoldsCap(ForceDisabled(), intelGpu, xefgGenerating);
+}
 
 // A D3D game's sleep mode (cap already in) as its Reflex output gets it: BridgedReflexRule.h SleepModeForOutput
 NV_SET_SLEEP_MODE_PARAMS ForOutput(const NV_SET_SLEEP_MODE_PARAMS& params)
@@ -856,6 +868,9 @@ bool ReflexHooks::updateTimingData()
     if (auto sleepDev = _lastSleepDev != nullptr ? _lastSleepDev : (_ownSleepDev != nullptr ? _ownSleepDev : markersDev);
         sleepDev && o_NvAPI_D3D_GetLatency)
     {
+        // With XeFG, hkNvAPI_D3D_GetLatency answers from XeFG's XeLL through fakenvapi
+        _timingEstimated = XefgOutput() || fakenvapi::isUsingAsMainNvapi();
+
         // Not calling free on this but it's static so hopefully fine
         static NV_LATENCY_RESULT_PARAMS* results = new NV_LATENCY_RESULT_PARAMS();
         results->version = NV_LATENCY_RESULT_PARAMS_VER;
@@ -872,6 +887,9 @@ bool ReflexHooks::updateTimingData()
 
     if (_lastVkSleepDev && o_NvAPI_Vulkan_GetLatency)
     {
+        // Bridged, hkNvAPI_Vulkan_GetLatency answers from XeFG's XeLL through fakenvapi
+        _timingEstimated = bridgedReflexForwarding() || fakenvapi::isUsingAsMainNvapi();
+
         // Not calling free on this but it's static so hopefully fine
         static NV_VULKAN_LATENCY_RESULT_PARAMS* results = new NV_VULKAN_LATENCY_RESULT_PARAMS();
         results->version = NV_VULKAN_LATENCY_RESULT_PARAMS_VER;
@@ -913,9 +931,9 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
     if (isVulkan && bridgedXellDevice() != nullptr && (_lastVkSleepDev || _lastLl2ModeSet || gameIsSendingMarkers()))
     {
         // XeFG's XeLL holds the cap, with the game's sleep mode or one we send (setFPSLimit) once markers come, as on
-        // D3D; Force Disable leaves it to OptiScaler's limiter. The Vulkan present and the bridge's D3D12 present both
-        // come here: the answer must not depend on fgActive, or it flips every frame.
-        State::Instance().reflexLimitsFps = !ForceDisabled();
+        // D3D; while it cannot (XellHoldsCap) OptiScaler's limiter does. The Vulkan present and the bridge's D3D12
+        // present both come here: the answer must not depend on fgActive, or it flips every frame.
+        State::Instance().reflexLimitsFps = XellHoldsCap();
     }
     else if (isVulkan && _lastVkSleepDev)
     {
@@ -926,8 +944,8 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
     else if (!isVulkan && XefgOutput() && (_lastSleepDev || gameIsSendingMarkers()))
     {
         // The game's Reflex goes to XeFG's XeLL with low latency on (SleepModeForOutput), with a mode from us when it
-        // never sets one: XeLL holds the cap. Not by fgActive, which is false on every generated frame's present.
-        State::Instance().reflexLimitsFps = !ForceDisabled();
+        // never sets one: XeLL holds the cap while it can (XellHoldsCap), OptiScaler's limiter otherwise.
+        State::Instance().reflexLimitsFps = XellHoldsCap();
     }
     else if (_lastSleepDev)
     {

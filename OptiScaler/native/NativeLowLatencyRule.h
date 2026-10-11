@@ -144,7 +144,7 @@ inline const char* StatusLabel(Decision decision)
     case Decision::ForceReflexDisabled:
     case Decision::ForceXell:
     case Decision::FrameGenerationOwnsReflex:
-        return "Standing Aside";
+        return "Standing aside";
     default:
         return "Off";
     }
@@ -162,7 +162,7 @@ inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = fa
         return "No Optical F5Low mode or XeFG is running";
     case Decision::GameRunsReflex:
         return gameReflexFeedsXell ? "The game's Reflex feeds XeFG's XeLL"
-                                   : "Please use the Game's Own Reflex Settings";
+                                   : "Use the game's own Reflex settings";
     case Decision::GameRunsXell:
         return "The game runs XeLL itself";
     case Decision::ForceReflexDisabled:

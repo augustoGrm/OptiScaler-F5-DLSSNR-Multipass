@@ -1499,9 +1499,10 @@ static void RenderLowLatencySection(Config* config)
     }
 
     HelpMarker("Makes the latency calls the game doesn't: Reflex on NVIDIA, Anti-Lag 2 / XeLL / LatencyFlex on other "
-               "cards. Helps most when the GPU is the limit. Steps aside if the game uses Reflex itself.\n"
+               "cards. Steps aside if the game uses Reflex itself.\n"
                "With XeFG it also runs without an Optical F5Low mode: XeFG always uses XeLL, and XeLL needs these "
-               "calls.\n"
+               "calls. A game's own Reflex then goes to XeLL, which stays on even if Reflex is off in the game's "
+               "menu (fakenvapi's Force Reflex: Force Disable turns it off).\n"
                "On + Boost: the GPU keeps its clocks up. A little lower latency, a little more power. NVIDIA Reflex "
                "only; the others ignore it.");
 
@@ -1514,7 +1515,13 @@ static void RenderLowLatencySection(Config* config)
     ImGui::TextWrapped("Status: [%s]: %s", native::lowlatency::StatusLabel(status.decision), reason);
 
     if (status.decision == Decision::Run && status.hasLatency)
-        ImGui::Text("Measured latency: %.1f ms", status.latencyMs);
+    {
+        // Through fakenvapi there are no GPU times: the frame's simulation start to its present's end
+        if (status.latencyEstimated)
+            ImGui::Text("Simulation to present: %.1f ms", status.latencyMs);
+        else
+            ImGui::Text("Measured latency: %.1f ms", status.latencyMs);
+    }
 
     // On NVIDIA and AMD XeLL does nothing while XeFG generates no frames (paused, off, exclusive full screen, or
     // fakenvapi's own XeLL with no XeFG)

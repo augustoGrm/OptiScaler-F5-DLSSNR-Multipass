@@ -115,14 +115,14 @@ int main()
         CHECK(DecisionText(d)[0] != '\0');
 
     CHECK(DecisionText(Decision::Run)[0] == '\0');
-    CHECK(strcmp(DecisionText(Decision::GameRunsReflex), "Please use the Game's Own Reflex Settings") == 0);
+    CHECK(strcmp(DecisionText(Decision::GameRunsReflex), "Use the game's own Reflex settings") == 0);
 
-    // The status label: On when it runs, Standing Aside when something else owns latency, Off otherwise
+    // The status label: On when it runs, Standing aside when something else owns latency, Off otherwise
     CHECK(strcmp(StatusLabel(Decision::Run), "On") == 0);
 
     for (auto d : { Decision::GameRunsReflex, Decision::GameRunsXell, Decision::ForceReflexDisabled,
                     Decision::ForceXell, Decision::FrameGenerationOwnsReflex })
-        CHECK(strcmp(StatusLabel(d), "Standing Aside") == 0);
+        CHECK(strcmp(StatusLabel(d), "Standing aside") == 0);
 
     for (auto d : { Decision::SettingOff, Decision::NoF5Low, Decision::NoApi })
         CHECK(strcmp(StatusLabel(d), "Off") == 0);
@@ -654,6 +654,13 @@ int main()
         CHECK(out.lowLatency && out.boost); // Force Disable is fakenvapi's own business without XeFG
         CHECK(!SplitSleepMode(gameOff, 0, true).xell.lowLatency);
 
+        // Who keeps the cap the game's Reflex hands XeLL: XeLL while it can, OptiScaler's limiter otherwise
+        using native::bridgedreflex::XellHoldsCap;
+        CHECK(XellHoldsCap(false, false, true));   // NVIDIA/AMD, XeFG generating
+        CHECK(!XellHoldsCap(false, false, false)); // NVIDIA/AMD, XeFG paused or off: XeLL idle
+        CHECK(XellHoldsCap(false, true, false));   // Intel: XeLL works on its own
+        CHECK(!XellHoldsCap(true, true, true));    // Force Disable
+
         // Reflex off in the game's menu: XeLL still runs (its sleeps carry the cap) and gets the cap
         SleepMode off;
         split = SplitSleepMode(off, 8333);
@@ -661,10 +668,10 @@ int main()
         CHECK(!split.driver.lowLatency && split.driver.minimumIntervalUs == 0);
 
         // The menu: the game's Reflex stands us aside either way, and the text says where it goes
-        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex), "Please use the Game's Own Reflex Settings") == 0);
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex), "Use the game's own Reflex settings") == 0);
         CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, true), "The game's Reflex feeds XeFG's XeLL") == 0);
         CHECK(std::strcmp(DecisionText(Decision::SettingOff, true), DecisionText(Decision::SettingOff)) == 0);
-        CHECK(std::strcmp(StatusLabel(Decision::GameRunsReflex), "Standing Aside") == 0);
+        CHECK(std::strcmp(StatusLabel(Decision::GameRunsReflex), "Standing aside") == 0);
 
         // The decision itself is unchanged: the game calls Reflex, so we do not
         Inputs x;

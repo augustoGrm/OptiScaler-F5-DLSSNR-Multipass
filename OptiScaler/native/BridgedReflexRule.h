@@ -74,6 +74,14 @@ inline SleepMode SleepModeForOutput(const SleepMode& game, uint32_t capIntervalU
     return out;
 }
 
+// Whether XeFG's XeLL can keep the frame cap the game's Reflex hands it. On NVIDIA and AMD XeLL does nothing while XeFG
+// generates no frames (paused, off, real exclusive full screen; Intel: "XeLL will not perform latency reduction"), so
+// OptiScaler's limiter keeps it then, as it does under fakenvapi's Force Disable.
+inline bool XellHoldsCap(bool forceDisabled, bool intelGpu, bool xefgGenerating)
+{
+    return !forceDisabled && (intelGpu || xefgGenerating);
+}
+
 // A bridged game: XeLL gets SleepModeForOutput, the driver the mode with everything off, including the interval: only
 // one of the two may wait, and the driver's Sleep must still return and signal the game's semaphore.
 inline SleepModeSplit SplitSleepMode(const SleepMode& game, uint32_t capIntervalUs, bool forceDisabled = false)

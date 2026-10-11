@@ -84,7 +84,8 @@ static VkResult hkvkReleaseFullScreenExclusiveModeEXT(VkDevice device, VkSwapcha
 }
 
 // A Vulkan game's own Reflex, through VK_NV_low_latency2: Optical F5Low's low latency stands aside once it is called
-// (native/NativeLowLatency.h). Our own low latency goes through the NvAPI_Vulkan_* interface and never calls these.
+// (native/NativeLowLatency.h), and on the present bridge with XeFG the calls feed XeFG's XeLL (ReflexHooks forwarding,
+// native/BridgedReflexRule.h). Our own low latency goes through the NvAPI_Vulkan_* interface and never calls these.
 static PFN_vkSetLatencySleepModeNV o_vkSetLatencySleepModeNV = nullptr;
 static PFN_vkLatencySleepNV o_vkLatencySleepNV = nullptr;
 static PFN_vkSetLatencyMarkerNV o_vkSetLatencyMarkerNV = nullptr;

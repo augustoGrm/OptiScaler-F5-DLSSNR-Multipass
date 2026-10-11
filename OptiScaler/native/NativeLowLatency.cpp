@@ -71,6 +71,7 @@ CapSettle g_capSettle; // the cap plan in force (SettleCap)
 double g_latencyAskedAt = 0.0;
 bool g_hasLatency = false;
 float g_latencyMs = 0.0f;
+bool g_latencyEstimated = false;
 
 // NV_LATENCY_MARKER_TYPE and NV_VULKAN_LATENCY_MARKER_TYPE share the same ordinals for every value used here, but are
 // unrelated enum types in the SDK: translated explicitly rather than cast, so a future SDK change cannot silently
@@ -744,6 +745,20 @@ Status GetStatus()
         g_latencyAskedAt = now;
         g_hasLatency = false;
 
+        // fakenvapi's report has the markers' times only; its GPU end is the last marker's plus 0.1 ms
+        const bool estimated = CurrentMethod(api) != Method::RealReflex;
+        const auto ReadLatency = [](const auto& report, bool estimated)
+        {
+            const uint64_t end = estimated ? report.presentEndTime : report.gpuRenderEndTime;
+
+            if (report.frameID != 0 && report.simStartTime != 0 && end > report.simStartTime)
+            {
+                g_latencyMs = (float) (end - report.simStartTime) / 1000.0f;
+                g_latencyEstimated = estimated;
+                g_hasLatency = true;
+            }
+        };
+
         if (api == Api::Vulkan)
         {
             static NV_VULKAN_LATENCY_RESULT_PARAMS results {};
@@ -754,11 +769,7 @@ Status GetStatus()
                 // The newest report is the last; times are in microseconds
                 const auto& report = results.frameReport[63];
 
-                if (report.frameID != 0 && report.simStartTime != 0 && report.gpuRenderEndTime > report.simStartTime)
-                {
-                    g_latencyMs = (float) (report.gpuRenderEndTime - report.simStartTime) / 1000.0f;
-                    g_hasLatency = true;
-                }
+                ReadLatency(report, estimated);
             }
         }
         else
@@ -771,17 +782,14 @@ Status GetStatus()
                 // The newest report is the last; times are in microseconds
                 const auto& report = results.frameReport[63];
 
-                if (report.frameID != 0 && report.simStartTime != 0 && report.gpuRenderEndTime > report.simStartTime)
-                {
-                    g_latencyMs = (float) (report.gpuRenderEndTime - report.simStartTime) / 1000.0f;
-                    g_hasLatency = true;
-                }
+                ReadLatency(report, estimated);
             }
         }
     }
 
     status.hasLatency = g_hasLatency;
     status.latencyMs = g_latencyMs;
+    status.latencyEstimated = g_latencyEstimated;
     return status;
 }
 

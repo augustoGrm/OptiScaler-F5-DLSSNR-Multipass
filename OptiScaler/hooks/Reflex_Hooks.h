@@ -60,6 +60,7 @@ class ReflexHooks
     // go through the same wrappers, so they take the same routing, but they are not "the game sends markers".
     inline static thread_local bool _ownCall = false;
     inline static std::atomic<bool> _gameCalledReflex = false;
+    inline static std::atomic<bool> _timingEstimated = false;
     inline static std::atomic<bool> _gameCalledSetSleepMode = false;
     // SetSleepMode and the stored device: the game's call and ours never interleave, and a released device is dropped
     inline static std::recursive_mutex _sleepModeMutex;
@@ -113,6 +114,9 @@ class ReflexHooks
     static bool isReflexHooked();
     static void* getHookedReflex(unsigned int InterfaceId);
     static bool updateTimingData();
+    // The last timings came from fakenvapi (XeFG's XeLL, or fakenvapi as the nvapi): its report has no GPU, driver or
+    // queue times, only the markers' own
+    static bool timingEstimated() { return _timingEstimated.load(std::memory_order_relaxed); }
     static bool gameIsSendingMarkers();
     // The frame ID the last marker of this type carried (the game's, or ours while it does not call Reflex)
     static uint64_t lastMarkerFrameId(NV_LATENCY_MARKER_TYPE type);
