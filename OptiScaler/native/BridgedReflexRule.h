@@ -3,7 +3,8 @@
 // A Vulkan game on the present bridge (native/VkPresentBridge.h) runs XeFG and its XeLL on the bridge's private D3D12
 // device, while the game's own Reflex calls (NvAPI_Vulkan_*, VK_NV_low_latency2) go to the driver. The same calls on
 // D3D12 are sent to XeLL by hooks/Reflex_Hooks.cpp when XeFG is the output; these are the rules for doing it for the
-// bridged Vulkan game. No Windows, no Vulkan, no GPU: a host test can include it.
+// bridged Vulkan game, and the sleep mode rule both share (SleepModeForOutput). No Windows, no Vulkan, no GPU: a host
+// test can include it.
 
 #include <cstdint>
 
@@ -55,20 +56,30 @@ struct SleepModeSplit
     SleepMode driver; // what the driver gets
 };
 
-// The game's sleep mode goes to XeLL as the game set it, with OptiScaler's frame cap in place of its interval when one
-// is set (as hkNvAPI_D3D_SetSleepMode does), and low latency always on: XeFG always uses XeLL, and fakenvapi's XeLL
-// skips every sleep and marker while the mode it was given is off, which also leaves the cap with nothing to wait in
-// (Reflex off in RDR2's menu). The driver gets the mode with everything off, including the interval: only one of the
-// two may wait, and the driver's Sleep must still return and signal the game's semaphore.
-inline SleepModeSplit SplitSleepMode(const SleepMode& game, uint32_t capIntervalUs)
+// The sleep mode the game's Reflex output gets. OptiScaler's frame cap replaces the game's interval when one is set.
+// While XeFG is the output (its XeLL, D3D or the bridge), low latency is on whatever the game's own Reflex setting
+// says: XeFG always uses XeLL, fakenvapi's XeLL skips every sleep and marker while the mode it was given is off, and
+// its frame cap waits in those sleeps (Reflex off in RDR2's menu left both doing nothing). Only the user turns it off,
+// with fakenvapi's Force Disable. Not written for XeLL alone: whichever low latency XeFG is paired with gets the same.
+inline SleepMode SleepModeForOutput(const SleepMode& game, uint32_t capIntervalUs, bool xefgOutput, bool forceDisabled)
 {
-    SleepModeSplit split;
-    split.xell = game;
-    split.xell.lowLatency = true;
+    SleepMode out = game;
 
     if (capIntervalUs != 0)
-        split.xell.minimumIntervalUs = capIntervalUs;
+        out.minimumIntervalUs = capIntervalUs;
 
+    if (xefgOutput)
+        out.lowLatency = !forceDisabled;
+
+    return out;
+}
+
+// A bridged game: XeLL gets SleepModeForOutput, the driver the mode with everything off, including the interval: only
+// one of the two may wait, and the driver's Sleep must still return and signal the game's semaphore.
+inline SleepModeSplit SplitSleepMode(const SleepMode& game, uint32_t capIntervalUs, bool forceDisabled = false)
+{
+    SleepModeSplit split;
+    split.xell = SleepModeForOutput(game, capIntervalUs, true, forceDisabled);
     return split;
 }
 

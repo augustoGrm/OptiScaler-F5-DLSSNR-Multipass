@@ -635,6 +635,25 @@ int main()
         CHECK(split.xell.lowLatency && split.xell.minimumIntervalUs == 8333);
         CHECK(!split.driver.lowLatency && split.driver.minimumIntervalUs == 0);
 
+        // The rule the D3D hooks share: XeFG is the output -> low latency on whatever the game says, the cap in place
+        // of the game's interval; only fakenvapi's Force Disable turns it off; no XeFG -> the game's mode as it is
+        using native::bridgedreflex::SleepModeForOutput;
+        SleepMode gameOff;
+        gameOff.minimumIntervalUs = 16667;
+        auto out = SleepModeForOutput(gameOff, 0, true, false);
+        CHECK(out.lowLatency && out.minimumIntervalUs == 16667);
+        out = SleepModeForOutput(gameOff, 13333, true, false);
+        CHECK(out.lowLatency && out.minimumIntervalUs == 13333);
+        out = SleepModeForOutput(gameOff, 13333, true, true);
+        CHECK(!out.lowLatency && out.minimumIntervalUs == 13333);
+        out = SleepModeForOutput(gameOff, 0, false, false);
+        CHECK(!out.lowLatency && out.minimumIntervalUs == 16667);
+        SleepMode gameOn;
+        gameOn.lowLatency = gameOn.boost = true;
+        out = SleepModeForOutput(gameOn, 0, false, true);
+        CHECK(out.lowLatency && out.boost); // Force Disable is fakenvapi's own business without XeFG
+        CHECK(!SplitSleepMode(gameOff, 0, true).xell.lowLatency);
+
         // Reflex off in the game's menu: XeLL still runs (its sleeps carry the cap) and gets the cap
         SleepMode off;
         split = SplitSleepMode(off, 8333);
