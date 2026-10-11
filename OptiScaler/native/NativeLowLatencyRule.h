@@ -296,4 +296,65 @@ inline bool NeedsSleepModeResend(const SleepModeCall* last, bool lastRefused, co
 // How often a refused SetSleepMode is tried again
 inline constexpr double kSleepModeRetryMs = 1000.0;
 
+// One frame ID for XeLL and XeFG (Intel: XeLL's markers and xefgSwapChainSetPresentId carry the same ID, XeFG tags the
+// frame's resources and constants with it too). XeFG follows XeLL: a new XeFG frame takes the XeLL ID of the frame being
+// rendered (`xellId`, 0 when nobody feeds XeLL). XeFG asks for an ID unique among the frames it holds, not a rising one
+// (frames may even reach it out of order, xefg_swapchain.h), so only an ID it gave one of its newest frames is refused.
+struct FrameIdHistory
+{
+    static constexpr int kSize = 8; // well past the frames XeFG holds (IFGFeature's 4 slots)
+
+    uint32_t ids[kSize] = {};
+    int count = 0;
+    int next = 0;
+
+    bool Contains(uint32_t id) const
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            if (ids[i] == id)
+                return true;
+        }
+
+        return false;
+    }
+
+    void Add(uint32_t id)
+    {
+        ids[next] = id;
+        next = (next + 1) % kSize;
+
+        if (count < kSize)
+            ++count;
+    }
+};
+
+// IDs for frames whose XeLL ID XeFG still holds: a range XeLL's IDs do not reach, so XeLL's next IDs are free again a few
+// frames later (counting on from XeFG's last ID could stay just ahead of XeLL's for good)
+inline constexpr uint32_t kSpareFrameIdBase = 0x80000000u;
+
+struct FrameGenerationId
+{
+    uint32_t id = 0;
+    bool followsXell = false;
+    bool steppedBack = false; // below XeFG's last ID: its history is reset for this frame
+};
+
+inline FrameGenerationId NextFrameGenerationId(uint32_t xellId, uint32_t lastId, const FrameIdHistory& recent,
+                                               uint32_t& spareId)
+{
+    if (xellId != 0 && !recent.Contains(xellId))
+        return { xellId, true, xellId < lastId };
+
+    // No XeLL ID: count on from the last one. One XeFG still holds (a frame started twice, XeLL a frame behind): a spare.
+    uint32_t id = 0;
+
+    do
+    {
+        id = xellId == 0 ? ++lastId : spareId++;
+    } while (id == 0 || recent.Contains(id));
+
+    return { id, false, false };
+}
+
 }// namespace native::lowlatency

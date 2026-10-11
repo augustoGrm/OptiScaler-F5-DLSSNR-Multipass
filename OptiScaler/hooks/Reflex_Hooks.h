@@ -97,6 +97,8 @@ class ReflexHooks
     static void* getHookedReflex(unsigned int InterfaceId);
     static bool updateTimingData();
     static bool gameIsSendingMarkers();
+    // The frame ID the last marker of this type carried (the game's, or ours while it does not call Reflex)
+    static uint64_t lastMarkerFrameId(NV_LATENCY_MARKER_TYPE type);
 
     // Calls OptiScaler makes itself (native/NativeLowLatency.cpp). Call ensureTable first. They run the hooked
     // wrappers, so XeFG's routing and fakenvapi's modes apply as for the game's calls, without counting as the game's.

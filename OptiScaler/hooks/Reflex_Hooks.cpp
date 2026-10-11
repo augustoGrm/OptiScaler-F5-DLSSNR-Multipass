@@ -796,6 +796,11 @@ void ReflexHooks::setFPSLimit(float fps)
     }
 }
 
+uint64_t ReflexHooks::lastMarkerFrameId(NV_LATENCY_MARKER_TYPE type)
+{
+    return (size_t) type < std::size(_lastFrameId) ? _lastFrameId[type] : 0;
+}
+
 bool ReflexHooks::gameIsSendingMarkers()
 {
     return _lastMarkerFrame != 0 && ((State::Instance().fgLastFrame < _lastMarkerFrame) ||

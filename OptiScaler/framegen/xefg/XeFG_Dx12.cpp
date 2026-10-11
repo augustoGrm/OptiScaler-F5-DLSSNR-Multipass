@@ -5,6 +5,7 @@
 #include <misc/REFrameworkCompat.h>
 #include <resource_tracking/ResTrack_dx12.h>
 
+#include <native/NativeLowLatency.h>
 #include <nvapi/fakenvapi.h>
 
 #include <magic_enum.hpp>
@@ -928,10 +929,21 @@ bool XeFG_Dx12::Dispatch()
     constData.motionVectorScaleX = _mvScaleX[fIndex];
     constData.motionVectorScaleY = _mvScaleY[fIndex];
 
+    // The frame's XeLL ID (FrameIdFor): Present Id and Reflex Id (the last marker's) match while XeLL is fed
+    auto frameId = FrameIdFor(willDispatchFrame);
+
     if (!Config::Instance()->FGSkipReset.value_or_default())
         constData.resetHistory = _reset[fIndex];
     else
         constData.resetHistory = false;
+
+    // An ID below the last one (XeFG started numbering before XeLL was fed): no interpolation across it
+    {
+        std::scoped_lock lock(_frameIdMutex);
+
+        if (_frameIdSteppedBack[fIndex])
+            constData.resetHistory = true;
+    }
 
     switch (Config::Instance()->FTInput.value_or_default())
     {
@@ -948,11 +960,11 @@ bool XeFG_Dx12::Dispatch()
         break;
     }
 
-    LOG_DEBUG("Reset: {}, Opti FT: {}, Source FT: {}, Set FT: {}, Opti Id: {}, Reflex Id: {}", _reset[fIndex],
-              constData.frameRenderTime, _ftDelta[fIndex], constData.frameRenderTime, _frameCount,
-              State::Instance().reflexFrameId);
-
-    auto frameId = static_cast<uint32_t>(willDispatchFrame);
+    LOG_DEBUG("Reset: {}, Opti FT: {}, Source FT: {}, Set FT: {}, Opti Id: {}, Present Id: {}, Reflex Id: {}, XeLL Id "
+              "now: {}",
+              constData.resetHistory, constData.frameRenderTime, _ftDelta[fIndex], constData.frameRenderTime,
+              _frameCount, frameId, State::Instance().reflexFrameId,
+              native::lowlatency::FrameIdForFrameGeneration());
 
     auto result = XeFGProxy::TagFrameConstants()(_swapChainContext, frameId, &constData);
     if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
@@ -1387,6 +1399,42 @@ bool XeFG_Dx12::Present()
     return Dispatch();
 }
 
+// Picked at the frame's first use (its first tagged resource, else its Dispatch) and kept for all of the frame's tags
+// and its present (Intel: one ID per frame for XeLL's markers, the tags and xefgSwapChainSetPresentId)
+uint32_t XeFG_Dx12::FrameIdFor(UINT64 fgFrame)
+{
+    std::scoped_lock lock(_frameIdMutex);
+
+    const auto slot = fgFrame % BUFFER_COUNT;
+
+    if (_frameIdFgFrame[slot] == fgFrame && _frameId[slot] != 0)
+        return _frameId[slot];
+
+    const auto xellId = native::lowlatency::FrameIdForFrameGeneration();
+    const auto pick = native::lowlatency::NextFrameGenerationId(xellId, _lastFrameId, _recentFrameIds, _spareFrameId);
+
+    if (_frameIdFollowsXell != pick.followsXell && (xellId != 0 || _frameIdFollowsXell.has_value()))
+    {
+        if (pick.followsXell)
+            LOG_INFO("XeFG frame IDs follow XeLL's (from {})", pick.id);
+        else
+            LOG_INFO("XeFG frame ID {} numbered on its own (XeLL's: {})", pick.id, xellId);
+    }
+    else if (pick.steppedBack)
+    {
+        LOG_INFO("XeFG frame ID steps back to XeLL's {} (from {}), history reset", pick.id, _lastFrameId);
+    }
+
+    _frameIdFollowsXell = pick.followsXell;
+    _frameIdFgFrame[slot] = fgFrame;
+    _frameId[slot] = pick.id;
+    _frameIdSteppedBack[slot] = pick.steppedBack;
+    _lastFrameId = pick.id;
+    _recentFrameIds.Add(pick.id);
+
+    return pick.id;
+}
+
 bool XeFG_Dx12::SetResource(Dx12Resource* inputResource)
 {
     if (inputResource == nullptr || inputResource->resource == nullptr ||
@@ -1611,7 +1659,7 @@ bool XeFG_Dx12::SetResource(Dx12Resource* inputResource)
         if (type != FG_ResourceType::UIColor ||
             (XeFGProxy::SetUiCompositionState() != nullptr || Config::Instance()->FGDrawUIOverFG.value_or_default()))
         {
-            auto frameId = static_cast<uint32_t>(_frameCount - indexDiff);
+            auto frameId = FrameIdFor(_frameCount - indexDiff);
             auto result =
                 XeFGProxy::D3D12TagFrameResource()(_swapChainContext, fResource->cmdList, frameId, &resourceParam);
             LOG_DEBUG("D3D12TagFrameResource, frameId: {}, type: {} result: {} ({})", frameId,

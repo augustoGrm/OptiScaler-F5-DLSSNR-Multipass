@@ -51,6 +51,9 @@ std::atomic<double> g_frameGenerationPresentAt = 0.0; // last PresentSource::Fra
 std::atomic<Decision> g_decision = Decision::NoF5Low;
 std::atomic<CapOwner> g_capOwner = CapOwner::NotOurs; // PlanCap's answer on the last present we ran on
 std::atomic<bool> g_xellIdle = false;                 // XellIdle on the last present we ran on
+// XeLL and XeFG share one frame ID (NativeLowLatencyRule.h NextFrameGenerationId): the ID of our frame in flight while
+// XeFG runs on our XeLL (0: not)
+std::atomic<uint32_t> g_xellFrameIdForFrameGeneration = 0;
 
 // Only the game's present thread touches these.
 Table g_table = Table::Unknown;
@@ -295,6 +298,7 @@ Decision Evaluate(Api api, IUnknown* device)
 void Stop(Api api, IUnknown* device)
 {
     g_running = false;
+    g_xellFrameIdForFrameGeneration = 0;
     g_capOwner = CapOwner::NotOurs;
     g_xellIdle = false;
     g_sent.reset();
@@ -520,7 +524,9 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     else
         ReflexHooks::ownSleep(device);
 
+    // XeFG takes this ID for the frame it tags next (FrameIdForFrameGeneration)
     ++g_frameId;
+    g_xellFrameIdForFrameGeneration = method == Method::XellWithXefg ? (uint32_t) g_frameId : 0;
     g_submitSent = false;
     g_running = true;
     Marker(api, device, SIMULATION_START);
@@ -624,6 +630,19 @@ bool OwnsFrameCap()
 bool Running()
 {
     return g_decision.load(std::memory_order_relaxed) == Decision::Run && g_running.load(std::memory_order_relaxed);
+}
+
+uint32_t FrameIdForFrameGeneration()
+{
+    if (const auto ours = g_xellFrameIdForFrameGeneration.load(); ours != 0 && Running())
+        return ours;
+
+    // The game's own Reflex reaches XeLL through fakenvapi with its IDs: the frame being rendered is the one whose
+    // render submit started last (its simulation may already be a frame ahead)
+    if (ReflexHooks::gameCalledReflex() && ReflexHooks::gameIsSendingMarkers())
+        return (uint32_t) ReflexHooks::lastMarkerFrameId(RENDERSUBMIT_START);
+
+    return 0;
 }
 
 bool WantsBoostForFrameGeneration()

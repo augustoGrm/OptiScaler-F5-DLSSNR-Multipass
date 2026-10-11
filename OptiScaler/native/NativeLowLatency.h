@@ -68,6 +68,10 @@ bool Running();
 // (misc/FrameLimit) must not wait as well. Any thread, one relaxed load.
 bool OwnsFrameCap();
 
+// XeLL's frame ID of the frame being rendered, for XeFG to tag and present it with (Intel: one ID for both). Ours while
+// XeFG runs on our XeLL, the game's when its own Reflex feeds XeLL, else 0 (XeFG numbers frames itself). Any thread.
+uint32_t FrameIdForFrameGeneration();
+
 // DLSS frame generation runs Reflex itself through Streamline (Decision::FrameGenerationOwnsReflex) and the player
 // asked for Boost: framegen/dlssg sets Streamline's Reflex mode with Boost.
 bool WantsBoostForFrameGeneration();
