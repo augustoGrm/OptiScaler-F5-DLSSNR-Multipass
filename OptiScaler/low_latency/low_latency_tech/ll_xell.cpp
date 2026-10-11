@@ -11,7 +11,18 @@ void XeLL::xell_sleep(uint32_t frame_id)
     sent_sleep_frame_ids[frame_id % 64] = true;
 
     // Don't call XeLL when trying to disable XeLL with XeFG active
-    if (!forced_mode || is_enabled())
+    const bool sleeps = !forced_mode || is_enabled();
+
+    // Its frame cap waits in these sleeps: say when they stop or start
+    static int lastSleeps = -1;
+    if (lastSleeps != (int) sleeps)
+    {
+        lastSleeps = sleeps;
+        LOG_INFO("XeLL sleeps {} (low latency {} with XeFG)", sleeps ? "run" : "are skipped",
+                 is_enabled() ? "on" : "off");
+    }
+
+    if (sleeps)
     {
         LOG_TRACE_LOWLATENCY("Sleeping with frame_id: {}", frame_id);
         o_xellSleep(xell_context, frame_id);
@@ -152,6 +163,10 @@ void XeLL::set_sleep_mode(SleepMode* sleep_mode)
         native::lowlatency::WaitForGameQueueIdle();
 
         auto result = o_xellSetSleepMode(xell_context, &xell_sleep_params) == XELL_RESULT_SUCCESS;
+
+        LOG_INFO("XeLL sleep mode: low latency {}, interval {} us, boost {}{}", xell_sleep_params.bLowLatencyMode != 0,
+                 (uint32_t) xell_sleep_params.minimumIntervalUs, xell_sleep_params.bLowLatencyBoost != 0,
+                 result ? "" : ", refused");
 
         last_bLowLatencyMode = xell_sleep_params.bLowLatencyMode;
         last_minimumIntervalUs = xell_sleep_params.minimumIntervalUs;

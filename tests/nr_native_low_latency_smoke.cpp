@@ -635,10 +635,11 @@ int main()
         CHECK(split.xell.lowLatency && split.xell.minimumIntervalUs == 8333);
         CHECK(!split.driver.lowLatency && split.driver.minimumIntervalUs == 0);
 
-        // Reflex off in the game's menu: XeLL still gets the cap
+        // Reflex off in the game's menu: XeLL still runs (its sleeps carry the cap) and gets the cap
         SleepMode off;
         split = SplitSleepMode(off, 8333);
-        CHECK(!split.xell.lowLatency && split.xell.minimumIntervalUs == 8333);
+        CHECK(split.xell.lowLatency && split.xell.minimumIntervalUs == 8333);
+        CHECK(!split.driver.lowLatency && split.driver.minimumIntervalUs == 0);
 
         // The menu: the game's Reflex stands us aside either way, and the text says where it goes
         CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex), "Please use the Game's Own Reflex Settings") == 0);
