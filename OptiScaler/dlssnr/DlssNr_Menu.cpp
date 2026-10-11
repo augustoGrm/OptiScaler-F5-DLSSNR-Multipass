@@ -1509,8 +1509,10 @@ static void RenderLowLatencySection(Config* config)
     const auto status = native::lowlatency::GetStatus();
 
     // Run with no path yet: the first frame, before the first Reflex call went out
-    const char* reason = status.decision == Decision::Run ? (status.path[0] != '\0' ? status.path : "Starting")
-                                                          : native::lowlatency::DecisionText(status.decision, status.gameReflexFeedsXell);
+    const char* reason = status.decision == Decision::Run
+                             ? (status.path[0] != '\0' ? status.path : "Starting")
+                             : native::lowlatency::DecisionText(status.decision, status.gameReflexFeedsXell,
+                                                                status.forceReflexDisabled);
 
     ImGui::TextWrapped("Status: [%s]: %s", native::lowlatency::StatusLabel(status.decision), reason);
 
@@ -1518,7 +1520,7 @@ static void RenderLowLatencySection(Config* config)
     {
         // Through fakenvapi there are no GPU times: the frame's simulation start to its present's end
         if (status.latencyEstimated)
-            ImGui::Text("Simulation to present: %.1f ms", status.latencyMs);
+            ImGui::Text("Simulation to present (estimated from frame markers): %.1f ms", status.latencyMs);
         else
             ImGui::Text("Measured latency: %.1f ms", status.latencyMs);
     }

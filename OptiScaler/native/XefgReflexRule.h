@@ -1,14 +1,15 @@
 #pragma once
 
-// A Vulkan game on the present bridge (native/VkPresentBridge.h) runs XeFG and its XeLL on the bridge's private D3D12
-// device, while the game's own Reflex calls (NvAPI_Vulkan_*, VK_NV_low_latency2) go to the driver. The same calls on
-// D3D12 are sent to XeLL by hooks/Reflex_Hooks.cpp when XeFG is the output; these are the rules for doing it for the
-// bridged Vulkan game, and the sleep mode rule both share (SleepModeForOutput). No Windows, no Vulkan, no GPU: a host
-// test can include it.
+// A game's own Reflex while XeFG is the frame generation output: hooks/Reflex_Hooks.cpp sends its calls to XeFG's XeLL
+// (fakenvapi's), on D3D through the D3D hooks and for a Vulkan game on the present bridge (native/VkPresentBridge.h) on
+// the bridge's private D3D12 device, where the game's NvAPI_Vulkan_* and VK_NV_low_latency2 calls would otherwise only
+// reach the driver. These are the rules for both. No Windows, no Vulkan, no GPU: a host test can include it.
+
+#include "NativeLowLatencyRule.h"
 
 #include <cstdint>
 
-namespace native::bridgedreflex
+namespace native::xefgreflex
 {
 // The game's Vulkan Reflex calls feed XeFG's XeLL on the bridge's D3D12 device. XeFG has to be the output and the
 // bridge's device has to be up. Never for a game on dxvk without the Vulkan bridge: its Reflex is not Vulkan Reflex
@@ -50,12 +51,6 @@ struct SleepMode
     bool useMarkersToOptimize = false;
 };
 
-struct SleepModeSplit
-{
-    SleepMode xell;   // what XeLL gets
-    SleepMode driver; // what the driver gets
-};
-
 // The sleep mode the game's Reflex output gets. OptiScaler's frame cap replaces the game's interval when one is set.
 // While XeFG is the output (its XeLL, D3D or the bridge), low latency is on whatever the game's own Reflex setting
 // says: XeFG always uses XeLL, fakenvapi's XeLL skips every sleep and marker while the mode it was given is off, and
@@ -74,21 +69,20 @@ inline SleepMode SleepModeForOutput(const SleepMode& game, uint32_t capIntervalU
     return out;
 }
 
-// Whether XeFG's XeLL can keep the frame cap the game's Reflex hands it. On NVIDIA and AMD XeLL does nothing while XeFG
-// generates no frames (paused, off, real exclusive full screen; Intel: "XeLL will not perform latency reduction"), so
-// OptiScaler's limiter keeps it then, as it does under fakenvapi's Force Disable.
+// A bridged game's driver while XeLL takes its sleep mode: everything off, the interval too. Only one of the two may
+// wait, and the driver's Sleep must still return and signal the game's semaphore.
+inline constexpr SleepMode kDriverSleepMode {};
+
+// Whether XeFG's XeLL keeps the frame cap the game's Reflex hands it: while it is not idle (NativeLowLatencyRule.h
+// XellIdle: on NVIDIA and AMD it does nothing while XeFG generates no frames) and not turned off with fakenvapi's
+// Force Disable. OptiScaler's limiter keeps it otherwise.
 inline bool XellHoldsCap(bool forceDisabled, bool intelGpu, bool xefgGenerating)
 {
-    return !forceDisabled && (intelGpu || xefgGenerating);
+    lowlatency::CapInputs in;
+    in.method = lowlatency::Method::XellWithXefg;
+    in.intelGpu = intelGpu;
+    in.xefgGenerating = xefgGenerating;
+    return !forceDisabled && !lowlatency::XellIdle(in);
 }
 
-// A bridged game: XeLL gets SleepModeForOutput, the driver the mode with everything off, including the interval: only
-// one of the two may wait, and the driver's Sleep must still return and signal the game's semaphore.
-inline SleepModeSplit SplitSleepMode(const SleepMode& game, uint32_t capIntervalUs, bool forceDisabled = false)
-{
-    SleepModeSplit split;
-    split.xell = SleepModeForOutput(game, capIntervalUs, true, forceDisabled);
-    return split;
-}
-
-} // namespace native::bridgedreflex
+} // namespace native::xefgreflex

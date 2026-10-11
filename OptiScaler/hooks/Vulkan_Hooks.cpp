@@ -85,7 +85,7 @@ static VkResult hkvkReleaseFullScreenExclusiveModeEXT(VkDevice device, VkSwapcha
 
 // A Vulkan game's own Reflex, through VK_NV_low_latency2: Optical F5Low's low latency stands aside once it is called
 // (native/NativeLowLatency.h), and on the present bridge with XeFG the calls feed XeFG's XeLL (ReflexHooks forwarding,
-// native/BridgedReflexRule.h). Our own low latency goes through the NvAPI_Vulkan_* interface and never calls these.
+// native/XefgReflexRule.h). Our own low latency goes through the NvAPI_Vulkan_* interface and never calls these.
 static PFN_vkSetLatencySleepModeNV o_vkSetLatencySleepModeNV = nullptr;
 static PFN_vkLatencySleepNV o_vkLatencySleepNV = nullptr;
 static PFN_vkSetLatencyMarkerNV o_vkSetLatencyMarkerNV = nullptr;
@@ -94,15 +94,13 @@ static PFN_vkSetLatencyMarkerNV o_vkSetLatencyMarkerNV = nullptr;
 // D3D12 device instead of the driver, as the NvAPI_Vulkan_* ones do. The driver gets the sleep mode with low latency
 // off. No game was available to run this through.
 static std::mutex g_ll2Mutex;
-static VkDevice g_ll2Device = VK_NULL_HANDLE;
-static VkSwapchainKHR g_ll2Swapchain = VK_NULL_HANDLE;
 static bool g_ll2HaveMode = false;
 static VkLatencySleepModeInfoNV g_ll2Mode {};
 static bool g_ll2Forwarding = false;
 
-static native::bridgedreflex::SleepMode Ll2SleepMode(const VkLatencySleepModeInfoNV* info)
+static native::xefgreflex::SleepMode Ll2SleepMode(const VkLatencySleepModeInfoNV* info)
 {
-    native::bridgedreflex::SleepMode mode;
+    native::xefgreflex::SleepMode mode;
 
     if (info != nullptr)
     {
@@ -125,19 +123,22 @@ static VkResult Ll2ForwardSleepMode(ID3D12Device* xellDevice, VkDevice device, V
     if (info == nullptr)
         return o_vkSetLatencySleepModeNV(device, swapchain, nullptr);
 
-    const auto split = native::bridgedreflex::SplitSleepMode(mode, 0);
+    constexpr auto off = native::xefgreflex::kDriverSleepMode;
     VkLatencySleepModeInfoNV driver = *info;
-    driver.lowLatencyMode = split.driver.lowLatency ? VK_TRUE : VK_FALSE;
-    driver.lowLatencyBoost = split.driver.boost ? VK_TRUE : VK_FALSE;
-    driver.minimumIntervalUs = split.driver.minimumIntervalUs;
+    driver.lowLatencyMode = off.lowLatency ? VK_TRUE : VK_FALSE;
+    driver.lowLatencyBoost = off.boost ? VK_TRUE : VK_FALSE;
+    driver.minimumIntervalUs = off.minimumIntervalUs;
     return o_vkSetLatencySleepModeNV(device, swapchain, &driver);
 }
 
-// The device the game's calls go to XeLL on, else null. The first call after a change of owner gives the game's last mode to
-// the new one.
-static ID3D12Device* Ll2XellDevice()
+// The device the game's calls go to XeLL on, else null. The first call after a change of owner gives the game's last
+// mode to the new one, on this call's device and swapchain (the one the mode was set on may be gone). The driver gets
+// it back as the game set it: OptiScaler's cap stays with its own limiter then (ReflexHooks::update has no
+// VK_NV_low_latency2 owner to give it to).
+static ID3D12Device* Ll2XellDevice(VkDevice device, VkSwapchainKHR swapchain)
 {
     auto* xellDevice = ReflexHooks::bridgedXellDevice();
+    ReflexHooks::noteBridgedForwarding(xellDevice != nullptr);
 
     std::lock_guard lock(g_ll2Mutex);
 
@@ -145,21 +146,12 @@ static ID3D12Device* Ll2XellDevice()
     {
         g_ll2Forwarding = xellDevice != nullptr;
 
-        if (g_ll2HaveMode)
+        if (g_ll2HaveMode && swapchain != VK_NULL_HANDLE)
         {
             if (xellDevice != nullptr)
-            {
-                Ll2ForwardSleepMode(xellDevice, g_ll2Device, g_ll2Swapchain, &g_ll2Mode);
-            }
+                Ll2ForwardSleepMode(xellDevice, device, swapchain, &g_ll2Mode);
             else
-            {
-                auto mode = g_ll2Mode;
-
-                if (const auto cap = ReflexHooks::frameCapIntervalUs(); cap != 0)
-                    mode.minimumIntervalUs = cap;
-
-                o_vkSetLatencySleepModeNV(g_ll2Device, g_ll2Swapchain, &mode);
-            }
+                o_vkSetLatencySleepModeNV(device, swapchain, &g_ll2Mode);
         }
     }
 
@@ -172,12 +164,10 @@ static VkResult VKAPI_CALL hkvkSetLatencySleepModeNV(VkDevice device, VkSwapchai
     ReflexHooks::noteGameVulkanLowLatency2(true);
 
     // Asked before the new mode is stored: a change of owner hands the previous mode over first
-    auto* xellDevice = Ll2XellDevice();
+    auto* xellDevice = Ll2XellDevice(device, swapchain);
 
     {
         std::lock_guard lock(g_ll2Mutex);
-        g_ll2Device = device;
-        g_ll2Swapchain = swapchain;
         g_ll2HaveMode = pSleepModeInfo != nullptr;
 
         if (pSleepModeInfo != nullptr)
@@ -198,7 +188,7 @@ static VkResult VKAPI_CALL hkvkLatencySleepNV(VkDevice device, VkSwapchainKHR sw
 {
     ReflexHooks::noteGameVulkanLowLatency2(false);
 
-    if (auto* xellDevice = Ll2XellDevice(); xellDevice != nullptr && pSleepInfo != nullptr)
+    if (auto* xellDevice = Ll2XellDevice(device, swapchain); xellDevice != nullptr && pSleepInfo != nullptr)
     {
         ReflexHooks::xellSleep(xellDevice);
 
@@ -216,12 +206,12 @@ static void VKAPI_CALL hkvkSetLatencyMarkerNV(VkDevice device, VkSwapchainKHR sw
 {
     ReflexHooks::noteGameVulkanLowLatency2(false);
 
-    if (auto* xellDevice = Ll2XellDevice(); xellDevice != nullptr && pLatencyMarkerInfo != nullptr)
+    if (auto* xellDevice = Ll2XellDevice(device, swapchain); xellDevice != nullptr && pLatencyMarkerInfo != nullptr)
     {
         // Vulkan has no PC_LATENCY_PING: the out of band markers sit one place higher in NVAPI's list
         uint32_t nvapiMarker = 0;
 
-        if (native::bridgedreflex::NvApiMarkerFromVulkanNV((uint32_t) pLatencyMarkerInfo->marker, &nvapiMarker))
+        if (native::xefgreflex::NvApiMarkerFromVulkanNV((uint32_t) pLatencyMarkerInfo->marker, &nvapiMarker))
             ReflexHooks::xellMarker(xellDevice, pLatencyMarkerInfo->presentID, nvapiMarker);
     }
 
@@ -318,19 +308,31 @@ bool VulkanHooks::WaitTimelineSemaphore(VkDevice device, VkSemaphore semaphore, 
 
 bool VulkanHooks::SignalTimelineSemaphore(VkDevice device, VkSemaphore semaphore, uint64_t value)
 {
-    static PFN_vkSignalSemaphore signal = nullptr;
-    static VkDevice signalDevice = VK_NULL_HANDLE;
+    // The function and the device it was looked up on go together (any thread)
+    static std::mutex cacheMutex;
+    static PFN_vkSignalSemaphore cachedSignal = nullptr;
+    static VkDevice cachedDevice = VK_NULL_HANDLE;
 
-    if (signal == nullptr || signalDevice != device)
+    PFN_vkSignalSemaphore signal = nullptr;
     {
-        signal = o_vkGetDeviceProcAddr != nullptr
-                     ? reinterpret_cast<PFN_vkSignalSemaphore>(o_vkGetDeviceProcAddr(device, "vkSignalSemaphore"))
-                     : nullptr;
+        std::lock_guard lock(cacheMutex);
 
-        if (signal == nullptr && o_vkGetDeviceProcAddr != nullptr)
-            signal = reinterpret_cast<PFN_vkSignalSemaphore>(o_vkGetDeviceProcAddr(device, "vkSignalSemaphoreKHR"));
+        if (cachedSignal == nullptr || cachedDevice != device)
+        {
+            cachedSignal = o_vkGetDeviceProcAddr != nullptr ? reinterpret_cast<PFN_vkSignalSemaphore>(
+                                                                  o_vkGetDeviceProcAddr(device, "vkSignalSemaphore"))
+                                                            : nullptr;
 
-        signalDevice = device;
+            if (cachedSignal == nullptr && o_vkGetDeviceProcAddr != nullptr)
+            {
+                cachedSignal =
+                    reinterpret_cast<PFN_vkSignalSemaphore>(o_vkGetDeviceProcAddr(device, "vkSignalSemaphoreKHR"));
+            }
+
+            cachedDevice = device;
+        }
+
+        signal = cachedSignal;
     }
 
     if (signal == nullptr || semaphore == VK_NULL_HANDLE)

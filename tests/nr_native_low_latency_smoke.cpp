@@ -1,6 +1,7 @@
-// Host check of native/NativeLowLatencyRule.h: when Optical F5Low's own low latency runs and stands aside. No GPU, no
-// game. cl /std:c++20 /EHsc /W4 tests/nr_native_low_latency_smoke.cpp
-#include "../OptiScaler/native/BridgedReflexRule.h"
+// Host check of native/NativeLowLatencyRule.h (when Optical F5Low's own low latency runs and stands aside) and
+// native/XefgReflexRule.h (a game's own Reflex with XeFG). No GPU, no game.
+// cl /std:c++20 /EHsc /W4 /Iexternal\vulkan\include tests/nr_native_low_latency_smoke.cpp
+#include "../OptiScaler/native/XefgReflexRule.h"
 #include "../OptiScaler/native/NativeLowLatencyRule.h"
 #include "../OptiScaler/native/NativeLowLatencyVkSync.h"
 #include "../OptiScaler/framegen/xefg/XeFGFrameId.h"
@@ -583,9 +584,9 @@ int main()
         CHECK(history.Contains(xefg::FrameIdHistory::kSize + 1));
     }
 
-    // A bridged Vulkan game's own Reflex feeding XeFG's XeLL (native/BridgedReflexRule.h)
+    // A bridged Vulkan game's own Reflex feeding XeFG's XeLL (native/XefgReflexRule.h)
     {
-        using namespace native::bridgedreflex;
+        using namespace native::xefgreflex;
 
         // XeFG output and the bridge's device; never dxvk without the Vulkan bridge
         CHECK(ShouldForward(true, true, false));
@@ -618,26 +619,23 @@ int main()
             CHECK(XellTakesMarker(marker) == (marker <= 5));
         }
 
-        // The sleep mode: XeLL keeps the game's values (the cap replaces the interval when one is set), the driver's is off
+        // The sleep mode: XeLL keeps the game's values (the cap replaces the interval when one is set), the driver's is
+        // all off, the interval too (only one of the two may wait)
         SleepMode game;
         game.lowLatency = true;
         game.boost = true;
         game.minimumIntervalUs = 16667;
         game.useMarkersToOptimize = true;
 
-        auto split = SplitSleepMode(game, 0);
-        CHECK(split.xell.lowLatency && split.xell.boost && split.xell.minimumIntervalUs == 16667);
-        CHECK(split.xell.useMarkersToOptimize);
-        CHECK(!split.driver.lowLatency && !split.driver.boost && split.driver.minimumIntervalUs == 0);
-        CHECK(!split.driver.useMarkersToOptimize);
-
-        split = SplitSleepMode(game, 8333);
-        CHECK(split.xell.lowLatency && split.xell.minimumIntervalUs == 8333);
-        CHECK(!split.driver.lowLatency && split.driver.minimumIntervalUs == 0);
+        auto xell = SleepModeForOutput(game, 0, true, false);
+        CHECK(xell.lowLatency && xell.boost && xell.minimumIntervalUs == 16667 && xell.useMarkersToOptimize);
+        xell = SleepModeForOutput(game, 8333, true, false);
+        CHECK(xell.lowLatency && xell.minimumIntervalUs == 8333);
+        CHECK(!kDriverSleepMode.lowLatency && !kDriverSleepMode.boost && kDriverSleepMode.minimumIntervalUs == 0);
+        CHECK(!kDriverSleepMode.useMarkersToOptimize);
 
         // The rule the D3D hooks share: XeFG is the output -> low latency on whatever the game says, the cap in place
         // of the game's interval; only fakenvapi's Force Disable turns it off; no XeFG -> the game's mode as it is
-        using native::bridgedreflex::SleepModeForOutput;
         SleepMode gameOff;
         gameOff.minimumIntervalUs = 16667;
         auto out = SleepModeForOutput(gameOff, 0, true, false);
@@ -652,24 +650,28 @@ int main()
         gameOn.lowLatency = gameOn.boost = true;
         out = SleepModeForOutput(gameOn, 0, false, true);
         CHECK(out.lowLatency && out.boost); // Force Disable is fakenvapi's own business without XeFG
-        CHECK(!SplitSleepMode(gameOff, 0, true).xell.lowLatency);
 
         // Who keeps the cap the game's Reflex hands XeLL: XeLL while it can, OptiScaler's limiter otherwise
-        using native::bridgedreflex::XellHoldsCap;
         CHECK(XellHoldsCap(false, false, true));   // NVIDIA/AMD, XeFG generating
         CHECK(!XellHoldsCap(false, false, false)); // NVIDIA/AMD, XeFG paused or off: XeLL idle
         CHECK(XellHoldsCap(false, true, false));   // Intel: XeLL works on its own
+        CHECK(XellHoldsCap(false, true, true));
         CHECK(!XellHoldsCap(true, true, true));    // Force Disable
+        CHECK(!XellHoldsCap(true, false, true));   // Force Disable on NVIDIA/AMD while XeFG generates
+        CHECK(!XellHoldsCap(true, true, false));
 
         // Reflex off in the game's menu: XeLL still runs (its sleeps carry the cap) and gets the cap
         SleepMode off;
-        split = SplitSleepMode(off, 8333);
-        CHECK(split.xell.lowLatency && split.xell.minimumIntervalUs == 8333);
-        CHECK(!split.driver.lowLatency && split.driver.minimumIntervalUs == 0);
+        xell = SleepModeForOutput(off, 8333, true, false);
+        CHECK(xell.lowLatency && xell.minimumIntervalUs == 8333);
 
         // The menu: the game's Reflex stands us aside either way, and the text says where it goes
         CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex), "Use the game's own Reflex settings") == 0);
         CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, true), "The game's Reflex feeds XeFG's XeLL") == 0);
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, true, true),
+                          "The game's Reflex feeds XeFG's XeLL, low latency off by Force Disable") == 0);
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, false, true), "Use the game's own Reflex settings") ==
+              0);
         CHECK(std::strcmp(DecisionText(Decision::SettingOff, true), DecisionText(Decision::SettingOff)) == 0);
         CHECK(std::strcmp(StatusLabel(Decision::GameRunsReflex), "Standing aside") == 0);
 

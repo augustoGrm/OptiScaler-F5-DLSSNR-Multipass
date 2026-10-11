@@ -71,7 +71,8 @@ bool IsUp();
 // longer points at the bridge's queue). Lock-free: XeFG's present thread asks while the teardown waits for that thread.
 bool OutputActive();
 
-// The bridge's private D3D12 device while its output is up, else null. Not a reference: it lives as long as the bridge.
+// The bridge's private D3D12 device while its output is up, else null (from the start of its teardown on). Lock-free,
+// any thread. Not a reference: it lives as long as the bridge.
 ID3D12Device* Device();
 
 // The frame source has processed this present: puts the shared picture into the D3D12 swapchain's back buffer. `picture`

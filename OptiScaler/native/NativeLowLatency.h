@@ -58,8 +58,9 @@ struct Status
     CapOwner capOwner = CapOwner::NotOurs;
     bool xellIdle = false; // XeLL on an NVIDIA/AMD GPU with no XeFG generating frames: it does nothing
     bool forXefgOnly = false; // runs for XeFG's XeLL alone (Auto, no Optical F5Low mode)
-    // The game's own Reflex calls are sent to XeFG's XeLL (bridged Vulkan game): DecisionText says so
+    // The game's own Reflex calls are sent to XeFG's XeLL (ReflexHooks::gameReflexFeedsXell): DecisionText says so
     bool gameReflexFeedsXell = false;
+    bool forceReflexDisabled = false; // fakenvapi's Force Disable: XeLL gets the game's calls with low latency off
 };
 
 // The menu's line. Cheap; GetLatency is asked at most twice a second.
@@ -79,6 +80,10 @@ uint32_t FrameIdForFrameGeneration();
 // DLSS frame generation runs Reflex itself through Streamline (Decision::FrameGenerationOwnsReflex) and the player
 // asked for Boost: framegen/dlssg sets Streamline's Reflex mode with Boost.
 bool WantsBoostForFrameGeneration();
+
+// XeFG is the output and generates frames: active, not paused, not in real exclusive full screen (Intel: it passes
+// frames through there). Whether XeLL does anything on NVIDIA and AMD (NativeLowLatencyRule.h XellIdle). Any thread.
+bool XefgGenerating();
 
 // Intel's XeLL guide: all GPU work finished before xellSetSleepMode (R11). Drains the game's D3D12 queue (frame
 // generation's game queue, else the current one; the bridges' D3D12 queue for D3D11 and Vulkan games), 250 ms at most.

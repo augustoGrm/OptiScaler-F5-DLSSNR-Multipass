@@ -13,12 +13,12 @@ void XeLL::xell_sleep(uint32_t frame_id)
     // Don't call XeLL when trying to disable XeLL with XeFG active
     const bool sleeps = !forced_mode || is_enabled();
 
-    // Its frame cap waits in these sleeps: say when they stop or start
+    // With XeFG its frame cap waits in these sleeps: say when they stop or start
     static int lastSleeps = -1;
-    if (lastSleeps != (int) sleeps)
+    if (forced_mode && lastSleeps != (int) sleeps)
     {
         lastSleeps = sleeps;
-        LOG_INFO("XeLL sleeps {} (low latency {} with XeFG)", sleeps ? "run" : "are skipped",
+        LOG_INFO("XeLL sleeps {} with XeFG (low latency {})", sleeps ? "run" : "are skipped",
                  is_enabled() ? "on" : "off");
     }
 
@@ -149,6 +149,18 @@ void XeLL::set_sleep_mode(SleepMode* sleep_mode)
     static uint32_t last_bLowLatencyMode = 0;
     static uint32_t last_minimumIntervalUs = 0;
     static uint32_t last_bLowLatencyBoost = 0;
+    static int last_enabled = -1;
+
+    // With XeFG, XeLL itself is always told low latency on; whether its sleeps and markers run is the low latency asked
+    // for (is_enabled: fakenvapi's Force Reflex, else the caller's mode). Said whenever either changes.
+    const auto enabledText = [this]() -> const char*
+    {
+        if (!forced_mode)
+            return "";
+
+        return is_enabled() ? ", with XeFG: sleeps and markers run"
+                            : ", with XeFG: low latency off, sleeps and markers skipped";
+    };
 
     // With ForceXeLL we have FG enabled but not actually working
     // but their FPS limit thinks that the FG is working
@@ -164,13 +176,19 @@ void XeLL::set_sleep_mode(SleepMode* sleep_mode)
 
         auto result = o_xellSetSleepMode(xell_context, &xell_sleep_params) == XELL_RESULT_SUCCESS;
 
-        LOG_INFO("XeLL sleep mode: low latency {}, interval {} us, boost {}{}", xell_sleep_params.bLowLatencyMode != 0,
-                 (uint32_t) xell_sleep_params.minimumIntervalUs, xell_sleep_params.bLowLatencyBoost != 0,
-                 result ? "" : ", refused");
+        LOG_INFO("XeLL sleep mode: low latency {}, interval {} us, boost {}{}{}",
+                 xell_sleep_params.bLowLatencyMode != 0, (uint32_t) xell_sleep_params.minimumIntervalUs,
+                 xell_sleep_params.bLowLatencyBoost != 0, result ? "" : ", refused", enabledText());
 
         last_bLowLatencyMode = xell_sleep_params.bLowLatencyMode;
         last_minimumIntervalUs = xell_sleep_params.minimumIntervalUs;
         last_bLowLatencyBoost = xell_sleep_params.bLowLatencyBoost;
+        last_enabled = is_enabled();
+    }
+    else if (forced_mode && last_enabled != (int) is_enabled())
+    {
+        LOG_INFO("XeLL sleep mode unchanged{}", enabledText());
+        last_enabled = is_enabled();
     }
 }
 

@@ -252,6 +252,11 @@ void VulkanSleep(VkDevice device)
     }
 }
 
+bool ForceReflexDisabled()
+{
+    return Config::Instance()->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable;
+}
+
 Inputs GatherInputs(bool deviceAvailable)
 {
     auto config = Config::Instance();
@@ -270,7 +275,7 @@ Inputs GatherInputs(bool deviceAvailable)
 
     in.gameCallsReflex = ReflexHooks::gameCalledReflex();
     in.gameRunsXell = XellHooks::canLimit();
-    in.forceReflexDisabled = config->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable;
+    in.forceReflexDisabled = ForceReflexDisabled();
     in.forceXell = config->ForceXeLL.value_or_default() || state.activeFgInput == FGInput::ForceXeLL;
     in.otherFrameGenerationOwner = state.externalFrameGeneration || state.activeFgOutput == FGOutput::DLSSG;
     in.apiAvailable = g_table != Table::Missing;
@@ -373,9 +378,7 @@ CapInputs FrameCapInputs(Api api)
     in.capFps = Config::Instance()->FramerateLimit.value_or_default();
     in.method = CurrentMethod(api);
     in.fsrFgActive = state.activeFgOutput == FGOutput::FSRFG && fgGenerating;
-    // XeFG passes frames through in exclusive full screen (Intel); realExclusiveFullscreen is set after
-    // FGXeFGForceBorderless had its say, so it means the real thing
-    in.xefgGenerating = state.activeFgOutput == FGOutput::XeFG && fgGenerating && !state.realExclusiveFullscreen;
+    in.xefgGenerating = XefgGenerating();
     in.fakenvapiXell = in.method == Method::Fakenvapi && fakenvapi::getCurrentMode() == LowLatencyMode::XeLL;
 
     // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
@@ -454,16 +457,16 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
 
     if (decision != Decision::Run)
     {
+        const auto reason = [decision]()
+        { return DecisionText(decision, ReflexHooks::gameReflexFeedsXell(), ForceReflexDisabled()); };
+
         // Once whenever it changes (a running one logs its stop below)
         if (decision != previousDecision && !g_running.load(std::memory_order_relaxed))
-        {
-            LOG_INFO("{}: not running ({})", LogName(),
-                     DecisionText(decision, ReflexHooks::bridgedReflexForwarding()));
-        }
+            LOG_INFO("{}: not running ({})", LogName(), reason());
 
         if (g_running.load(std::memory_order_relaxed))
         {
-            LOG_INFO("{}: stopped ({})", LogName(), DecisionText(decision, ReflexHooks::bridgedReflexForwarding()));
+            LOG_INFO("{}: stopped ({})", LogName(), reason());
 
             // XeLL's frame IDs go on from the game's own now, which can be below ours (Intel: they rise)
             if (decision == Decision::GameRunsReflex && g_xellFrameIdForFrameGeneration.load() != 0)
@@ -677,6 +680,17 @@ bool WantsBoostForFrameGeneration()
            Config::Instance()->DlssNrNativeLowLatencyBoost.value_or_default();
 }
 
+bool XefgGenerating()
+{
+    auto& state = State::Instance();
+    const bool fgGenerating =
+        state.currentFG != nullptr && state.currentFG->IsActive() && !state.currentFG->IsPaused();
+
+    // XeFG passes frames through in exclusive full screen (Intel); realExclusiveFullscreen is set after
+    // FGXeFGForceBorderless had its say, so it means the real thing
+    return state.activeFgOutput == FGOutput::XeFG && fgGenerating && !state.realExclusiveFullscreen;
+}
+
 void WaitForGameQueueIdle()
 {
     static std::mutex mutex;
@@ -721,9 +735,8 @@ Status GetStatus()
 {
     Status status;
     status.decision = g_decision.load();
-    // The bridge forwards a Vulkan game's Reflex; a D3D game's goes to XeFG's XeLL through the D3D hooks
-    status.gameReflexFeedsXell = ReflexHooks::bridgedReflexForwarding() ||
-                                 (State::Instance().activeFgOutput == FGOutput::XeFG && ReflexHooks::gameCalledReflex());
+    status.gameReflexFeedsXell = ReflexHooks::gameReflexFeedsXell();
+    status.forceReflexDisabled = ForceReflexDisabled();
 
     if (status.decision != Decision::Run || !g_running.load(std::memory_order_relaxed))
         return status;
