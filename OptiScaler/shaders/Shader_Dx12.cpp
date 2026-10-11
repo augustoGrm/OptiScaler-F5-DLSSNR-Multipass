@@ -201,8 +201,27 @@ void Shader_Dx12::CreateShaderResourceView(ID3D12Device* device, ID3D12Resource*
     const auto viewFormat = (format != DXGI_FORMAT_UNKNOWN) ? format : desc.Format;
     // NR's copied depth guide already has the depth-plane SRV format. The shared
     // translator maps it back to a DSV format, which removes the device on SRV creation.
-    srvDesc.Format = viewFormat == DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS
-                         ? viewFormat : TranslateTypelessFormats(viewFormat);
+    // A typed depth buffer the game hands over as it is (NR's guides, read by its own shaders when Compress
+    // screen edges packs them) is viewed through its depth plane: a depth-stencil format in a view removes the
+    // device too (DXGI_ERROR_INVALID_CALL on the first packed frame).
+    switch (viewFormat)
+    {
+    case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
+        srvDesc.Format = viewFormat;
+        break;
+    case DXGI_FORMAT_D32_FLOAT:
+        srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+        break;
+    case DXGI_FORMAT_D24_UNORM_S8_UINT:
+        srvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+        break;
+    case DXGI_FORMAT_D16_UNORM:
+        srvDesc.Format = DXGI_FORMAT_R16_UNORM;
+        break;
+    default:
+        srvDesc.Format = TranslateTypelessFormats(viewFormat);
+        break;
+    }
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
     const UINT mipLevels = (desc.MipLevels) ? static_cast<UINT>(desc.MipLevels) : static_cast<UINT>(-1);

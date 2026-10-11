@@ -2918,23 +2918,35 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         unsigned int guideH;
         unsigned int frameW;
         unsigned int frameH;
+        DXGI_FORMAT depthFormat;
+        DXGI_FORMAT motionFormat;
     };
 
     static GuideReport loggedGuides {};
 
-    const GuideReport guidesNow { true,       g_nr.guideDepthInverted, g_nr.guideMvScaleX,
-                                  g_nr.guideMvScaleY, guideWidth,      guideHeight,
-                                  width,      (unsigned int) height };
+    const GuideReport guidesNow { true,
+                                  g_nr.guideDepthInverted,
+                                  g_nr.guideMvScaleX,
+                                  g_nr.guideMvScaleY,
+                                  guideWidth,
+                                  guideHeight,
+                                  width,
+                                  (unsigned int) height,
+                                  depth != nullptr ? guideDesc.Format : DXGI_FORMAT_UNKNOWN,
+                                  motionDesc.Format };
 
     if (!loggedGuides.valid || loggedGuides.depthInverted != guidesNow.depthInverted ||
         loggedGuides.mvScaleX != guidesNow.mvScaleX || loggedGuides.mvScaleY != guidesNow.mvScaleY ||
         loggedGuides.guideW != guidesNow.guideW || loggedGuides.guideH != guidesNow.guideH ||
-        loggedGuides.frameW != guidesNow.frameW || loggedGuides.frameH != guidesNow.frameH)
+        loggedGuides.frameW != guidesNow.frameW || loggedGuides.frameH != guidesNow.frameH ||
+        loggedGuides.depthFormat != guidesNow.depthFormat || loggedGuides.motionFormat != guidesNow.motionFormat)
     {
         loggedGuides = guidesNow;
-        LOG_INFO("DLSS-NR guides: depth {}, motion vector scale {} x {}, guides {}x{} for a {}x{} frame",
-                 g_nr.guideDepthInverted ? "inverted" : "not inverted", g_nr.guideMvScaleX,
-                 g_nr.guideMvScaleY, guideWidth, guideHeight, width, height);
+        LOG_INFO("DLSS-NR guides: depth {} (format {}), motion vector scale {} x {} (format {}), guides {}x{} for a "
+                 "{}x{} frame",
+                 g_nr.guideDepthInverted ? "inverted" : "not inverted", (int) guidesNow.depthFormat,
+                 g_nr.guideMvScaleX, g_nr.guideMvScaleY, (int) guidesNow.motionFormat, guideWidth, guideHeight,
+                 width, height);
     }
 
     if (cfg.DlssNrProxyProbe.value_or_default())
