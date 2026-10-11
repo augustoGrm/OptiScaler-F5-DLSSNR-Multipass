@@ -288,10 +288,13 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             return ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
     }
 
-    // This lock will delay/prevent release of buffers while present is ongoing
+    // This lock will delay/prevent release of buffers while present is ongoing. Not for a dxvk game on the Vulkan bridge:
+    // the swapchain here is then the game's own (frame generation's comes from the system DXGI, unwrapped), and dxvk's
+    // present remakes its Vulkan swapchain after a resize, which takes the exclusive side on this same thread
+    // (VkPresentBridge BeginResize): it would wait for itself. A native Vulkan game's present takes none either.
     std::shared_lock<std::shared_mutex> dx11wDx12PresentLock(Dx11wDx12Sync::PresentResizeMutex(), std::defer_lock);
     if (State::Instance().swapchainInteropApi != SwapchainInteropApi::None &&
-        State::Instance().activeFgOutput == FGOutput::XeFG)
+        State::Instance().activeFgOutput == FGOutput::XeFG && !VkPresentBridge::DxvkThroughVulkan())
     {
         dx11wDx12PresentLock.lock();
     }
