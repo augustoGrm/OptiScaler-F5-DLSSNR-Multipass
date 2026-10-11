@@ -659,11 +659,11 @@ class Config
     // bridge's device, whose evaluate hands frame generation the game's motion vectors, depth and output
     // (upscalers/IFeature_VkwDx12.cpp). No Optical F5Low motion. The Optical F5Low page's "FG only (game's upscaler)" Mode.
     CustomOptional<bool> DlssNrNativeFrameGenerationOnly { false };
-    // NativeLowLatency: Optical F5Low calls the Reflex API itself, since a game that makes no upscaler call makes no
-    // Reflex call either (see native/NativeLowLatency.h). Real Reflex on NVIDIA; fakenvapi answers elsewhere (Anti-Lag
-    // 2, XeLL or LatencyFlex, chosen by the fakenvapi settings). auto: on while an Optical F5Low mode runs; true: also
-    // without one, in any game that makes no Reflex call of its own; false: off. Stands aside the moment the game calls
-    // Reflex itself.
+    // NativeLowLatency: OptiScaler calls the Reflex API itself, since a game that makes no upscaler call makes no Reflex
+    // call either, and XeFG's XeLL needs the calls (see native/NativeLowLatency.h). Real Reflex on NVIDIA; fakenvapi
+    // answers elsewhere (Anti-Lag 2, XeLL or LatencyFlex, chosen by the fakenvapi settings). auto: on while an Optical
+    // F5Low mode or XeFG runs; true: also without either, in any game that makes no Reflex call of its own; false: off.
+    // Stands aside the moment the game calls Reflex itself.
     CustomOptional<native::lowlatency::Setting> DlssNrNativeLowLatency { native::lowlatency::Setting::Auto };
     // NativeLowLatencyBoost: Reflex's Boost with it (the GPU keeps its clocks up between frames), also for DLSS frame
     // generation's Streamline Reflex on an Optical F5Low game. NVIDIA Reflex only: XeLL, Anti-Lag 2 and LatencyFlex

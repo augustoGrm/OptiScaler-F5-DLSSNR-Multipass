@@ -16,7 +16,8 @@
 #include <intrin.h>
 #include <unordered_map>
 
-static inline uint64_t _lastFrameId[20] = { 0 };
+// Written on the marker's thread, read by XeFG on the threads that tag its frames
+static inline std::atomic<uint64_t> _lastFrameId[20] = {};
 static inline IUnknown* _lastDev[20] = { 0 };
 
 // #define LOG_REFLEX_CALLS
@@ -794,6 +795,22 @@ void ReflexHooks::setFPSLimit(float fps)
         temp.minimumIntervalUs = _minimumIntervalUs;
         o_NvAPI_Vulkan_SetSleepMode(_lastVkSleepDev, &temp);
     }
+}
+
+uint64_t ReflexHooks::lastMarkerFrameId(NV_LATENCY_MARKER_TYPE type)
+{
+    return (size_t) type < std::size(_lastFrameId) ? _lastFrameId[type].load(std::memory_order_relaxed) : 0;
+}
+
+uint32_t ReflexHooks::gameXellFrameId()
+{
+    if (!gameCalledReflex() || !gameIsSendingMarkers())
+        return 0;
+
+    if (const auto renderSubmit = lastMarkerFrameId(RENDERSUBMIT_START); renderSubmit != 0)
+        return (uint32_t) renderSubmit;
+
+    return (uint32_t) lastMarkerFrameId(SIMULATION_START);
 }
 
 bool ReflexHooks::gameIsSendingMarkers()

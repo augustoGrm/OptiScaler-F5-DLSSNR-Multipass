@@ -359,13 +359,18 @@ ULONG STDMETHODCALLTYPE Dx11wDx12SC::Release()
         State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
 
         auto fg = State::Instance().currentFG;
-        if (fg != nullptr && fg->Mutex.getOwner() != 1 && fg->SwapchainContext() != nullptr)
-        {
-            fg->Deactivate();
-            fg->ReleaseSwapchain(_handle);
-        }
+        const bool releaseFg = fg != nullptr && fg->Mutex.getOwner() != 1 && fg->SwapchainContext() != nullptr;
+        const auto handle = _handle;
 
+        if (releaseFg)
+            fg->Deactivate();
+
+        // Intel: XeFG's context is destroyed after every reference to its swapchain is gone (else
+        // xefgSwapChainDestroy fails with POINTER_STILL_IN_USE). The destructor releases ours.
         delete this;
+
+        if (releaseFg)
+            fg->ReleaseSwapchain(handle);
     }
 
     return ret;

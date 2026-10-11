@@ -5668,10 +5668,14 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
         }
         else
         {
+            // Optical F5Low's low latency, also run for XeFG alone (it feeds XeFG's XeLL when the game does not)
+            const auto lowLatency = f5lowRunning ? native::lowlatency::GetStatus() : native::lowlatency::Status {};
+            const char* owner = lowLatency.forXefgOnly ? " (OptiScaler, for XeFG)" : " (Optical F5Low)";
+
             if (f5lowRunning && native::lowlatency::OwnsFrameCap())
-                currentMethod = std::string(native::lowlatency::GetStatus().path) + " (Optical F5Low)";
+                currentMethod = std::string(lowLatency.path) + owner;
             else if (f5lowRunning)
-                currentMethod = "OptiScaler's limiter (Optical F5Low)";
+                currentMethod = std::string("OptiScaler's limiter") + owner;
             else if (XellHooks::canLimit())
                 currentMethod = "Game's XeLL";
             else
@@ -5688,6 +5692,14 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
             currentMethod.append(" (inactive)");
 
         ImGui::Text("Current method: %s", currentMethod.c_str());
+
+        // Run for XeFG alone, the low latency's switch is on a page an XeFG player may never open
+        if (f5lowRunning && !state.reflexLimitsFps && native::lowlatency::GetStatus().forXefgOnly)
+        {
+            ImGui::TextDisabled("OptiScaler feeds XeFG's XeLL itself (the game has no Reflex).");
+            ShowHelpMarker("XeFG always uses XeLL, and XeLL lowers latency only when something sleeps and marks the "
+                           "frames.\nSwitch: Neural Rendering > Optical F5Low > Low latency.");
+        }
 
         if (fakenvapiMode == LowLatencyMode::AntiLag2)
             ShowHelpMarker("FSR Anti-Lag 2.0 is the new name for AntiLag 2\nDon't ask me why");

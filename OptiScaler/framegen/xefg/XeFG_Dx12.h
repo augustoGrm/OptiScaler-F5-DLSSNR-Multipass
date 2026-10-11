@@ -1,6 +1,7 @@
 #pragma once
 
 #include <framegen/IFGFeature_Dx12.h>
+#include "XeFGFrameId.h"
 
 #include <proxies/XeLL_Proxy.h>
 #include <proxies/XeFG_Proxy.h>
@@ -26,6 +27,13 @@ class XeFG_Dx12 : public virtual IFGFeature_Dx12
     bool _uiComposition = false;
 
     std::unique_ptr<DI_Dx12> _depthInvert;
+
+    // XeFG's frame ID of each slot's frame (FrameIdFor): XeLL's ID for that frame where one is known
+    std::mutex _frameIdMutex;
+    xefg::FrameIds<BUFFER_COUNT> _frameIds;
+    std::optional<bool> _frameIdFollowsXell;
+
+    xefg::FrameIdPick FrameIdFor(UINT64 fgFrame);
 
     static void xefgLogCallback(const char* message, xefg_swapchain_logging_level_t level, void* userData);
 

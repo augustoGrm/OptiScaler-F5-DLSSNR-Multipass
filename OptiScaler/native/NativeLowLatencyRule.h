@@ -7,8 +7,8 @@
 
 namespace native::lowlatency
 {
-// [DlssNr] NativeLowLatency. Auto: with an Optical F5Low mode running. On: also without one, in any game that makes no
-// Reflex call of its own. Off: never.
+// [DlssNr] NativeLowLatency. Auto: with an Optical F5Low mode running, or XeFG (its XeLL needs someone to feed it). On:
+// also without either, in any game that makes no Reflex call of its own. Off: never.
 enum class Setting : uint32_t
 {
     Auto,
@@ -20,6 +20,7 @@ struct Inputs
 {
     Setting setting = Setting::Auto;
     bool f5lowRunning = false;              // an Optical F5Low mode is on and not standing aside for a game upscaler
+    bool xefgRunning = false;               // XeFG is the frame generation output and has its swap chain context
     bool gameCallsReflex = false;           // the game has made a Reflex call (SetSleepMode, Sleep or a marker)
     bool gameRunsXell = false;              // the game runs XeLL of its own (with low latency on, so it can limit fps)
     bool forceReflexDisabled = false;       // fakenvapi's Force Reflex is Force Disable
@@ -49,7 +50,9 @@ inline Decision Decide(const Inputs& in)
     if (in.setting == Setting::Off)
         return Decision::SettingOff;
 
-    if (in.setting == Setting::Auto && !in.f5lowRunning)
+    // XeFG cannot work without XeLL (Intel), and XeLL lowers nothing unless someone sleeps and marks frames: with no
+    // game Reflex to do it, we do
+    if (in.setting == Setting::Auto && !in.f5lowRunning && !in.xefgRunning)
         return Decision::NoF5Low;
 
     if (in.gameCallsReflex)
@@ -155,7 +158,7 @@ inline const char* DecisionText(Decision decision)
     case Decision::SettingOff:
         return "Switched off";
     case Decision::NoF5Low:
-        return "No Optical F5Low mode is running";
+        return "No Optical F5Low mode or XeFG is running";
     case Decision::GameRunsReflex:
         return "Please use the Game's Own Reflex Settings";
     case Decision::GameRunsXell:
@@ -203,7 +206,6 @@ struct CapInputs
     bool intelGpu = false;           // XeLL works on its own only on Intel GPUs
     bool xefgGenerating = false;     // XeFG is generating frames (not paused, not off, not in exclusive full screen)
     bool fakenvapiXell = false;      // Method::Fakenvapi has picked XeLL (Anti-Lag 2 missing: fakenvapi falls back)
-    bool sleepModeFailed = false;    // our last SetSleepMode was refused: nothing carries the cap there
 };
 
 // XeLL on an NVIDIA or AMD GPU does nothing unless XeFG generates frames (Intel: "XeLL will not perform latency
@@ -223,6 +225,8 @@ struct CapPlan
 {
     CapOwner owner = CapOwner::NotOurs;
     uint32_t minimumIntervalUs = 0; // for our SetSleepMode; 0: no limit there
+
+    bool operator==(const CapPlan&) const = default;
 };
 
 // Clamped as misc/FrameLimit does: a tiny ini cap must not overflow the conversion
@@ -239,10 +243,6 @@ inline CapPlan PlanCap(const CapInputs& in)
 {
     if (!in.running)
         return {};
-
-    // The method never took our limit: the limiter keeps the cap until a resend goes through
-    if (in.sleepModeFailed)
-        return { CapOwner::Limiter, 0 };
 
     // Real Reflex's limit with FSR frame generation costs performance (upstream's warning in the Framerate menu); the
     // limiter keeps it where its wait comes before our Sleep. Elsewhere (the Vulkan bridge, whose limiter waits inside
@@ -264,6 +264,56 @@ inline CapPlan PlanCap(const CapInputs& in)
 
     // Reflex, Anti-Lag 2 and LatencyFlex pace the game's own frames: FSR frame generation doubles them
     return { CapOwner::LowLatency, IntervalUs(in.fsrFgActive ? in.capFps / 2.0f : in.capFps) };
+}
+
+// Who keeps the cap after our SetSleepMode: a method that refused it never took the limit, so the limiter keeps it
+// until a resend goes through
+inline CapOwner OwnerAfterCall(const CapPlan& plan, bool refused)
+{
+    return refused && plan.owner != CapOwner::NotOurs ? CapOwner::Limiter : plan.owner;
+}
+
+// A new plan is taken once it has held for `kCapSettlePresents` presents: frame generation pauses for a few frames
+// (its toggles, a changed interpolation count; IFGFeature::UpdateTarget pauses 10) would otherwise hand the cap back
+// and forth, each time with a sleep mode change (Intel: GPU idle first, R11). The first plan is taken at once. XeLL
+// that does nothing (XellIdle) gives the cap to the limiter at once all the same (NativeLowLatency.cpp PresentEnd).
+inline constexpr int kCapSettlePresents = 16;
+
+struct CapSettle
+{
+    bool started = false;
+    CapPlan applied;
+    CapPlan pending;
+    int held = 0; // presents `pending` has held
+};
+
+inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, int needed = kCapSettlePresents)
+{
+    if (!settle.started || needed <= 1)
+    {
+        settle = { true, planned, planned, 0 };
+        return planned;
+    }
+
+    if (planned == settle.applied)
+    {
+        settle.pending = planned;
+        settle.held = 0;
+        return settle.applied;
+    }
+
+    if (planned == settle.pending)
+        ++settle.held;
+    else
+        settle.pending = planned, settle.held = 1;
+
+    if (settle.held >= needed)
+    {
+        settle.applied = planned;
+        settle.held = 0;
+    }
+
+    return settle.applied;
 }
 
 // What one SetSleepMode of ours carried, and whether the method took it
