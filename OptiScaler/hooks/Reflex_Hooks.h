@@ -26,6 +26,8 @@ class ReflexHooks
     inline static uint32_t _minimumIntervalUs = 0;
     inline static NV_SET_SLEEP_MODE_PARAMS _lastSleepParams {};
     inline static IUnknown* _lastSleepDev = nullptr;
+    // Optical F5Low's own Sleep device: only the timing graph reads it (never update()'s fps cap hand-over)
+    inline static IUnknown* _ownSleepDev = nullptr;
     inline static uint8_t _FgNumFramesToGenerate = 0;
     inline static uint64_t _lastAsyncMarkerFrameId = 0;
     inline static uint64_t _updatesWithoutMarker = 0;
@@ -97,8 +99,8 @@ class ReflexHooks
     static bool gameIsSendingMarkers();
 
     // Calls OptiScaler makes itself (native/NativeLowLatency.cpp). Call ensureTable first. They run the hooked
-    // wrappers, so the fps cap, XeFG's routing and fakenvapi's modes apply as for the game's calls, without counting as
-    // the game's.
+    // wrappers, so XeFG's routing and fakenvapi's modes apply as for the game's calls, without counting as the game's.
+    // OptiScaler's stored fps cap is never put into them: our SetSleepMode carries its own.
     static bool ensureTable(PFN_NvApi_QueryInterface queryInterface);
     static NvAPI_Status ownSetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* pParams);
     static NvAPI_Status ownSleep(IUnknown* pDev);

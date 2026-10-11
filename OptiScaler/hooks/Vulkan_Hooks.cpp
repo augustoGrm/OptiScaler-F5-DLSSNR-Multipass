@@ -933,7 +933,7 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
             result = VK_ERROR_OUT_OF_DATE_KHR;
 
         // Unsure about Vulkan Reflex fps limit and if that could be causing an issue here
-        if (!State::Instance().reflexLimitsFps)
+        if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap())
             FrameLimit::sleep(false);
     }
 

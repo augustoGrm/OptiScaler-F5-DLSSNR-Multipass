@@ -49,6 +49,16 @@ int main()
         CHECK(Decide(g) == Decision::GameRunsReflex);
     }
 
+    // The game's own XeLL: ours stands aside (a second method would be a second wait); its Reflex still comes first
+    {
+        Inputs x;
+        x.setting = Setting::On;
+        x.gameRunsXell = true;
+        CHECK(Decide(x) == Decision::GameRunsXell);
+        x.gameCallsReflex = true;
+        CHECK(Decide(x) == Decision::GameRunsReflex);
+    }
+
     // fakenvapi's settings are respected, never overridden
     {
         Inputs f;
@@ -76,8 +86,9 @@ int main()
     }
 
     // Every reason has its plain text; Run has none
-    for (auto d : { Decision::SettingOff, Decision::NoF5Low, Decision::GameRunsReflex, Decision::ForceReflexDisabled,
-                    Decision::ForceXell, Decision::FrameGenerationOwnsReflex, Decision::NoApi })
+    for (auto d : { Decision::SettingOff, Decision::NoF5Low, Decision::GameRunsReflex, Decision::GameRunsXell,
+                    Decision::ForceReflexDisabled, Decision::ForceXell, Decision::FrameGenerationOwnsReflex,
+                    Decision::NoApi })
         CHECK(DecisionText(d)[0] != '\0');
 
     CHECK(DecisionText(Decision::Run)[0] == '\0');
@@ -86,8 +97,8 @@ int main()
     // The status label: On when it runs, Standing Aside when something else owns latency, Off otherwise
     CHECK(strcmp(StatusLabel(Decision::Run), "On") == 0);
 
-    for (auto d : { Decision::GameRunsReflex, Decision::ForceReflexDisabled, Decision::ForceXell,
-                    Decision::FrameGenerationOwnsReflex })
+    for (auto d : { Decision::GameRunsReflex, Decision::GameRunsXell, Decision::ForceReflexDisabled,
+                    Decision::ForceXell, Decision::FrameGenerationOwnsReflex })
         CHECK(strcmp(StatusLabel(d), "Standing Aside") == 0);
 
     for (auto d : { Decision::SettingOff, Decision::NoF5Low, Decision::NoApi })
@@ -252,6 +263,175 @@ int main()
         calls.sleep = [&](uint64_t) { return -1; };
         CHECK(VkSleepFrame(sleepFails, calls) == VkSleepResult::SleepFailed);
         CHECK(waitCalls == 0);
+    }
+
+    // The frame cap while we run (PlanCap): one waiter per frame
+    {
+        CapInputs cap;
+
+        // Not running: not ours, whatever the cap
+        cap.capFps = 60.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::NotOurs);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // Running with no cap: ours, nothing to limit (the limiter has nothing to do either)
+        cap.running = true;
+        cap.capFps = 0.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // Real Reflex, no frame generation: Reflex keeps 60 fps
+        cap.capFps = 60.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 16667);
+
+        // Real Reflex + FSR FG where the limiter waits before our Sleep: the limiter keeps it
+        cap.fsrFgActive = true;
+        cap.limiterBeforeSleep = true;
+        CHECK(PlanCap(cap).owner == CapOwner::Limiter);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // ... a cap of 0 does not change who would keep it
+        cap.capFps = 0.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::Limiter);
+        cap.capFps = 60.0f;
+
+        // ... on the Vulkan bridge (limiter after our Sleep): Reflex keeps the game's frames, half of the shown 60
+        cap.limiterBeforeSleep = false;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 33333);
+
+        // fakenvapi with FSR FG: its method keeps the game's frames
+        cap.method = Method::Fakenvapi;
+        cap.limiterBeforeSleep = true;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 33333);
+
+        // fakenvapi without frame generation
+        cap.fsrFgActive = false;
+        CHECK(PlanCap(cap).minimumIntervalUs == 16667);
+
+        // XeFG's XeLL counts shown frames
+        cap.method = Method::XellWithXefg;
+        cap.xefgGenerating = true;
+        cap.capFps = 120.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+
+        // XeFG paused or off on NVIDIA/AMD: XeLL does nothing, the limiter keeps the cap and XeLL gets no interval
+        cap.xefgGenerating = false;
+        cap.intelGpu = false;
+        CHECK(XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::Limiter);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // ... XeFG generating again: XeLL keeps it
+        cap.xefgGenerating = true;
+        CHECK(!XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+
+        // ... on Intel XeLL works without XeFG generating
+        cap.xefgGenerating = false;
+        cap.intelGpu = true;
+        CHECK(!XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+
+        // ... XeFG on Intel, paused: XeLL keeps the same shown-frame interval
+        CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+
+        // ... with no cap: XeLL generating keeps it with no limit
+        cap.xefgGenerating = true;
+        cap.capFps = 0.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+        cap.capFps = 120.0f;
+        cap.xefgGenerating = false;
+
+        // Only XeLL depends on XeFG: real Reflex with XeFG off is never idle
+        cap.intelGpu = false;
+        cap.method = Method::RealReflex;
+        CHECK(!XellIdle(cap));
+
+        // ... nor is fakenvapi's Anti-Lag 2 or LatencyFlex
+        cap.method = Method::Fakenvapi;
+        CHECK(!XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+
+        // fakenvapi fell back to XeLL (no Anti-Lag 2) on NVIDIA/AMD: no XeFG with it, so it does nothing
+        cap.fakenvapiXell = true;
+        CHECK(XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::Limiter);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // ... on Intel it works
+        cap.intelGpu = true;
+        CHECK(!XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+        cap.intelGpu = false;
+        cap.fakenvapiXell = false;
+
+        // A refused SetSleepMode: the limiter keeps the cap, whatever the method
+        for (auto method : { Method::RealReflex, Method::Fakenvapi, Method::XellWithXefg })
+        {
+            CapInputs r;
+            r.running = true;
+            r.capFps = 60.0f;
+            r.method = method;
+            r.xefgGenerating = true;
+            r.sleepModeFailed = true;
+            CHECK(PlanCap(r).owner == CapOwner::Limiter);
+            CHECK(PlanCap(r).minimumIntervalUs == 0);
+        }
+
+        CHECK(IntervalUs(0.0f) == 0);
+        CHECK(IntervalUs(-5.0f) == 0);
+        // A tiny ini cap does not overflow
+        CHECK(IntervalUs(0.0000001f) == 100000000u);
+        CHECK(IntervalUs(0.01f) == 100000000u);
+    }
+
+    // When our SetSleepMode goes out again (NeedsSleepModeResend)
+    {
+        int device = 0;
+        int otherDevice = 0;
+
+        SleepModeCall last;
+        last.device = &device;
+        last.minimumIntervalUs = 16667;
+        last.xellGeneration = 3;
+
+        // The first one always goes out
+        CHECK(NeedsSleepModeResend(nullptr, false, last, false));
+
+        // Nothing changed: not again, retry due or not
+        SleepModeCall now = last;
+        CHECK(!NeedsSleepModeResend(&last, false, now, false));
+        CHECK(!NeedsSleepModeResend(&last, false, now, true));
+
+        // Each change sends it again
+        now.minimumIntervalUs = 8333;
+        CHECK(NeedsSleepModeResend(&last, false, now, false));
+        now = last;
+        now.boost = true;
+        CHECK(NeedsSleepModeResend(&last, false, now, false));
+        now = last;
+        now.device = &otherDevice;
+        CHECK(NeedsSleepModeResend(&last, false, now, false));
+        now = last;
+        now.api = Api::Vulkan;
+        CHECK(NeedsSleepModeResend(&last, false, now, false));
+
+        // XeFG made a new XeLL context (same address or not): the generation tells
+        now = last;
+        now.xellGeneration = 4;
+        CHECK(NeedsSleepModeResend(&last, false, now, false));
+
+        // A refused one is tried again only when the retry is due
+        now = last;
+        CHECK(!NeedsSleepModeResend(&last, true, now, false));
+        CHECK(NeedsSleepModeResend(&last, true, now, true));
     }
 
     printf(fails == 0 ? "nr_native_low_latency_smoke: PASS\n" : "nr_native_low_latency_smoke: %d FAIL\n", fails);

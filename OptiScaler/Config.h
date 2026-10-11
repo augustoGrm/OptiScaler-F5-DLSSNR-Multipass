@@ -665,6 +665,10 @@ class Config
     // without one, in any game that makes no Reflex call of its own; false: off. Stands aside the moment the game calls
     // Reflex itself.
     CustomOptional<native::lowlatency::Setting> DlssNrNativeLowLatency { native::lowlatency::Setting::Auto };
+    // NativeLowLatencyBoost: Reflex's Boost with it (the GPU keeps its clocks up between frames), also for DLSS frame
+    // generation's Streamline Reflex on an Optical F5Low game. NVIDIA Reflex only: XeLL, Anti-Lag 2 and LatencyFlex
+    // ignore it (XeLL: "Boost is not supported as of now").
+    CustomOptional<bool> DlssNrNativeLowLatencyBoost { false };
     // AutoExposureAdaptBrighterSeconds / AutoExposureAdaptDarkerSeconds are the menu's "Eye adaptation": how long
     // Automatic takes to follow a scene getting brighter / darker, as a time constant in seconds; 0 = at once. Faster to
     // brighter, as in Unreal and Unity HDRP. See shaders/dlssnr/DlssNr_ExposureAdapt.h.

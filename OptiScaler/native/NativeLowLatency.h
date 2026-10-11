@@ -54,8 +54,21 @@ struct Status
     const char* path = ""; // plain words for the method in use, empty unless decision is Run
     bool hasLatency = false;
     float latencyMs = 0.0f; // the game's simulation start to the end of the GPU work, from GetLatency
+    CapOwner capOwner = CapOwner::NotOurs;
+    bool xellIdle = false; // XeLL on an NVIDIA/AMD GPU with no XeFG generating frames: it does nothing
 };
 
 // The menu's line. Cheap; GetLatency is asked at most twice a second.
 Status GetStatus();
+
+// We run (markers and Sleep go out). Any thread, two relaxed loads.
+bool Running();
+
+// We run and our SetSleepMode carries the frame cap (NativeLowLatencyRule.h PlanCap): OptiScaler's own limiter
+// (misc/FrameLimit) must not wait as well. Any thread, one relaxed load.
+bool OwnsFrameCap();
+
+// DLSS frame generation runs Reflex itself through Streamline (Decision::FrameGenerationOwnsReflex) and the player
+// asked for Boost: framegen/dlssg sets Streamline's Reflex mode with Boost.
+bool WantsBoostForFrameGeneration();
 } // namespace native::lowlatency

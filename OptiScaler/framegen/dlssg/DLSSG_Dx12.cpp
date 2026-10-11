@@ -9,6 +9,7 @@
 
 #include <hooks/Reflex_Hooks.h>
 #include <hooks/Streamline_Hooks.h>
+#include <native/NativeLowLatency.h>
 #include "MfgUnlock.h"
 #include <hooks/DxgiFactory_Hooks.h>
 
@@ -387,7 +388,9 @@ bool DLSSG_Dx12::Dispatch()
     }
 
     sl::ReflexOptions reflexConst = {};
-    reflexConst.mode = sl::ReflexMode::eLowLatency;
+    // Boost when Optical F5Low's low latency stands aside for us and the player asked for it (On + Boost)
+    reflexConst.mode = native::lowlatency::WantsBoostForFrameGeneration() ? sl::ReflexMode::eLowLatencyWithBoost
+                                                                           : sl::ReflexMode::eLowLatency;
     reflexConst.useMarkersToOptimize = ReflexHooks::gameIsSendingMarkers();
 
     auto reflexSetOptionsResult = StreamlineProxy::ReflexSetOptions()(reflexConst);
