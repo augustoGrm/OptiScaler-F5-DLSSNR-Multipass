@@ -1500,6 +1500,8 @@ static void RenderLowLatencySection(Config* config)
 
     HelpMarker("Makes the latency calls the game doesn't: Reflex on NVIDIA, Anti-Lag 2 / XeLL / LatencyFlex on other "
                "cards. Helps most when the GPU is the limit. Steps aside if the game uses Reflex itself.\n"
+               "With XeFG it also runs without an Optical F5Low mode: XeFG always uses XeLL, and XeLL needs these "
+               "calls.\n"
                "On + Boost: the GPU keeps its clocks up. A little lower latency, a little more power. NVIDIA Reflex "
                "only; the others ignore it.");
 

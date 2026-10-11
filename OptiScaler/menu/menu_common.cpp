@@ -5668,10 +5668,14 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
         }
         else
         {
+            // Optical F5Low's low latency, also run for XeFG alone (it feeds XeFG's XeLL when the game does not)
+            const auto lowLatency = f5lowRunning ? native::lowlatency::GetStatus() : native::lowlatency::Status {};
+            const char* owner = lowLatency.forXefgOnly ? " (OptiScaler, for XeFG)" : " (Optical F5Low)";
+
             if (f5lowRunning && native::lowlatency::OwnsFrameCap())
-                currentMethod = std::string(native::lowlatency::GetStatus().path) + " (Optical F5Low)";
+                currentMethod = std::string(lowLatency.path) + owner;
             else if (f5lowRunning)
-                currentMethod = "OptiScaler's limiter (Optical F5Low)";
+                currentMethod = std::string("OptiScaler's limiter") + owner;
             else if (XellHooks::canLimit())
                 currentMethod = "Game's XeLL";
             else

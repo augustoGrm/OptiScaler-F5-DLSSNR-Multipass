@@ -51,6 +51,7 @@ std::atomic<double> g_frameGenerationPresentAt = 0.0; // last PresentSource::Fra
 std::atomic<Decision> g_decision = Decision::NoF5Low;
 std::atomic<CapOwner> g_capOwner = CapOwner::NotOurs; // PlanCap's answer on the last present we ran on
 std::atomic<bool> g_xellIdle = false;                 // XellIdle on the last present we ran on
+std::atomic<bool> g_forXefgOnly = false;              // Auto runs us for XeFG's XeLL only, no Optical F5Low mode
 // XeLL and XeFG share one frame ID (NativeLowLatencyRule.h NextFrameGenerationId): the ID of our frame in flight while
 // XeFG runs on our XeLL (0: not)
 std::atomic<uint32_t> g_xellFrameIdForFrameGeneration = 0;
@@ -262,6 +263,7 @@ Inputs GatherInputs(bool deviceAvailable)
           config->DlssNrNativeInput.value_or_default(), config->DlssNrNativeUpscaler.value_or_default(),
           config->DlssNrNativeFrameGenerationOnly.value_or_default() });
     in.f5lowRunning = shown != DlssNrNativeMode::Shown::Off && !GameUpscalerCalledRecently();
+    in.xefgRunning = state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr;
 
     in.gameCallsReflex = ReflexHooks::gameCalledReflex();
     in.gameRunsXell = XellHooks::canLimit();
@@ -275,7 +277,10 @@ Inputs GatherInputs(bool deviceAvailable)
 
 Decision Evaluate(Api api, IUnknown* device)
 {
-    auto decision = Decide(GatherInputs(true));
+    const auto inputs = GatherInputs(true);
+    auto decision = Decide(inputs);
+    // Auto runs us for XeFG alone (no Optical F5Low mode): the menu and log say so
+    g_forXefgOnly = !inputs.f5lowRunning && inputs.setting == Setting::Auto;
 
     if (decision == Decision::Run && g_table == Table::Unknown)
     {
@@ -484,7 +489,8 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         g_sentRefused = result != NVAPI_OK;
 
         if (!g_running.load(std::memory_order_relaxed))
-            LOG_INFO("Optical F5Low low latency: started ({})", PathText(api));
+            LOG_INFO("Optical F5Low low latency: started ({}{})", PathText(api),
+                     g_forXefgOnly.load() ? ", feeding XeFG's XeLL" : "");
 
         // Refused: the latency calls still go out, but the method never took the cap, so the limiter keeps it
         if (g_sentRefused && !wasRefused)
@@ -660,6 +666,7 @@ Status GetStatus()
         return status;
 
     status.capOwner = g_capOwner.load();
+    status.forXefgOnly = g_forXefgOnly.load();
     status.xellIdle = g_xellIdle.load();
 
     const auto api = g_deviceApi.load();

@@ -56,6 +56,7 @@ struct Status
     float latencyMs = 0.0f; // the game's simulation start to the end of the GPU work, from GetLatency
     CapOwner capOwner = CapOwner::NotOurs;
     bool xellIdle = false; // XeLL on an NVIDIA/AMD GPU with no XeFG generating frames: it does nothing
+    bool forXefgOnly = false; // runs for XeFG's XeLL alone (Auto, no Optical F5Low mode)
 };
 
 // The menu's line. Cheap; GetLatency is asked at most twice a second.

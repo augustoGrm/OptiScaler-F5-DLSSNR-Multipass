@@ -39,6 +39,25 @@ int main()
     in.f5lowRunning = true;
     CHECK(Decide(in) == Decision::SettingOff);
 
+    // XeFG alone: Auto runs us to feed its XeLL; Off still wins, and the game's own Reflex (which feeds XeLL itself) or
+    // XeLL comes first
+    {
+        Inputs x;
+        x.xefgRunning = true;
+        CHECK(Decide(x) == Decision::Run);
+        x.setting = Setting::Off;
+        CHECK(Decide(x) == Decision::SettingOff);
+        x.setting = Setting::Auto;
+        x.gameCallsReflex = true;
+        CHECK(Decide(x) == Decision::GameRunsReflex);
+        x.gameCallsReflex = false;
+        x.gameRunsXell = true;
+        CHECK(Decide(x) == Decision::GameRunsXell);
+        x.gameRunsXell = false;
+        x.forceXell = true;
+        CHECK(Decide(x) == Decision::ForceXell);
+    }
+
     // The game's own Reflex: ours never runs, in either setting
     for (auto setting : { Setting::Auto, Setting::On })
     {

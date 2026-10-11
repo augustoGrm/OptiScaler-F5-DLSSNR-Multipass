@@ -7,8 +7,8 @@
 
 namespace native::lowlatency
 {
-// [DlssNr] NativeLowLatency. Auto: with an Optical F5Low mode running. On: also without one, in any game that makes no
-// Reflex call of its own. Off: never.
+// [DlssNr] NativeLowLatency. Auto: with an Optical F5Low mode running, or XeFG (its XeLL needs someone to feed it). On:
+// also without either, in any game that makes no Reflex call of its own. Off: never.
 enum class Setting : uint32_t
 {
     Auto,
@@ -20,6 +20,7 @@ struct Inputs
 {
     Setting setting = Setting::Auto;
     bool f5lowRunning = false;              // an Optical F5Low mode is on and not standing aside for a game upscaler
+    bool xefgRunning = false;               // XeFG is the frame generation output and its swap chain is up
     bool gameCallsReflex = false;           // the game has made a Reflex call (SetSleepMode, Sleep or a marker)
     bool gameRunsXell = false;              // the game runs XeLL of its own (with low latency on, so it can limit fps)
     bool forceReflexDisabled = false;       // fakenvapi's Force Reflex is Force Disable
@@ -49,7 +50,9 @@ inline Decision Decide(const Inputs& in)
     if (in.setting == Setting::Off)
         return Decision::SettingOff;
 
-    if (in.setting == Setting::Auto && !in.f5lowRunning)
+    // XeFG cannot work without XeLL (Intel), and XeLL lowers nothing unless someone sleeps and marks frames: with no
+    // game Reflex to do it, we do
+    if (in.setting == Setting::Auto && !in.f5lowRunning && !in.xefgRunning)
         return Decision::NoF5Low;
 
     if (in.gameCallsReflex)
@@ -155,7 +158,7 @@ inline const char* DecisionText(Decision decision)
     case Decision::SettingOff:
         return "Switched off";
     case Decision::NoF5Low:
-        return "No Optical F5Low mode is running";
+        return "No Optical F5Low mode or XeFG is running";
     case Decision::GameRunsReflex:
         return "Please use the Game's Own Reflex Settings";
     case Decision::GameRunsXell:
