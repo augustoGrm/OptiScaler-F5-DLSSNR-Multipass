@@ -5,6 +5,7 @@
 
 #include <nvapi/fakenvapi.h>
 
+#include <native/VkPresentBridge.h>
 #include <proxies/Streamline_Proxy.h>
 
 #include <magic_enum.hpp>
@@ -23,6 +24,167 @@ static inline IUnknown* _lastDev[20] = { 0 };
 // #define LOG_REFLEX_CALLS
 
 std::optional<TimingEntry> ReflexHooks::timingData[TimingType::TimingTypeCOUNT] {};
+
+void ReflexHooks::noteMarker(uint64_t frameId, uint32_t markerType, IUnknown* device)
+{
+    // TODO: reflexFrameId gets constantly changed, up and down depending on the marker
+    State::Instance().reflexFrameId = frameId;
+
+    // if (markerType == PRESENT_END)
+    if (markerType < std::size(_lastFrameId))
+    {
+        _lastFrameId[markerType] = frameId;
+        _lastDev[markerType] = device;
+    }
+
+    // Our own markers (Optical F5Low's low latency) are not the game sending markers
+    if (markerType == SIMULATION_START && !_ownCall)
+        _lastMarkerFrame = State::Instance().fgLastFrame;
+}
+
+ID3D12Device* ReflexHooks::bridgedXellDevice()
+{
+    const bool xefgOutput = State::Instance().activeFgOutput == FGOutput::XeFG;
+
+    // OutputActive is lock-free; Device takes the bridge's lock
+    ID3D12Device* device = xefgOutput && VkPresentBridge::OutputActive() ? VkPresentBridge::Device() : nullptr;
+    const bool dxvkWithoutVulkanBridge = VkPresentBridge::DxvkGame() && !VkPresentBridge::DxvkThroughVulkan();
+    const bool forward =
+        native::bridgedreflex::ShouldForward(xefgOutput, device != nullptr, dxvkWithoutVulkanBridge);
+
+    if (_bridgedForwarding.exchange(forward) != forward)
+    {
+        if (forward)
+            LOG_INFO("The game's Vulkan Reflex now feeds XeFG's XeLL on the bridge's D3D12 device");
+        else
+            LOG_INFO("The game's Vulkan Reflex no longer feeds XeFG's XeLL");
+    }
+
+    return forward ? device : nullptr;
+}
+
+namespace
+{
+native::bridgedreflex::SleepMode ToMode(const NV_VULKAN_SET_SLEEP_MODE_PARAMS& params)
+{
+    native::bridgedreflex::SleepMode mode;
+    mode.lowLatency = params.bLowLatencyMode != 0;
+    mode.boost = params.bLowLatencyBoost != 0;
+    mode.minimumIntervalUs = params.minimumIntervalUs;
+    return mode;
+}
+} // namespace
+
+NvAPI_Status ReflexHooks::xellSetSleepMode(ID3D12Device* xellDevice, const native::bridgedreflex::SleepMode& game)
+{
+    const auto split = native::bridgedreflex::SplitSleepMode(game, _minimumIntervalUs);
+
+    NV_SET_SLEEP_MODE_PARAMS params {};
+    params.version = NV_SET_SLEEP_MODE_PARAMS_VER;
+    params.bLowLatencyMode = split.xell.lowLatency;
+    params.bLowLatencyBoost = split.xell.boost;
+    params.minimumIntervalUs = split.xell.minimumIntervalUs;
+    params.bUseMarkersToOptimize = split.xell.useMarkersToOptimize;
+
+    const auto result = nvapi_calls::NvAPI_D3D_SetSleepMode(xellDevice, &params);
+
+    static bool logged = false;
+    if (result != NVAPI_OK && !logged)
+    {
+        logged = true;
+        LOG_WARN("XeLL refused the game's sleep mode: {}", magic_enum::enum_name(result));
+    }
+
+    return result;
+}
+
+void ReflexHooks::noteLowLatency2SleepMode(const native::bridgedreflex::SleepMode* mode)
+{
+    std::scoped_lock lock(_sleepModeMutex);
+
+    _lastLl2ModeSet = mode != nullptr;
+    _lastLl2Mode = mode != nullptr ? *mode : native::bridgedreflex::SleepMode {};
+}
+
+NvAPI_Status ReflexHooks::xellSleep(ID3D12Device* xellDevice)
+{
+    const auto result = nvapi_calls::NvAPI_D3D_Sleep(xellDevice);
+
+    static bool logged = false;
+    if (result != NVAPI_OK && !logged)
+    {
+        logged = true;
+        LOG_WARN("XeLL Sleep failed: {}", magic_enum::enum_name(result));
+    }
+
+    return result;
+}
+
+void ReflexHooks::xellMarker(ID3D12Device* xellDevice, uint64_t frameId, uint32_t nvapiMarker)
+{
+    _updatesWithoutMarker = 0;
+    noteMarker(frameId, nvapiMarker, nullptr);
+
+    if (!native::bridgedreflex::XellTakesMarker(nvapiMarker))
+        return;
+
+    NV_LATENCY_MARKER_PARAMS params {};
+    params.version = NV_LATENCY_MARKER_PARAMS_VER;
+    params.frameID = frameId;
+    params.markerType = (NV_LATENCY_MARKER_TYPE) nvapiMarker;
+    nvapi_calls::NvAPI_D3D_SetLatencyMarker(xellDevice, &params);
+}
+
+ID3D12Device* ReflexHooks::vkForwardDevice()
+{
+    auto* device = bridgedXellDevice();
+
+    if ((device != nullptr) == _vkNvApiForwarding)
+        return device;
+
+    std::scoped_lock lock(_sleepModeMutex);
+
+    if ((device != nullptr) == _vkNvApiForwarding)
+        return device;
+
+    _vkNvApiForwarding = device != nullptr;
+
+    // The game set its sleep mode to the other side: its new owner gets it (the old one keeps what it had)
+    if (_lastVkSleepDev != nullptr)
+    {
+        if (device != nullptr)
+        {
+            forwardVkSleepMode(device, _lastVkSleepDev, _lastVkSleepParams);
+        }
+        else
+        {
+            NV_VULKAN_SET_SLEEP_MODE_PARAMS params = _lastVkSleepParams;
+
+            if (_minimumIntervalUs != 0)
+                params.minimumIntervalUs = _minimumIntervalUs;
+
+            o_NvAPI_Vulkan_SetSleepMode(_lastVkSleepDev, &params);
+        }
+    }
+
+    return device;
+}
+
+// XeLL gets the game's mode, the driver the same call with low latency off (it still has to run its Sleep)
+NvAPI_Status ReflexHooks::forwardVkSleepMode(ID3D12Device* xellDevice, HANDLE vkDevice,
+                                             const NV_VULKAN_SET_SLEEP_MODE_PARAMS& game)
+{
+    const auto mode = ToMode(game);
+    xellSetSleepMode(xellDevice, mode);
+
+    const auto split = native::bridgedreflex::SplitSleepMode(mode, 0);
+    NV_VULKAN_SET_SLEEP_MODE_PARAMS driver = game;
+    driver.bLowLatencyMode = split.driver.lowLatency;
+    driver.bLowLatencyBoost = split.driver.boost;
+    driver.minimumIntervalUs = split.driver.minimumIntervalUs;
+
+    return o_NvAPI_Vulkan_SetSleepMode(vkDevice, &driver);
+}
 
 NvAPI_Status ReflexHooks::hkNvAPI_D3D_SetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* pSetSleepModeParams)
 {
@@ -164,18 +326,9 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_SetLatencyMarker(IUnknown* pDev,
         State::Instance().rtssReflexInjection = true;
     }
 
-    // TODO: reflexFrameId gets constantly changed, up and down depending on the marker
-    State::Instance().reflexFrameId = pSetLatencyMarkerParams->frameID;
-
-    // if (pSetLatencyMarkerParams->markerType == PRESENT_END)
-    _lastFrameId[pSetLatencyMarkerParams->markerType] = pSetLatencyMarkerParams->frameID;
-    _lastDev[pSetLatencyMarkerParams->markerType] = pDev;
+    noteMarker(pSetLatencyMarkerParams->frameID, pSetLatencyMarkerParams->markerType, pDev);
 
     static bool skip[20] = {};
-
-    // Our own markers (Optical F5Low's low latency) are not the game sending markers
-    if (pSetLatencyMarkerParams->markerType == SIMULATION_START && !_ownCall)
-        _lastMarkerFrame = State::Instance().fgLastFrame;
 
     if (State::Instance().activeFgOutput == FGOutput::DLSSG && StreamlineProxy::IsD3D12Inited() &&
         Config::Instance()->FGDLSSGUseGamesReflexMarkers.value_or_default() && State::Instance().currentFG &&
@@ -412,6 +565,18 @@ NvAPI_Status ReflexHooks::hkNvAPI_Vulkan_SetLatencyMarker(HANDLE vkDevice,
         _gameCalledReflex = true;
 
     _updatesWithoutMarker = 0;
+
+    // A bridged game: XeFG's XeLL gets the marker (and its frame ID is noted for XeFG to follow), the driver still gets
+    // it too. Our own markers are not the game's.
+    if (!_ownCall)
+    {
+        if (auto* xellDevice = vkForwardDevice())
+        {
+            xellMarker(xellDevice, pSetLatencyMarkerParams->frameID, (uint32_t) pSetLatencyMarkerParams->markerType);
+            return o_NvAPI_Vulkan_SetLatencyMarker(vkDevice, pSetLatencyMarkerParams);
+        }
+    }
+
     State::Instance().reflexFrameId = pSetLatencyMarkerParams->frameID;
 
     return o_NvAPI_Vulkan_SetLatencyMarker(vkDevice, pSetLatencyMarkerParams);
@@ -436,9 +601,16 @@ NvAPI_Status ReflexHooks::hkNvAPI_Vulkan_SetSleepMode(HANDLE vkDevice,
     if (_ownCall)
         return o_NvAPI_Vulkan_SetSleepMode(vkDevice, pSetSleepModeParams);
 
+    // A bridged game: the mode goes to XeFG's XeLL, the driver gets it with low latency off. Asked before the new mode is
+    // stored: a change of owner hands the previous one over first.
+    auto* xellDevice = vkForwardDevice();
+
     // Store for later so we can adjust the fps whenever we want
     memcpy(&_lastVkSleepParams, pSetSleepModeParams, sizeof(NV_VULKAN_SET_SLEEP_MODE_PARAMS));
     _lastVkSleepDev = vkDevice;
+
+    if (xellDevice != nullptr)
+        return forwardVkSleepMode(xellDevice, vkDevice, *pSetSleepModeParams);
 
     if (_minimumIntervalUs != 0)
         pSetSleepModeParams->minimumIntervalUs = _minimumIntervalUs;
@@ -455,6 +627,14 @@ NvAPI_Status ReflexHooks::hkNvAPI_Vulkan_Sleep(HANDLE vkDevice, NvU64 signalValu
     if (isGameCall(_ReturnAddress()))
         _gameCalledReflex = true;
 
+    // A bridged game: XeFG's XeLL sleeps here. The driver's Sleep (its mode is off, nothing to wait for) still runs
+    // whatever XeLL said, it signals the semaphore the game waits on.
+    if (!_ownCall)
+    {
+        if (auto* xellDevice = vkForwardDevice())
+            xellSleep(xellDevice);
+    }
+
     return o_NvAPI_Vulkan_Sleep(vkDevice, signalValue);
 }
 
@@ -463,6 +643,49 @@ NvAPI_Status ReflexHooks::hkNvAPI_Vulkan_GetLatency(HANDLE vkDevice, NV_VULKAN_L
 #ifdef LOG_REFLEX_CALLS
     LOG_FUNC();
 #endif
+
+    // A bridged game: XeLL's report (fakenvapi's), copied field by field into the Vulkan layout
+    if (!_ownCall)
+    {
+        if (auto* xellDevice = vkForwardDevice())
+        {
+            std::scoped_lock lock(_sleepModeMutex);
+
+            // Not freed, like the others: static and big
+            static NV_LATENCY_RESULT_PARAMS* d3dResults = new NV_LATENCY_RESULT_PARAMS();
+            *d3dResults = {};
+            d3dResults->version = NV_LATENCY_RESULT_PARAMS_VER;
+
+            const auto result = nvapi_calls::NvAPI_D3D_GetLatency(xellDevice, d3dResults);
+
+            if (result != NVAPI_OK)
+                return result;
+
+            for (size_t i = 0; i < std::size(d3dResults->frameReport); i++)
+            {
+                const auto& from = d3dResults->frameReport[i];
+                auto& to = pGetLatencyParams->frameReport[i];
+
+                to = {};
+                to.frameID = from.frameID;
+                to.inputSampleTime = from.inputSampleTime;
+                to.simStartTime = from.simStartTime;
+                to.simEndTime = from.simEndTime;
+                to.renderSubmitStartTime = from.renderSubmitStartTime;
+                to.renderSubmitEndTime = from.renderSubmitEndTime;
+                to.presentStartTime = from.presentStartTime;
+                to.presentEndTime = from.presentEndTime;
+                to.driverStartTime = from.driverStartTime;
+                to.driverEndTime = from.driverEndTime;
+                to.osRenderQueueStartTime = from.osRenderQueueStartTime;
+                to.osRenderQueueEndTime = from.osRenderQueueEndTime;
+                to.gpuRenderStartTime = from.gpuRenderStartTime;
+                to.gpuRenderEndTime = from.gpuRenderEndTime;
+            }
+
+            return NVAPI_OK;
+        }
+    }
 
     return o_NvAPI_Vulkan_GetLatency(vkDevice, pGetLatencyParams);
 }
@@ -659,7 +882,13 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
         return;
     }
 
-    if (isVulkan && _lastVkSleepDev)
+    if (isVulkan && bridgedXellDevice() != nullptr)
+    {
+        // XeFG's XeLL holds the cap, with the game's sleep mode or one we send (setFPSLimit). The Vulkan present and the
+        // bridge's D3D12 present both come here: the answer must not depend on fgActive, or it flips every frame.
+        State::Instance().reflexLimitsFps = true;
+    }
+    else if (isVulkan && _lastVkSleepDev)
     {
         // fgActive doesn't matter for vulkan
         // isUsingAsMainNvapi() because fakenvapi might override the reflex' setting and we don't know it
@@ -788,7 +1017,23 @@ void ReflexHooks::setFPSLimit(float fps)
             o_NvAPI_D3D_SetSleepMode(_lastSleepDev, &temp);
     }
 
-    if (_lastVkSleepDev != nullptr)
+    if (auto* xellDevice = bridgedXellDevice())
+    {
+        // The cap goes into XeLL (the driver's mode is off and stays so). A game that marks frames but never sets a sleep
+        // mode gets one from us: low latency on, with the cap.
+        native::bridgedreflex::SleepMode mode;
+
+        if (_lastVkSleepDev != nullptr)
+            mode = ToMode(_lastVkSleepParams);
+        else if (_lastLl2ModeSet)
+            mode = _lastLl2Mode;
+        else
+            mode.lowLatency = true;
+
+        if (_lastVkSleepDev != nullptr || _lastLl2ModeSet || gameIsSendingMarkers())
+            xellSetSleepMode(xellDevice, mode);
+    }
+    else if (_lastVkSleepDev != nullptr)
     {
         NV_VULKAN_SET_SLEEP_MODE_PARAMS temp {};
         memcpy(&temp, &_lastVkSleepParams, sizeof(NV_VULKAN_SET_SLEEP_MODE_PARAMS));
