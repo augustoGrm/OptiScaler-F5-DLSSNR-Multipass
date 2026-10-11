@@ -509,6 +509,7 @@ bool Config::Reload(std::filesystem::path iniPath)
                 else if (lowLatency.value() == "false")
                     DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::Off);
             }
+            DlssNrNativeLowLatencyBoost.set_from_config(readBool("DlssNr", "NativeLowLatencyBoost"));
             DlssNrAutoExposureAdaptBrighterSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptBrighterSeconds"));
             DlssNrAutoExposureAdaptDarkerSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptDarkerSeconds"));
             DlssNrAutoExposureAdaptSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptSeconds"));
@@ -1570,6 +1571,8 @@ bool Config::SaveIni()
 
         ini.SetValue("DlssNr", "NativeLowLatency", lowLatency);
     }
+    ini.SetValue("DlssNr", "NativeLowLatencyBoost",
+                 GetBoolValue(Instance()->DlssNrNativeLowLatencyBoost.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoExposureAdaptBrighterSeconds",
                  GetFloatValue(Instance()->DlssNrAutoExposureAdaptBrighterSeconds.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoExposureAdaptDarkerSeconds",

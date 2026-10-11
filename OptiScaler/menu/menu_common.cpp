@@ -10,6 +10,7 @@
 
 #include <dlssnr/DlssNr.h>
 #include <native/VirtualUpscalerDriver.h>
+#include <native/NativeLowLatency.h>
 
 #include "input/input_system.h"
 
@@ -5628,7 +5629,10 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
     auto& menuResScale = ctx.menuResScale;
 
     // Framerate ---------------------
-    if (state.reflexLimitsFps || config->OverlayMenu.value_or_default())
+    // Optical F5Low's low latency keeps the cap while it runs (native/NativeLowLatency.h OwnsFrameCap)
+    const bool f5lowKeepsCap = native::lowlatency::OwnsFrameCap();
+
+    if (state.reflexLimitsFps || f5lowKeepsCap || config->OverlayMenu.value_or_default())
     {
         SeparatorWithHelpMarker(
             "Framerate", "Uses Reflex when possible\nOn AMD/Intel cards, you can use Fakenvapi to substitute Reflex");
@@ -5663,7 +5667,9 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
         }
         else
         {
-            if (XellHooks::canLimit())
+            if (f5lowKeepsCap)
+                currentMethod = std::string(native::lowlatency::GetStatus().path) + " (Optical F5Low)";
+            else if (XellHooks::canLimit())
                 currentMethod = "Game's XeLL";
             else
                 currentMethod = "Fallback";

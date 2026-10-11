@@ -254,6 +254,62 @@ int main()
         CHECK(waitCalls == 0);
     }
 
+    // The frame cap while we run (PlanCap): one waiter per frame
+    {
+        CapInputs cap;
+
+        // Not running: not ours, whatever the cap
+        cap.capFps = 60.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::NotOurs);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // Running with no cap: ours, nothing to limit (the limiter has nothing to do either)
+        cap.running = true;
+        cap.capFps = 0.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // Real Reflex, no frame generation: Reflex keeps 60 fps
+        cap.capFps = 60.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 16667);
+
+        // Real Reflex + FSR FG where the limiter waits before our Sleep: the limiter keeps it
+        cap.fsrFgActive = true;
+        cap.limiterBeforeSleep = true;
+        CHECK(PlanCap(cap).owner == CapOwner::Limiter);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // ... a cap of 0 does not change who would keep it
+        cap.capFps = 0.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::Limiter);
+        cap.capFps = 60.0f;
+
+        // ... on the Vulkan bridge (limiter after our Sleep): Reflex keeps the game's frames, half of the shown 60
+        cap.limiterBeforeSleep = false;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 33333);
+
+        // fakenvapi with FSR FG: its method keeps the game's frames
+        cap.method = Method::Fakenvapi;
+        cap.limiterBeforeSleep = true;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 33333);
+
+        // fakenvapi without frame generation
+        cap.fsrFgActive = false;
+        CHECK(PlanCap(cap).minimumIntervalUs == 16667);
+
+        // XeFG's XeLL counts shown frames
+        cap.method = Method::XellWithXefg;
+        cap.capFps = 120.0f;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+
+        CHECK(IntervalUs(0.0f) == 0);
+        CHECK(IntervalUs(-5.0f) == 0);
+    }
+
     printf(fails == 0 ? "nr_native_low_latency_smoke: PASS\n" : "nr_native_low_latency_smoke: %d FAIL\n", fails);
     return fails == 0 ? 0 : 1;
 }

@@ -166,4 +166,61 @@ inline const char* DecisionText(Decision decision)
     }
 }
 
+// What our calls reach: the method decides how a frame cap is counted.
+enum class Method
+{
+    RealReflex,  // the driver's Reflex (NVIDIA, real nvapi)
+    Fakenvapi,   // fakenvapi as the game's nvapi: Anti-Lag 2, XeLL or LatencyFlex
+    XellWithXefg // XeFG's XeLL (fakenvapi's context, forced by XeFG on every GPU)
+};
+
+// Who keeps [Framerate] FramerateLimit while we run. One waiter per frame: the low-latency method itself when it can
+// (NVIDIA and Intel both keep the render queue empty best with their own limit; Intel discourages a second limiter
+// next to XeLL), OptiScaler's limiter only where the method's own limit costs more.
+enum class CapOwner
+{
+    NotOurs,    // we do not run: the limiter and the game's own Reflex decide, as before
+    LowLatency, // our SetSleepMode carries the cap; OptiScaler's limiter stands aside
+    Limiter     // OptiScaler's limiter keeps it, waiting before our Sleep
+};
+
+struct CapInputs
+{
+    bool running = false;            // our low latency runs (Decision::Run)
+    float capFps = 0.0f;             // FramerateLimit, the shown frame rate; 0: no cap
+    Method method = Method::RealReflex;
+    bool fsrFgActive = false;        // FSR frame generation is generating frames
+    bool limiterBeforeSleep = false; // the limiter's wait comes before our Sleep on this present path (FGPresent)
+};
+
+struct CapPlan
+{
+    CapOwner owner = CapOwner::NotOurs;
+    uint32_t minimumIntervalUs = 0; // for our SetSleepMode; 0: no limit there
+};
+
+inline uint32_t IntervalUs(float fps) { return fps > 0.0f ? (uint32_t) (1000000.0f / fps + 0.5f) : 0u; }
+
+inline CapPlan PlanCap(const CapInputs& in)
+{
+    if (!in.running)
+        return {};
+
+    // Real Reflex's limit with FSR frame generation costs performance (upstream's warning in the Framerate menu); the
+    // limiter keeps it where its wait comes before our Sleep. Elsewhere (the Vulkan bridge, whose limiter waits inside
+    // the D3D12 present after our Sleep) Reflex's limit is still better than waiting after Sleep.
+    if (in.method == Method::RealReflex && in.fsrFgActive && in.limiterBeforeSleep)
+        return { CapOwner::Limiter, 0 };
+
+    if (in.capFps <= 0.0f)
+        return { CapOwner::LowLatency, 0 };
+
+    // XeLL, told by XeFG that frame generation runs, counts shown frames
+    if (in.method == Method::XellWithXefg)
+        return { CapOwner::LowLatency, IntervalUs(in.capFps) };
+
+    // Reflex, Anti-Lag 2 and LatencyFlex pace the game's own frames: FSR frame generation doubles them
+    return { CapOwner::LowLatency, IntervalUs(in.fsrFgActive ? in.capFps / 2.0f : in.capFps) };
+}
+
 }// namespace native::lowlatency

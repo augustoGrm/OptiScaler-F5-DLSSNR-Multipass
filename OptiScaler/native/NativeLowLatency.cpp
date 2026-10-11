@@ -44,12 +44,18 @@ std::atomic<IUnknown*> g_sleepModeDevice = nullptr;   // the device our Reflex m
 std::atomic<const void*> g_gameQueue = nullptr;       // the queue the game's frame is submitted to (D3D12)
 std::atomic<double> g_frameGenerationPresentAt = 0.0; // last PresentSource::FrameGeneration call, ms
 std::atomic<Decision> g_decision = Decision::NoF5Low;
+std::atomic<CapOwner> g_capOwner = CapOwner::NotOurs; // PlanCap's answer on the last present we ran on
 
 // Only the game's present thread touches these.
 Table g_table = Table::Unknown;
 uint64_t g_frameId = 0;
 bool g_presentStarted = false; // PRESENT_START of the frame in flight went out, PRESENT_END is owed
 bool g_sleepModeSent = false;  // we turned Reflex on
+// What our last SetSleepMode carried: sent again when the cap, Boost or XeFG's XeLL context changes (XeFG sets a new
+// context's sleep mode itself, with no limit, whenever it makes one)
+uint32_t g_sentIntervalUs = 0;
+bool g_sentBoost = false;
+void* g_sentXellContext = nullptr;
 
 // GetStatus
 double g_latencyAskedAt = 0.0;
@@ -98,15 +104,17 @@ void Marker(Api api, IUnknown* device, NV_LATENCY_MARKER_TYPE type)
     ReflexHooks::ownSetLatencyMarker(device, &params);
 }
 
-void SetSleepMode(Api api, IUnknown* device, bool on)
+// `minimumIntervalUs`: the frame cap when we keep it (PlanCap), else 0 and OptiScaler's own limiter keeps it.
+// ReflexHooks never puts its stored cap into our calls.
+void SetSleepMode(Api api, IUnknown* device, bool on, uint32_t minimumIntervalUs = 0, bool boost = false)
 {
     if (api == Api::Vulkan)
     {
         NV_VULKAN_SET_SLEEP_MODE_PARAMS params {};
         params.version = NV_VULKAN_SET_SLEEP_MODE_PARAMS_VER;
         params.bLowLatencyMode = on;
-        params.bLowLatencyBoost = false;
-        params.minimumIntervalUs = 0;
+        params.bLowLatencyBoost = on && boost;
+        params.minimumIntervalUs = on ? minimumIntervalUs : 0;
         ReflexHooks::ownSetSleepModeVulkan(reinterpret_cast<HANDLE>(device), &params);
         return;
     }
@@ -114,9 +122,8 @@ void SetSleepMode(Api api, IUnknown* device, bool on)
     NV_SET_SLEEP_MODE_PARAMS params {};
     params.version = NV_SET_SLEEP_MODE_PARAMS_VER;
     params.bLowLatencyMode = on;
-    params.bLowLatencyBoost = false;
-    // 0: OptiScaler's own limiter keeps the fps cap (ReflexHooks does not hand it to our calls)
-    params.minimumIntervalUs = 0;
+    params.bLowLatencyBoost = on && boost;
+    params.minimumIntervalUs = on ? minimumIntervalUs : 0;
     // The markers are approximate (no engine hooks), so the driver must not tune itself to them
     params.bUseMarkersToOptimize = false;
     params.bUseMinQueueTime = false;
@@ -283,6 +290,10 @@ Decision Evaluate(Api api, IUnknown* device)
 void Stop(Api api, IUnknown* device)
 {
     g_running = false;
+    g_capOwner = CapOwner::NotOurs;
+    g_sentIntervalUs = 0;
+    g_sentBoost = false;
+    g_sentXellContext = nullptr;
 
     if (g_presentStarted && device != nullptr && !ReflexHooks::gameCalledReflex())
         Marker(api, device, PRESENT_END);
@@ -323,12 +334,35 @@ const void* GameQueue()
     return state.currentCommandQueue;
 }
 
+// XeFG's XeLL routing hangs off the D3D entry points (ReflexHooks): a Vulkan game gets it through the bridge's D3D12
+// device, but not through the Vulkan ones
+Method CurrentMethod(Api api)
+{
+    if (State::Instance().activeFgOutput == FGOutput::XeFG && api == Api::D3D)
+        return Method::XellWithXefg;
+
+    return fakenvapi::isUsingAsMainNvapi() ? Method::Fakenvapi : Method::RealReflex;
+}
+
+CapPlan PlanFrameCap(Api api)
+{
+    auto& state = State::Instance();
+
+    CapInputs in;
+    in.running = true;
+    in.capFps = Config::Instance()->FramerateLimit.value_or_default();
+    in.method = CurrentMethod(api);
+    in.fsrFgActive = state.activeFgOutput == FGOutput::FSRFG && state.currentFG != nullptr &&
+                     state.currentFG->IsActive() && !state.currentFG->IsPaused();
+    // FGHooks::FGPresent's limiter waits before our OnPresentEnd there; the Vulkan bridge's D3D12 present (and its
+    // limiter) comes after the game's present, our Sleep included
+    in.limiterBeforeSleep = state.swapchainInteropApi != SwapchainInteropApi::VkwDx12;
+    return PlanCap(in);
+}
+
 const char* PathText(Api api)
 {
-    // XeFG's XeLL routing hangs off the D3D entry points: a Vulkan game gets it through the bridge's D3D12 device, but
-    // not through the Vulkan ones
-    const bool viaFakenvapi =
-        fakenvapi::isUsingAsMainNvapi() || (State::Instance().activeFgOutput == FGOutput::XeFG && api == Api::D3D);
+    const bool viaFakenvapi = CurrentMethod(api) != Method::RealReflex;
 
     if (!viaFakenvapi)
         return "NVIDIA Reflex";
@@ -391,18 +425,34 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         return;
     }
 
+    const auto cap = PlanFrameCap(api);
+    const bool boost = Config::Instance()->DlssNrNativeLowLatencyBoost.value_or_default();
+    // XeFG makes a new XeLL context (and sets its sleep mode, with no limit) when its swap chain is made again
+    void* xellContext = CurrentMethod(api) == Method::XellWithXefg ? fakenvapi::getCurrentContext() : nullptr;
+
     if (!g_running.load(std::memory_order_relaxed) || g_sleepModeDevice.load() != device ||
-        g_sleepModeApi.load() != api)
+        g_sleepModeApi.load() != api || cap.minimumIntervalUs != g_sentIntervalUs || boost != g_sentBoost ||
+        xellContext != g_sentXellContext)
     {
-        // Once, and again when the device is a new one
-        SetSleepMode(api, device, true);
+        // Once, again when the device is a new one, and when the cap or Boost changes
+        SetSleepMode(api, device, true, cap.minimumIntervalUs, boost);
         g_sleepModeSent = true;
         g_sleepModeApi = api;
         g_sleepModeDevice = device;
 
         if (!g_running.load(std::memory_order_relaxed))
             LOG_INFO("Optical F5Low low latency: started ({})", PathText(api));
+
+        if (cap.minimumIntervalUs != g_sentIntervalUs || boost != g_sentBoost)
+            LOG_INFO("Optical F5Low low latency: frame cap {} us in {}, Boost {}", cap.minimumIntervalUs,
+                     cap.owner == CapOwner::Limiter ? "OptiScaler's limiter" : PathText(api), boost ? "on" : "off");
+
+        g_sentIntervalUs = cap.minimumIntervalUs;
+        g_sentBoost = boost;
+        g_sentXellContext = xellContext;
     }
+
+    g_capOwner = cap.owner;
 
     if (g_presentStarted)
         Marker(api, device, PRESENT_END);
@@ -512,6 +562,18 @@ void OnDeviceReleasedVulkan(VkDevice device)
     }
 }
 
+bool OwnsFrameCap()
+{
+    return g_running.load(std::memory_order_relaxed) &&
+           g_capOwner.load(std::memory_order_relaxed) == CapOwner::LowLatency;
+}
+
+bool WantsBoostForFrameGeneration()
+{
+    return g_decision.load(std::memory_order_relaxed) == Decision::FrameGenerationOwnsReflex &&
+           Config::Instance()->DlssNrNativeLowLatencyBoost.value_or_default();
+}
+
 Status GetStatus()
 {
     Status status;
@@ -519,6 +581,8 @@ Status GetStatus()
 
     if (status.decision != Decision::Run || !g_running.load(std::memory_order_relaxed))
         return status;
+
+    status.capOwner = g_capOwner.load();
 
     const auto api = g_deviceApi.load();
     status.path = PathText(api);

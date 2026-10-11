@@ -102,10 +102,11 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_Sleep(IUnknown* pDev)
     if (State::Instance().activeFgOutput == FGOutput::XeFG)
         return nvapi_calls::NvAPI_D3D_Sleep(pDev);
 
-    // On the Vulkan bridge our own Sleep (Optical F5Low's low latency, on the bridge's private D3D12 device) is not a
-    // Reflex device of the game's: stored, update() would see one and hand the fps cap to Reflex (reflexLimitsFps),
-    // skipping OptiScaler's own limiter. (D3D games keep storing it, as they have.)
-    if (!(_ownCall && State::Instance().swapchainInteropApi == SwapchainInteropApi::VkwDx12))
+    // Our own Sleep (Optical F5Low's low latency) is not a Reflex device of the game's: stored, update() would see one
+    // and hand the fps cap to Reflex (reflexLimitsFps) with the game's sleep parameters, which were never set (version
+    // 0, low latency off), skipping OptiScaler's own limiter. Our SetSleepMode carries the cap itself
+    // (native/NativeLowLatency.cpp).
+    if (!_ownCall)
         _lastSleepDev = pDev;
 
     return o_NvAPI_D3D_Sleep(pDev);
