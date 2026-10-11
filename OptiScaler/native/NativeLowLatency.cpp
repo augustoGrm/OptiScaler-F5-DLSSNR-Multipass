@@ -469,6 +469,7 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         const bool wasRefused = g_sentRefused;
         const bool changed =
             !g_sent || g_sent->minimumIntervalUs != call.minimumIntervalUs || g_sent->boost != call.boost;
+        const bool newXellContext = g_sent && g_sent->xellGeneration != call.xellGeneration;
         const auto result = SetSleepMode(api, device, true, call.minimumIntervalUs, call.boost);
 
         g_sleepModeSent = true;
@@ -486,6 +487,11 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         {
             LOG_WARN("Optical F5Low low latency: SetSleepMode refused ({}), OptiScaler's limiter keeps the frame cap",
                      magic_enum::enum_name(result));
+        }
+        else if (!g_sentRefused && newXellContext && !changed)
+        {
+            LOG_INFO("Optical F5Low low latency: frame cap {:.0f} fps sent again, XeFG made a new XeLL context",
+                     capInputs.capFps);
         }
         else if (!g_sentRefused && (changed || wasRefused))
         {
