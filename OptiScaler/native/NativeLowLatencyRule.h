@@ -150,8 +150,9 @@ inline const char* StatusLabel(Decision decision)
     }
 }
 
-// The reason when it does not run. Run has none here: the method in use names it.
-inline const char* DecisionText(Decision decision)
+// The reason when it does not run. Run has none here: the method in use names it. `gameReflexFeedsXell`: the game's own
+// Reflex calls are sent to XeFG's XeLL (native/BridgedReflexRule.h), so its Reflex settings are not the thing to change.
+inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = false)
 {
     switch (decision)
     {
@@ -160,7 +161,8 @@ inline const char* DecisionText(Decision decision)
     case Decision::NoF5Low:
         return "No Optical F5Low mode or XeFG is running";
     case Decision::GameRunsReflex:
-        return "Please use the Game's Own Reflex Settings";
+        return gameReflexFeedsXell ? "The game's Reflex feeds XeFG's XeLL"
+                                   : "Please use the Game's Own Reflex Settings";
     case Decision::GameRunsXell:
         return "The game runs XeLL itself";
     case Decision::ForceReflexDisabled:

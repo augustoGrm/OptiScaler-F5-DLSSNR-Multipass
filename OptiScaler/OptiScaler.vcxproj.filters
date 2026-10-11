@@ -521,6 +521,9 @@
     <ClInclude Include="native\NativeLowLatency.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="native\BridgedReflexRule.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="native\NativeLowLatencyRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>

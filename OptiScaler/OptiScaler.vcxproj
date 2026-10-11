@@ -541,6 +541,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="resource_tracking\GenericDepth_VkEvents.h" />
     <ClInclude Include="native\VirtualUpscalerDriver.h" />
     <ClInclude Include="native\NativeDriver.h" />
+    <ClInclude Include="native\BridgedReflexRule.h" />
     <ClInclude Include="native\NativeLowLatency.h" />
     <ClInclude Include="native\NativeLowLatencyRule.h" />
     <ClInclude Include="native\NativeLowLatencyVkSync.h" />
