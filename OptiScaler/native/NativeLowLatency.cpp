@@ -65,6 +65,7 @@ bool g_sleepModeSent = false;  // we turned Reflex on
 std::optional<SleepModeCall> g_sent;
 bool g_sentRefused = false;
 double g_sentAt = 0.0;
+CapSettle g_capSettle; // the cap plan in force (SettleCap)
 
 // GetStatus
 double g_latencyAskedAt = 0.0;
@@ -308,6 +309,7 @@ void Stop(Api api, IUnknown* device)
     g_xellIdle = false;
     g_sent.reset();
     g_sentRefused = false;
+    g_capSettle = {};
 
     if (g_presentStarted && device != nullptr && !ReflexHooks::gameCalledReflex())
         Marker(api, device, PRESENT_END);
@@ -381,6 +383,42 @@ CapInputs FrameCapInputs(Api api)
     // limiter) comes after the game's present, our Sleep included. Only read together with fsrFgActive (FGPresent).
     in.limiterBeforeSleep = state.swapchainInteropApi != SwapchainInteropApi::VkwDx12;
     return in;
+}
+
+// Intel's XeLL guide: all GPU work finished before xellSetSleepMode (R11). The game's queue is the work we can see
+// (XeFG's own queue is not ours). A settings change is rare (cap, Boost, a new XeLL context, the cap handed over), so
+// is the stall: about one frame's GPU work.
+void WaitForGameQueueIdle()
+{
+    auto* queue = static_cast<ID3D12CommandQueue*>(const_cast<void*>(GameQueue()));
+
+    if (queue == nullptr)
+        return;
+
+    ID3D12Device* device = nullptr;
+
+    if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))))
+        return;
+
+    ID3D12Fence* fence = nullptr;
+
+    if (SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))))
+    {
+        if (SUCCEEDED(queue->Signal(fence, 1)) && fence->GetCompletedValue() < 1)
+        {
+            if (HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr); event != nullptr)
+            {
+                if (SUCCEEDED(fence->SetEventOnCompletion(1, event)) && WaitForSingleObject(event, 250) == WAIT_TIMEOUT)
+                    LOG_WARN("Optical F5Low low latency: the game's queue did not go idle within 250 ms");
+
+                CloseHandle(event);
+            }
+        }
+
+        fence->Release();
+    }
+
+    device->Release();
 }
 
 const char* PathText(Api api)
@@ -458,9 +496,8 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     auto capInputs = FrameCapInputs(api);
     const auto method = capInputs.method;
 
-    // What the method would carry if it takes our call: planned as if the last one had gone through
-    capInputs.sleepModeFailed = false;
-    auto cap = PlanCap(capInputs);
+    // The plan in force: a new one once it has held for a few presents (frame generation's short pauses)
+    const auto cap = SettleCap(g_capSettle, PlanCap(capInputs));
 
     SleepModeCall call;
     call.api = api;
@@ -479,6 +516,10 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         const bool changed =
             !g_sent || g_sent->minimumIntervalUs != call.minimumIntervalUs || g_sent->boost != call.boost;
         const bool newXellContext = g_sent && g_sent->xellGeneration != call.xellGeneration;
+
+        if (api == Api::D3D && (method == Method::XellWithXefg || capInputs.fakenvapiXell))
+            WaitForGameQueueIdle();
+
         const auto result = SetSleepMode(api, device, true, call.minimumIntervalUs, call.boost);
 
         g_sleepModeSent = true;
@@ -511,10 +552,7 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         }
     }
 
-    capInputs.sleepModeFailed = g_sentRefused;
-    cap = PlanCap(capInputs);
-
-    g_capOwner = cap.owner;
+    g_capOwner = OwnerAfterCall(cap, g_sentRefused);
     g_xellIdle = XellIdle(capInputs);
 
     if (g_presentStarted)

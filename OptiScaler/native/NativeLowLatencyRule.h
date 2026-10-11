@@ -206,7 +206,6 @@ struct CapInputs
     bool intelGpu = false;           // XeLL works on its own only on Intel GPUs
     bool xefgGenerating = false;     // XeFG is generating frames (not paused, not off, not in exclusive full screen)
     bool fakenvapiXell = false;      // Method::Fakenvapi has picked XeLL (Anti-Lag 2 missing: fakenvapi falls back)
-    bool sleepModeFailed = false;    // our last SetSleepMode was refused: nothing carries the cap there
 };
 
 // XeLL on an NVIDIA or AMD GPU does nothing unless XeFG generates frames (Intel: "XeLL will not perform latency
@@ -226,6 +225,8 @@ struct CapPlan
 {
     CapOwner owner = CapOwner::NotOurs;
     uint32_t minimumIntervalUs = 0; // for our SetSleepMode; 0: no limit there
+
+    bool operator==(const CapPlan&) const = default;
 };
 
 // Clamped as misc/FrameLimit does: a tiny ini cap must not overflow the conversion
@@ -242,10 +243,6 @@ inline CapPlan PlanCap(const CapInputs& in)
 {
     if (!in.running)
         return {};
-
-    // The method never took our limit: the limiter keeps the cap until a resend goes through
-    if (in.sleepModeFailed)
-        return { CapOwner::Limiter, 0 };
 
     // Real Reflex's limit with FSR frame generation costs performance (upstream's warning in the Framerate menu); the
     // limiter keeps it where its wait comes before our Sleep. Elsewhere (the Vulkan bridge, whose limiter waits inside
@@ -267,6 +264,55 @@ inline CapPlan PlanCap(const CapInputs& in)
 
     // Reflex, Anti-Lag 2 and LatencyFlex pace the game's own frames: FSR frame generation doubles them
     return { CapOwner::LowLatency, IntervalUs(in.fsrFgActive ? in.capFps / 2.0f : in.capFps) };
+}
+
+// Who keeps the cap after our SetSleepMode: a method that refused it never took the limit, so the limiter keeps it
+// until a resend goes through
+inline CapOwner OwnerAfterCall(const CapPlan& plan, bool refused)
+{
+    return refused && plan.owner != CapOwner::NotOurs ? CapOwner::Limiter : plan.owner;
+}
+
+// A new plan is taken once it has held for `kCapSettlePresents` presents: frame generation pauses for a few frames
+// (its toggles, a changed interpolation count) would otherwise hand the cap back and forth, each time with a sleep mode
+// change (Intel: GPU idle first, R11). The first plan is taken at once.
+inline constexpr int kCapSettlePresents = 8;
+
+struct CapSettle
+{
+    bool started = false;
+    CapPlan applied;
+    CapPlan pending;
+    int held = 0; // presents `pending` has held
+};
+
+inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, int needed = kCapSettlePresents)
+{
+    if (!settle.started || needed <= 1)
+    {
+        settle = { true, planned, planned, 0 };
+        return planned;
+    }
+
+    if (planned == settle.applied)
+    {
+        settle.pending = planned;
+        settle.held = 0;
+        return settle.applied;
+    }
+
+    if (planned == settle.pending)
+        ++settle.held;
+    else
+        settle.pending = planned, settle.held = 1;
+
+    if (settle.held >= needed)
+    {
+        settle.applied = planned;
+        settle.held = 0;
+    }
+
+    return settle.applied;
 }
 
 // What one SetSleepMode of ours carried, and whether the method took it

@@ -399,9 +399,43 @@ int main()
             r.capFps = 60.0f;
             r.method = method;
             r.xefgGenerating = true;
-            r.sleepModeFailed = true;
-            CHECK(PlanCap(r).owner == CapOwner::Limiter);
-            CHECK(PlanCap(r).minimumIntervalUs == 0);
+            CHECK(PlanCap(r).owner == CapOwner::LowLatency);
+            CHECK(OwnerAfterCall(PlanCap(r), true) == CapOwner::Limiter);
+            CHECK(OwnerAfterCall(PlanCap(r), false) == CapOwner::LowLatency);
+        }
+
+        // ... not running stays not ours
+        CHECK(OwnerAfterCall(CapPlan {}, true) == CapOwner::NotOurs);
+
+        // A new plan holds for a few presents before it is taken (frame generation's short pauses)
+        {
+            const CapPlan xell { CapOwner::LowLatency, 8333 };
+            const CapPlan limiter { CapOwner::Limiter, 0 };
+            CapSettle settle;
+
+            // The first plan at once
+            CHECK(SettleCap(settle, xell) == xell);
+
+            // A pause shorter than kCapSettlePresents: nothing changes
+            for (int i = 0; i < kCapSettlePresents - 1; ++i)
+                CHECK(SettleCap(settle, limiter) == xell);
+            CHECK(SettleCap(settle, xell) == xell);
+
+            // ... and the count starts over after it
+            for (int i = 0; i < kCapSettlePresents - 1; ++i)
+                CHECK(SettleCap(settle, limiter) == xell);
+
+            // A pause that lasts: taken on its kCapSettlePresents-th present
+            CHECK(SettleCap(settle, limiter) == limiter);
+            CHECK(SettleCap(settle, limiter) == limiter);
+
+            // A plan that keeps changing never settles on any of its passing values
+            const CapPlan other { CapOwner::LowLatency, 16667 };
+            for (int i = 0; i < 20; ++i)
+                CHECK(SettleCap(settle, i % 2 ? xell : other) == limiter);
+
+            // needed 1: at once
+            CHECK(SettleCap(settle, other, 1) == other);
         }
 
         CHECK(IntervalUs(0.0f) == 0);
