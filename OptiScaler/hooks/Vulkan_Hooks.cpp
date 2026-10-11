@@ -89,10 +89,106 @@ static PFN_vkSetLatencySleepModeNV o_vkSetLatencySleepModeNV = nullptr;
 static PFN_vkLatencySleepNV o_vkLatencySleepNV = nullptr;
 static PFN_vkSetLatencyMarkerNV o_vkSetLatencyMarkerNV = nullptr;
 
+// A bridged game with XeFG as the output (ReflexHooks::bridgedXellDevice): these calls feed XeFG's XeLL on the bridge's
+// D3D12 device instead of the driver, as the NvAPI_Vulkan_* ones do. The driver gets the sleep mode with low latency
+// off. No game was available to run this through.
+static std::mutex g_ll2Mutex;
+static VkDevice g_ll2Device = VK_NULL_HANDLE;
+static VkSwapchainKHR g_ll2Swapchain = VK_NULL_HANDLE;
+static bool g_ll2HaveMode = false;
+static VkLatencySleepModeInfoNV g_ll2Mode {};
+static bool g_ll2Forwarding = false;
+
+static native::bridgedreflex::SleepMode Ll2SleepMode(const VkLatencySleepModeInfoNV* info)
+{
+    native::bridgedreflex::SleepMode mode;
+
+    if (info != nullptr)
+    {
+        mode.lowLatency = info->lowLatencyMode != VK_FALSE;
+        mode.boost = info->lowLatencyBoost != VK_FALSE;
+        mode.minimumIntervalUs = info->minimumIntervalUs;
+    }
+
+    return mode;
+}
+
+// XeLL gets the game's mode; the driver the same call with low latency off (null: the game switched it off)
+static VkResult Ll2ForwardSleepMode(ID3D12Device* xellDevice, VkDevice device, VkSwapchainKHR swapchain,
+                                    const VkLatencySleepModeInfoNV* info)
+{
+    auto mode = Ll2SleepMode(info);
+    ReflexHooks::noteLowLatency2SleepMode(info != nullptr ? &mode : nullptr);
+    ReflexHooks::xellSetSleepMode(xellDevice, mode);
+
+    if (info == nullptr)
+        return o_vkSetLatencySleepModeNV(device, swapchain, nullptr);
+
+    const auto split = native::bridgedreflex::SplitSleepMode(mode, 0);
+    VkLatencySleepModeInfoNV driver = *info;
+    driver.lowLatencyMode = split.driver.lowLatency ? VK_TRUE : VK_FALSE;
+    driver.lowLatencyBoost = split.driver.boost ? VK_TRUE : VK_FALSE;
+    driver.minimumIntervalUs = split.driver.minimumIntervalUs;
+    return o_vkSetLatencySleepModeNV(device, swapchain, &driver);
+}
+
+// The device the game's calls go to XeLL on, else null. The first call after a change of owner gives the game's last mode to
+// the new one.
+static ID3D12Device* Ll2XellDevice()
+{
+    auto* xellDevice = ReflexHooks::bridgedXellDevice();
+
+    std::lock_guard lock(g_ll2Mutex);
+
+    if ((xellDevice != nullptr) != g_ll2Forwarding)
+    {
+        g_ll2Forwarding = xellDevice != nullptr;
+
+        if (g_ll2HaveMode)
+        {
+            if (xellDevice != nullptr)
+            {
+                Ll2ForwardSleepMode(xellDevice, g_ll2Device, g_ll2Swapchain, &g_ll2Mode);
+            }
+            else
+            {
+                auto mode = g_ll2Mode;
+
+                if (const auto cap = ReflexHooks::frameCapIntervalUs(); cap != 0)
+                    mode.minimumIntervalUs = cap;
+
+                o_vkSetLatencySleepModeNV(g_ll2Device, g_ll2Swapchain, &mode);
+            }
+        }
+    }
+
+    return xellDevice;
+}
+
 static VkResult VKAPI_CALL hkvkSetLatencySleepModeNV(VkDevice device, VkSwapchainKHR swapchain,
                                                      const VkLatencySleepModeInfoNV* pSleepModeInfo)
 {
     ReflexHooks::noteGameVulkanLowLatency2(true);
+
+    // Asked before the new mode is stored: a change of owner hands the previous mode over first
+    auto* xellDevice = Ll2XellDevice();
+
+    {
+        std::lock_guard lock(g_ll2Mutex);
+        g_ll2Device = device;
+        g_ll2Swapchain = swapchain;
+        g_ll2HaveMode = pSleepModeInfo != nullptr;
+
+        if (pSleepModeInfo != nullptr)
+        {
+            g_ll2Mode = *pSleepModeInfo;
+            g_ll2Mode.pNext = nullptr;
+        }
+    }
+
+    if (xellDevice != nullptr)
+        return Ll2ForwardSleepMode(xellDevice, device, swapchain, pSleepModeInfo);
+
     return o_vkSetLatencySleepModeNV(device, swapchain, pSleepModeInfo);
 }
 
@@ -100,6 +196,17 @@ static VkResult VKAPI_CALL hkvkLatencySleepNV(VkDevice device, VkSwapchainKHR sw
                                               const VkLatencySleepInfoNV* pSleepInfo)
 {
     ReflexHooks::noteGameVulkanLowLatency2(false);
+
+    if (auto* xellDevice = Ll2XellDevice(); xellDevice != nullptr && pSleepInfo != nullptr)
+    {
+        ReflexHooks::xellSleep(xellDevice);
+
+        // The driver's sleep would have signalled the game's semaphore: from the host now. If that cannot be done the
+        // driver's own sleep (its mode is off) does it, the game must never wait for a value that does not come.
+        if (VulkanHooks::SignalTimelineSemaphore(device, pSleepInfo->signalSemaphore, pSleepInfo->value))
+            return VK_SUCCESS;
+    }
+
     return o_vkLatencySleepNV(device, swapchain, pSleepInfo);
 }
 
@@ -107,6 +214,16 @@ static void VKAPI_CALL hkvkSetLatencyMarkerNV(VkDevice device, VkSwapchainKHR sw
                                               const VkSetLatencyMarkerInfoNV* pLatencyMarkerInfo)
 {
     ReflexHooks::noteGameVulkanLowLatency2(false);
+
+    if (auto* xellDevice = Ll2XellDevice(); xellDevice != nullptr && pLatencyMarkerInfo != nullptr)
+    {
+        // Vulkan has no PC_LATENCY_PING: the out of band markers sit one place higher in NVAPI's list
+        uint32_t nvapiMarker = 0;
+
+        if (native::bridgedreflex::NvApiMarkerFromVulkanNV((uint32_t) pLatencyMarkerInfo->marker, &nvapiMarker))
+            ReflexHooks::xellMarker(xellDevice, pLatencyMarkerInfo->presentID, nvapiMarker);
+    }
+
     o_vkSetLatencyMarkerNV(device, swapchain, pLatencyMarkerInfo);
 }
 
@@ -196,6 +313,34 @@ bool VulkanHooks::WaitTimelineSemaphore(VkDevice device, VkSemaphore semaphore, 
     info.pValues = &value;
 
     return wait(device, &info, timeoutNs) == VK_SUCCESS;
+}
+
+bool VulkanHooks::SignalTimelineSemaphore(VkDevice device, VkSemaphore semaphore, uint64_t value)
+{
+    static PFN_vkSignalSemaphore signal = nullptr;
+    static VkDevice signalDevice = VK_NULL_HANDLE;
+
+    if (signal == nullptr || signalDevice != device)
+    {
+        signal = o_vkGetDeviceProcAddr != nullptr
+                     ? reinterpret_cast<PFN_vkSignalSemaphore>(o_vkGetDeviceProcAddr(device, "vkSignalSemaphore"))
+                     : nullptr;
+
+        if (signal == nullptr && o_vkGetDeviceProcAddr != nullptr)
+            signal = reinterpret_cast<PFN_vkSignalSemaphore>(o_vkGetDeviceProcAddr(device, "vkSignalSemaphoreKHR"));
+
+        signalDevice = device;
+    }
+
+    if (signal == nullptr || semaphore == VK_NULL_HANDLE)
+        return false;
+
+    VkSemaphoreSignalInfo info {};
+    info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
+    info.semaphore = semaphore;
+    info.value = value;
+
+    return signal(device, &info) == VK_SUCCESS;
 }
 
 static void HookDevice(VkDevice InDevice)

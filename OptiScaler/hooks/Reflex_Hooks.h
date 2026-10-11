@@ -153,6 +153,8 @@ class ReflexHooks
     // The mode the game set (null: it reset it), so the cap hand-over (setFPSLimit) sends XeLL that one with the cap
     static void noteLowLatency2SleepMode(const native::bridgedreflex::SleepMode* mode);
     static void xellMarker(ID3D12Device* xellDevice, uint64_t frameId, uint32_t nvapiMarker);
+    // OptiScaler's frame cap as an interval, 0: none
+    static uint32_t frameCapIntervalUs() { return _minimumIntervalUs; }
 
     // The device is gone, or our Reflex mode is off: the fps cap no longer goes through it (setFPSLimit, update)
     static void forgetSleepDevice(IUnknown* pDev);

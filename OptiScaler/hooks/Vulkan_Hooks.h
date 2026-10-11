@@ -15,6 +15,9 @@ class VulkanHooks
     // call is not there.
     static bool WaitTimelineSemaphore(VkDevice device, VkSemaphore semaphore, uint64_t value, uint64_t timeoutNs);
 
+    // vkSignalSemaphore on one timeline semaphore, from the host; true when it went through.
+    static bool SignalTimelineSemaphore(VkDevice device, VkSemaphore semaphore, uint64_t value);
+
     // vkCreateWin32SurfaceKHR without our hook (the present bridge makes a surface of its own).
     static PFN_vkCreateWin32SurfaceKHR OriginalCreateWin32Surface();
 
