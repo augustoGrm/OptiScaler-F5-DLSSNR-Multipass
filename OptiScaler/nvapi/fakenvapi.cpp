@@ -232,6 +232,7 @@ bool fakenvapi::forceMode(IUnknown* device, LowLatencyMode mode)
     }
 
     auto result = lowLatencyCtx->set_low_latency_tech_mode(device, mode);
+    ++_forcedModeGeneration;
 
     if (!result)
         LOG_TRACE_FAKENVAPI("Can't set Low Latency context from fakenvapi");
@@ -253,6 +254,8 @@ bool fakenvapi::isLowLatencyActive()
 
     return lowLatencyCtx->is_low_latency_enabled();
 }
+
+uint32_t fakenvapi::forcedModeGeneration() { return _forcedModeGeneration.load(); }
 
 LowLatencyMode fakenvapi::getCurrentMode()
 {

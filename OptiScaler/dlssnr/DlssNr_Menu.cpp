@@ -1472,19 +1472,30 @@ static void RenderLowLatencySection(Config* config)
     using native::lowlatency::Decision;
     using native::lowlatency::Setting;
 
-    // Off / On / On + Boost. The ini's "true" (any game without Reflex, not only Optical F5Low) stays as it is on On.
+    // Off / On / On + Boost. On is the ini's auto or true (any game without Reflex, not only Optical F5Low): the last
+    // one seen comes back after Off. Off keeps the Boost choice for the next On.
     static const char* modeNames[] = { "Off", "On", "On + Boost" };
+    static Setting lastOn = Setting::Auto;
     const auto setting = config->DlssNrNativeLowLatency.value_or_default();
+
+    if (setting != Setting::Off)
+        lastOn = setting;
+
     int mode = setting == Setting::Off ? 0 : (config->DlssNrNativeLowLatencyBoost.value_or_default() ? 2 : 1);
 
     if (ImGui::Combo("Lower the game's latency##nativelowlatency", &mode, modeNames, IM_ARRAYSIZE(modeNames)))
     {
         if (mode == 0)
+        {
             config->DlssNrNativeLowLatency = Setting::Off;
-        else if (setting == Setting::Off)
-            config->DlssNrNativeLowLatency = Setting::Auto;
+        }
+        else
+        {
+            if (setting == Setting::Off)
+                config->DlssNrNativeLowLatency = lastOn;
 
-        config->DlssNrNativeLowLatencyBoost = mode == 2;
+            config->DlssNrNativeLowLatencyBoost = mode == 2;
+        }
     }
 
     HelpMarker("Makes the latency calls the game doesn't: Reflex on NVIDIA, Anti-Lag 2 / XeLL / LatencyFlex on other "
@@ -1503,9 +1514,10 @@ static void RenderLowLatencySection(Config* config)
     if (status.decision == Decision::Run && status.hasLatency)
         ImGui::Text("Measured latency: %.1f ms", status.latencyMs);
 
-    // On NVIDIA and AMD XeLL does nothing while XeFG generates no frames (paused, off, exclusive full screen)
+    // On NVIDIA and AMD XeLL does nothing while XeFG generates no frames (paused, off, exclusive full screen, or
+    // fakenvapi's own XeLL with no XeFG)
     if (status.decision == Decision::Run && status.xellIdle)
-        ImGui::TextDisabled("XeLL is idle until XeFG generates frames again (on this GPU it needs XeFG).");
+        ImGui::TextDisabled("XeLL does nothing on this GPU while XeFG generates no frames.");
 
     // Who keeps the frame cap while we run: one wait per frame (NativeLowLatencyRule.h PlanCap)
     if (const float cap = config->FramerateLimit.value_or_default();
@@ -1515,8 +1527,9 @@ static void RenderLowLatencySection(Config* config)
                             status.capOwner == CapOwner::Limiter ? "OptiScaler's limiter" : status.path);
     }
 
-    // XeFG cannot run without XeLL (Intel), so a card that has real Reflex gets XeLL with it: say what gives Reflex
-    const auto& gpu = IdentifyGpu::getPrimaryGpu();
+    // XeFG cannot run without XeLL (Intel), so a card that has real Reflex gets XeLL with it: say what gives Reflex.
+    // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
+    static const auto gpu = IdentifyGpu::getPrimaryGpu();
 
     if (gpu.vendorId == VendorId::Nvidia && !fakenvapi::isUsingAsMainNvapi() &&
         State::Instance().activeFgOutput == FGOutput::XeFG)

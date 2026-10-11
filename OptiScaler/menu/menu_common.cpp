@@ -5629,10 +5629,11 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
     auto& menuResScale = ctx.menuResScale;
 
     // Framerate ---------------------
-    // Optical F5Low's low latency keeps the cap while it runs (native/NativeLowLatency.h OwnsFrameCap)
-    const bool f5lowKeepsCap = native::lowlatency::OwnsFrameCap();
+    // While Optical F5Low's low latency runs, it or OptiScaler's limiter keeps the cap (native/NativeLowLatency.h
+    // OwnsFrameCap); the section stays up either way, so it does not come and go as frame generation pauses
+    const bool f5lowRunning = native::lowlatency::Running();
 
-    if (state.reflexLimitsFps || f5lowKeepsCap || config->OverlayMenu.value_or_default())
+    if (state.reflexLimitsFps || f5lowRunning || config->OverlayMenu.value_or_default())
     {
         SeparatorWithHelpMarker(
             "Framerate", "Uses Reflex when possible\nOn AMD/Intel cards, you can use Fakenvapi to substitute Reflex");
@@ -5667,8 +5668,10 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
         }
         else
         {
-            if (f5lowKeepsCap)
+            if (f5lowRunning && native::lowlatency::OwnsFrameCap())
                 currentMethod = std::string(native::lowlatency::GetStatus().path) + " (Optical F5Low)";
+            else if (f5lowRunning)
+                currentMethod = "OptiScaler's limiter (Optical F5Low)";
             else if (XellHooks::canLimit())
                 currentMethod = "Game's XeLL";
             else
@@ -7457,6 +7460,14 @@ void MenuCommon::RenderApiAndTextureSettings(RenderMenuContext& ctx)
             }
 
             ShowHelpMarker("Force V-Sync On/Off & Sync Interval options");
+
+            // FGHooks::FGPresent sends 1 instead (Intel: XeLL, which XeFG runs with, needs sync interval 1)
+            if (config->ForceVsync.value_or(false) && config->VsyncInterval.value_or_default() > 1 &&
+                state.activeFgOutput == FGOutput::XeFG)
+            {
+                ImGui::TextDisabled("XeFG presents with sync interval 1: %d is not used while it runs.",
+                                    config->VsyncInterval.value_or_default());
+            }
 
             if (vsyncChanged && state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr)
             {
