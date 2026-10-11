@@ -276,6 +276,15 @@ void LetGoOfOutput(Bridge& bridge, IDXGISwapChain4* output)
     state.currentRealSwapchain = nullptr;
     state.swapchainInteropApi = SwapchainInteropApi::None;
 
+    // A swapchain released in exclusive full screen makes DXGI raise DXGI_ERROR_INVALID_CALL: back to windowed first.
+    // CreateDx12BridgeSwapChain keeps DXGI's own Alt+Enter off; this is for anything else that put it there.
+    if (BOOL fullscreen = FALSE;
+        output != nullptr && SUCCEEDED(output->GetFullscreenState(&fullscreen, nullptr)) && fullscreen)
+    {
+        LOG_INFO("Vulkan bridge: the D3D12 swapchain was in exclusive full screen, back to windowed before it goes");
+        output->SetFullscreenState(FALSE, nullptr);
+    }
+
     auto fg = state.currentFG;
 
     if (fg != nullptr && fg->Mutex.getOwner() != 1 && fg->SwapchainContext() != nullptr)
