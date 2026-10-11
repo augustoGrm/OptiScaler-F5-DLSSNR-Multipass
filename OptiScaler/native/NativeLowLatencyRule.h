@@ -144,14 +144,16 @@ inline const char* StatusLabel(Decision decision)
     case Decision::ForceReflexDisabled:
     case Decision::ForceXell:
     case Decision::FrameGenerationOwnsReflex:
-        return "Standing Aside";
+        return "Standing aside";
     default:
         return "Off";
     }
 }
 
-// The reason when it does not run. Run has none here: the method in use names it.
-inline const char* DecisionText(Decision decision)
+// The reason when it does not run. Run has none here: the method in use names it. `gameReflexFeedsXell`: the game's own
+// Reflex calls are sent to XeFG's XeLL (native/XefgReflexRule.h), so its Reflex settings are not the thing to change;
+// `forceReflexDisabled`: fakenvapi's Force Disable, which XeLL then gets them with (low latency off).
+inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = false, bool forceReflexDisabled = false)
 {
     switch (decision)
     {
@@ -160,7 +162,11 @@ inline const char* DecisionText(Decision decision)
     case Decision::NoF5Low:
         return "No Optical F5Low mode or XeFG is running";
     case Decision::GameRunsReflex:
-        return "Please use the Game's Own Reflex Settings";
+        if (!gameReflexFeedsXell)
+            return "Use the game's own Reflex settings";
+
+        return forceReflexDisabled ? "The game's Reflex feeds XeFG's XeLL, low latency off by Force Disable"
+                                   : "The game's Reflex feeds XeFG's XeLL";
     case Decision::GameRunsXell:
         return "The game runs XeLL itself";
     case Decision::ForceReflexDisabled:

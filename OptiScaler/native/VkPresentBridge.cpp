@@ -80,6 +80,10 @@ std::mutex g_mutex;
 // Outputs that are up or being let go, without the mutex: XeFG's present thread asks (wrapped_swapchain.cpp LocalPresent)
 // while LetGoOfOutput waits for that thread
 std::atomic<int> g_outputsActive { 0 };
+// The up output's private D3D12 device (Device), without the mutex: the game's Reflex calls and XeFG's present thread
+// ask every frame (hooks/Reflex_Hooks.cpp), the latter while LetGoOfOutput holds the mutex and waits for it. Cleared
+// before frame generation lets go of its swapchain; the device itself lives as long as the bridge.
+std::atomic<ID3D12Device*> g_outputDevice { nullptr };
 std::unordered_map<VkSurfaceKHR, HWND> g_windows;
 std::unique_ptr<Bridge> g_bridge;
 std::vector<std::unique_ptr<Bridge>> g_retired; // output gone, hidden surface kept until their swapchains are destroyed
@@ -250,6 +254,9 @@ void LetGoOfOutput(Bridge& bridge, IDXGISwapChain4* output)
 {
     auto& state = State::Instance();
     HWND window = bridge.window;
+
+    if (auto* device = bridge.device12; device != nullptr)
+        g_outputDevice.compare_exchange_strong(device, nullptr);
 
     MenuOverlayDx::CleanupRenderTarget(true, window);
 
@@ -428,6 +435,7 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
         self->outputUp = true;
         self->outputRule = native::VkOutputFailureRule {};
         ++g_outputsActive;
+        g_outputDevice = self->device12;
         LOG_INFO("Vulkan bridge: D3D12 swapchain {:X} on window {:X} ({}x{}, format {}, {} buffers, {})",
                  (size_t) out.Get(), (size_t) self->window, desc.BufferDesc.Width, desc.BufferDesc.Height,
                  (int) desc.BufferDesc.Format, desc.BufferCount, realFG ? "frame generation's own" : "plain");
@@ -747,11 +755,7 @@ bool OutputActive()
     return g_outputsActive.load(std::memory_order_acquire) > 0;
 }
 
-ID3D12Device* Device()
-{
-    std::lock_guard lock(g_mutex);
-    return g_bridge != nullptr && g_bridge->outputUp ? g_bridge->device12 : nullptr;
-}
+ID3D12Device* Device() { return g_outputDevice.load(std::memory_order_acquire); }
 
 bool CopyToOutput(ID3D12Resource* picture, ID3D12Fence* fence, uint64_t copied, ID3D12Fence* doneFence,
                   uint64_t doneValue, uint64_t signalValue)

@@ -71,6 +71,7 @@ CapSettle g_capSettle; // the cap plan in force (SettleCap)
 double g_latencyAskedAt = 0.0;
 bool g_hasLatency = false;
 float g_latencyMs = 0.0f;
+bool g_latencyEstimated = false;
 
 // NV_LATENCY_MARKER_TYPE and NV_VULKAN_LATENCY_MARKER_TYPE share the same ordinals for every value used here, but are
 // unrelated enum types in the SDK: translated explicitly rather than cast, so a future SDK change cannot silently
@@ -251,6 +252,11 @@ void VulkanSleep(VkDevice device)
     }
 }
 
+bool ForceReflexDisabled()
+{
+    return Config::Instance()->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable;
+}
+
 Inputs GatherInputs(bool deviceAvailable)
 {
     auto config = Config::Instance();
@@ -269,7 +275,7 @@ Inputs GatherInputs(bool deviceAvailable)
 
     in.gameCallsReflex = ReflexHooks::gameCalledReflex();
     in.gameRunsXell = XellHooks::canLimit();
-    in.forceReflexDisabled = config->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable;
+    in.forceReflexDisabled = ForceReflexDisabled();
     in.forceXell = config->ForceXeLL.value_or_default() || state.activeFgInput == FGInput::ForceXeLL;
     in.otherFrameGenerationOwner = state.externalFrameGeneration || state.activeFgOutput == FGOutput::DLSSG;
     in.apiAvailable = g_table != Table::Missing;
@@ -372,9 +378,7 @@ CapInputs FrameCapInputs(Api api)
     in.capFps = Config::Instance()->FramerateLimit.value_or_default();
     in.method = CurrentMethod(api);
     in.fsrFgActive = state.activeFgOutput == FGOutput::FSRFG && fgGenerating;
-    // XeFG passes frames through in exclusive full screen (Intel); realExclusiveFullscreen is set after
-    // FGXeFGForceBorderless had its say, so it means the real thing
-    in.xefgGenerating = state.activeFgOutput == FGOutput::XeFG && fgGenerating && !state.realExclusiveFullscreen;
+    in.xefgGenerating = XefgGenerating();
     in.fakenvapiXell = in.method == Method::Fakenvapi && fakenvapi::getCurrentMode() == LowLatencyMode::XeLL;
 
     // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
@@ -449,13 +453,20 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         return;
 
     const auto decision = Evaluate(api, device);
-    g_decision = decision;
+    const auto previousDecision = g_decision.exchange(decision);
 
     if (decision != Decision::Run)
     {
+        const auto reason = [decision]()
+        { return DecisionText(decision, ReflexHooks::gameReflexFeedsXell(), ForceReflexDisabled()); };
+
+        // Once whenever it changes (a running one logs its stop below)
+        if (decision != previousDecision && !g_running.load(std::memory_order_relaxed))
+            LOG_INFO("{}: not running ({})", LogName(), reason());
+
         if (g_running.load(std::memory_order_relaxed))
         {
-            LOG_INFO("{}: stopped ({})", LogName(), DecisionText(decision));
+            LOG_INFO("{}: stopped ({})", LogName(), reason());
 
             // XeLL's frame IDs go on from the game's own now, which can be below ours (Intel: they rise)
             if (decision == Decision::GameRunsReflex && g_xellFrameIdForFrameGeneration.load() != 0)
@@ -669,6 +680,17 @@ bool WantsBoostForFrameGeneration()
            Config::Instance()->DlssNrNativeLowLatencyBoost.value_or_default();
 }
 
+bool XefgGenerating()
+{
+    auto& state = State::Instance();
+    const bool fgGenerating =
+        state.currentFG != nullptr && state.currentFG->IsActive() && !state.currentFG->IsPaused();
+
+    // XeFG passes frames through in exclusive full screen (Intel); realExclusiveFullscreen is set after
+    // FGXeFGForceBorderless had its say, so it means the real thing
+    return state.activeFgOutput == FGOutput::XeFG && fgGenerating && !state.realExclusiveFullscreen;
+}
+
 void WaitForGameQueueIdle()
 {
     static std::mutex mutex;
@@ -713,6 +735,8 @@ Status GetStatus()
 {
     Status status;
     status.decision = g_decision.load();
+    status.gameReflexFeedsXell = ReflexHooks::gameReflexFeedsXell();
+    status.forceReflexDisabled = ForceReflexDisabled();
 
     if (status.decision != Decision::Run || !g_running.load(std::memory_order_relaxed))
         return status;
@@ -734,6 +758,20 @@ Status GetStatus()
         g_latencyAskedAt = now;
         g_hasLatency = false;
 
+        // fakenvapi's report has the markers' times only; its GPU end is the last marker's plus 0.1 ms
+        const bool estimated = CurrentMethod(api) != Method::RealReflex;
+        const auto ReadLatency = [](const auto& report, bool estimated)
+        {
+            const uint64_t end = estimated ? report.presentEndTime : report.gpuRenderEndTime;
+
+            if (report.frameID != 0 && report.simStartTime != 0 && end > report.simStartTime)
+            {
+                g_latencyMs = (float) (end - report.simStartTime) / 1000.0f;
+                g_latencyEstimated = estimated;
+                g_hasLatency = true;
+            }
+        };
+
         if (api == Api::Vulkan)
         {
             static NV_VULKAN_LATENCY_RESULT_PARAMS results {};
@@ -744,11 +782,7 @@ Status GetStatus()
                 // The newest report is the last; times are in microseconds
                 const auto& report = results.frameReport[63];
 
-                if (report.frameID != 0 && report.simStartTime != 0 && report.gpuRenderEndTime > report.simStartTime)
-                {
-                    g_latencyMs = (float) (report.gpuRenderEndTime - report.simStartTime) / 1000.0f;
-                    g_hasLatency = true;
-                }
+                ReadLatency(report, estimated);
             }
         }
         else
@@ -761,17 +795,14 @@ Status GetStatus()
                 // The newest report is the last; times are in microseconds
                 const auto& report = results.frameReport[63];
 
-                if (report.frameID != 0 && report.simStartTime != 0 && report.gpuRenderEndTime > report.simStartTime)
-                {
-                    g_latencyMs = (float) (report.gpuRenderEndTime - report.simStartTime) / 1000.0f;
-                    g_hasLatency = true;
-                }
+                ReadLatency(report, estimated);
             }
         }
     }
 
     status.hasLatency = g_hasLatency;
     status.latencyMs = g_latencyMs;
+    status.latencyEstimated = g_latencyEstimated;
     return status;
 }
 

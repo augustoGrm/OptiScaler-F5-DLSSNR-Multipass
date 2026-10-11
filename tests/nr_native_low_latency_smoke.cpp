@@ -1,5 +1,7 @@
-// Host check of native/NativeLowLatencyRule.h: when Optical F5Low's own low latency runs and stands aside. No GPU, no
-// game. cl /std:c++20 /EHsc /W4 tests/nr_native_low_latency_smoke.cpp
+// Host check of native/NativeLowLatencyRule.h (when Optical F5Low's own low latency runs and stands aside) and
+// native/XefgReflexRule.h (a game's own Reflex with XeFG). No GPU, no game.
+// cl /std:c++20 /EHsc /W4 /Iexternal\vulkan\include tests/nr_native_low_latency_smoke.cpp
+#include "../OptiScaler/native/XefgReflexRule.h"
 #include "../OptiScaler/native/NativeLowLatencyRule.h"
 #include "../OptiScaler/native/NativeLowLatencyVkSync.h"
 #include "../OptiScaler/framegen/xefg/XeFGFrameId.h"
@@ -7,6 +9,8 @@
 #include <cstdio>
 #include <cstring>
 #include <initializer_list>
+
+#include <vulkan/vulkan_core.h>
 
 using namespace native::lowlatency;
 
@@ -112,14 +116,14 @@ int main()
         CHECK(DecisionText(d)[0] != '\0');
 
     CHECK(DecisionText(Decision::Run)[0] == '\0');
-    CHECK(strcmp(DecisionText(Decision::GameRunsReflex), "Please use the Game's Own Reflex Settings") == 0);
+    CHECK(strcmp(DecisionText(Decision::GameRunsReflex), "Use the game's own Reflex settings") == 0);
 
-    // The status label: On when it runs, Standing Aside when something else owns latency, Off otherwise
+    // The status label: On when it runs, Standing aside when something else owns latency, Off otherwise
     CHECK(strcmp(StatusLabel(Decision::Run), "On") == 0);
 
     for (auto d : { Decision::GameRunsReflex, Decision::GameRunsXell, Decision::ForceReflexDisabled,
                     Decision::ForceXell, Decision::FrameGenerationOwnsReflex })
-        CHECK(strcmp(StatusLabel(d), "Standing Aside") == 0);
+        CHECK(strcmp(StatusLabel(d), "Standing aside") == 0);
 
     for (auto d : { Decision::SettingOff, Decision::NoF5Low, Decision::NoApi })
         CHECK(strcmp(StatusLabel(d), "Off") == 0);
@@ -578,6 +582,104 @@ int main()
         CHECK(!history.Contains(1));
         CHECK(history.Contains(2));
         CHECK(history.Contains(xefg::FrameIdHistory::kSize + 1));
+    }
+
+    // A bridged Vulkan game's own Reflex feeding XeFG's XeLL (native/XefgReflexRule.h)
+    {
+        using namespace native::xefgreflex;
+
+        // XeFG output and the bridge's device; never dxvk without the Vulkan bridge
+        CHECK(ShouldForward(true, true, false));
+        CHECK(!ShouldForward(false, true, false)); // another output: the driver keeps the game's Reflex
+        CHECK(!ShouldForward(true, false, false)); // no bridge device (plain Vulkan, bridge down or being let go of)
+        CHECK(!ShouldForward(true, true, true));   // dxvk with no Vulkan bridge: the D3D hooks and dxvk own it
+        CHECK(!ShouldForward(true, false, true));
+
+        // VkLatencyMarkerNV against NVAPI's NV_LATENCY_MARKER_TYPE (NVAPI has PC_LATENCY_PING at 8)
+        static_assert(VK_LATENCY_MARKER_SIMULATION_START_NV == 0 && VK_LATENCY_MARKER_TRIGGER_FLASH_NV == 7);
+        static_assert(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV == 8 &&
+                      VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV == 11);
+        uint32_t nv = 99;
+
+        for (uint32_t vk = 0; vk <= 7; ++vk)
+        {
+            CHECK(NvApiMarkerFromVulkanNV(vk, &nv) && nv == vk);
+        }
+
+        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV, &nv) && nv == 9);
+        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_END_NV, &nv) && nv == 10);
+        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_START_NV, &nv) && nv == 11);
+        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV, &nv) && nv == kNvApiLastMarker);
+        CHECK(!NvApiMarkerFromVulkanNV(12, &nv));
+        CHECK(!NvApiMarkerFromVulkanNV(0x7FFFFFFF, &nv));
+
+        // XeLL takes the six frame markers only
+        for (uint32_t marker = 0; marker <= kNvApiLastMarker; ++marker)
+        {
+            CHECK(XellTakesMarker(marker) == (marker <= 5));
+        }
+
+        // The sleep mode: XeLL keeps the game's values (the cap replaces the interval when one is set), the driver's is
+        // all off, the interval too (only one of the two may wait)
+        SleepMode game;
+        game.lowLatency = true;
+        game.boost = true;
+        game.minimumIntervalUs = 16667;
+        game.useMarkersToOptimize = true;
+
+        auto xell = SleepModeForOutput(game, 0, true, false);
+        CHECK(xell.lowLatency && xell.boost && xell.minimumIntervalUs == 16667 && xell.useMarkersToOptimize);
+        xell = SleepModeForOutput(game, 8333, true, false);
+        CHECK(xell.lowLatency && xell.minimumIntervalUs == 8333);
+        CHECK(!kDriverSleepMode.lowLatency && !kDriverSleepMode.boost && kDriverSleepMode.minimumIntervalUs == 0);
+        CHECK(!kDriverSleepMode.useMarkersToOptimize);
+
+        // The rule the D3D hooks share: XeFG is the output -> low latency on whatever the game says, the cap in place
+        // of the game's interval; only fakenvapi's Force Disable turns it off; no XeFG -> the game's mode as it is
+        SleepMode gameOff;
+        gameOff.minimumIntervalUs = 16667;
+        auto out = SleepModeForOutput(gameOff, 0, true, false);
+        CHECK(out.lowLatency && out.minimumIntervalUs == 16667);
+        out = SleepModeForOutput(gameOff, 13333, true, false);
+        CHECK(out.lowLatency && out.minimumIntervalUs == 13333);
+        out = SleepModeForOutput(gameOff, 13333, true, true);
+        CHECK(!out.lowLatency && out.minimumIntervalUs == 13333);
+        out = SleepModeForOutput(gameOff, 0, false, false);
+        CHECK(!out.lowLatency && out.minimumIntervalUs == 16667);
+        SleepMode gameOn;
+        gameOn.lowLatency = gameOn.boost = true;
+        out = SleepModeForOutput(gameOn, 0, false, true);
+        CHECK(out.lowLatency && out.boost); // Force Disable is fakenvapi's own business without XeFG
+
+        // Who keeps the cap the game's Reflex hands XeLL: XeLL while it can, OptiScaler's limiter otherwise
+        CHECK(XellHoldsCap(false, false, true));   // NVIDIA/AMD, XeFG generating
+        CHECK(!XellHoldsCap(false, false, false)); // NVIDIA/AMD, XeFG paused or off: XeLL idle
+        CHECK(XellHoldsCap(false, true, false));   // Intel: XeLL works on its own
+        CHECK(XellHoldsCap(false, true, true));
+        CHECK(!XellHoldsCap(true, true, true));    // Force Disable
+        CHECK(!XellHoldsCap(true, false, true));   // Force Disable on NVIDIA/AMD while XeFG generates
+        CHECK(!XellHoldsCap(true, true, false));
+
+        // Reflex off in the game's menu: XeLL still runs (its sleeps carry the cap) and gets the cap
+        SleepMode off;
+        xell = SleepModeForOutput(off, 8333, true, false);
+        CHECK(xell.lowLatency && xell.minimumIntervalUs == 8333);
+
+        // The menu: the game's Reflex stands us aside either way, and the text says where it goes
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex), "Use the game's own Reflex settings") == 0);
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, true), "The game's Reflex feeds XeFG's XeLL") == 0);
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, true, true),
+                          "The game's Reflex feeds XeFG's XeLL, low latency off by Force Disable") == 0);
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, false, true), "Use the game's own Reflex settings") ==
+              0);
+        CHECK(std::strcmp(DecisionText(Decision::SettingOff, true), DecisionText(Decision::SettingOff)) == 0);
+        CHECK(std::strcmp(StatusLabel(Decision::GameRunsReflex), "Standing aside") == 0);
+
+        // The decision itself is unchanged: the game calls Reflex, so we do not
+        Inputs x;
+        x.xefgRunning = true;
+        x.gameCallsReflex = true;
+        CHECK(Decide(x) == Decision::GameRunsReflex);
     }
 
     printf(fails == 0 ? "nr_native_low_latency_smoke: PASS\n" : "nr_native_low_latency_smoke: %d FAIL\n", fails);
