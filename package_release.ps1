@@ -113,6 +113,11 @@ if ($missing.Count -gt 0) {
     exit 1
 }
 
+# Same rule as OptiScaler.dll below: a PDB path names a private build directory.
+if ($bytes.IndexOf('.pdb', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+    throw 'REFUSING: the forwarder carries an embedded PDB path. Release sets GenerateDebugInformation=false.'
+}
+
 New-Item -ItemType Directory -Force -Path $stage | Out-Null
 
 # Files, then folders. Anything not named here does not ship. Runtime files and user-facing
