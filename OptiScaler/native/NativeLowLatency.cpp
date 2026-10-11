@@ -52,8 +52,8 @@ std::atomic<Decision> g_decision = Decision::NoF5Low;
 std::atomic<CapOwner> g_capOwner = CapOwner::NotOurs; // PlanCap's answer on the last present we ran on
 std::atomic<bool> g_xellIdle = false;                 // XellIdle on the last present we ran on
 std::atomic<bool> g_forXefgOnly = false;              // Auto runs us for XeFG's XeLL only, no Optical F5Low mode
-// XeLL and XeFG share one frame ID (NativeLowLatencyRule.h NextFrameGenerationId): the ID of our frame in flight while
-// XeFG runs on our XeLL (0: not)
+// XeLL and XeFG share one frame ID (framegen/xefg/XeFGFrameId.h): the ID of our frame in flight while XeFG runs on our
+// XeLL (0: not)
 std::atomic<uint32_t> g_xellFrameIdForFrameGeneration = 0;
 
 // Only the game's present thread touches these.
@@ -264,7 +264,8 @@ Inputs GatherInputs(bool deviceAvailable)
           config->DlssNrNativeInput.value_or_default(), config->DlssNrNativeUpscaler.value_or_default(),
           config->DlssNrNativeFrameGenerationOnly.value_or_default() });
     in.f5lowRunning = shown != DlssNrNativeMode::Shown::Off && !GameUpscalerCalledRecently();
-    in.xefgRunning = state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr;
+    in.xefgRunning = state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr &&
+                     state.currentFG->SwapchainContext() != nullptr;
 
     in.gameCallsReflex = ReflexHooks::gameCalledReflex();
     in.gameRunsXell = XellHooks::canLimit();
@@ -280,8 +281,8 @@ Decision Evaluate(Api api, IUnknown* device)
 {
     const auto inputs = GatherInputs(true);
     auto decision = Decide(inputs);
-    // Auto runs us for XeFG alone (no Optical F5Low mode): the menu and log say so
-    g_forXefgOnly = !inputs.f5lowRunning && inputs.setting == Setting::Auto;
+    // Run for XeFG alone (no Optical F5Low mode): the menu and log say so
+    g_forXefgOnly = !inputs.f5lowRunning && inputs.xefgRunning;
 
     if (decision == Decision::Run && g_table == Table::Unknown)
     {
@@ -385,40 +386,15 @@ CapInputs FrameCapInputs(Api api)
     return in;
 }
 
-// Intel's XeLL guide: all GPU work finished before xellSetSleepMode (R11). The game's queue is the work we can see
-// (XeFG's own queue is not ours). A settings change is rare (cap, Boost, a new XeLL context, the cap handed over), so
-// is the stall: about one frame's GPU work.
-void WaitForGameQueueIdle()
+// Run for XeFG alone (no Optical F5Low mode), the log does not name Optical F5Low
+const char* LogName()
 {
-    auto* queue = static_cast<ID3D12CommandQueue*>(const_cast<void*>(GameQueue()));
+    return g_forXefgOnly.load() ? "Low latency (feeding XeFG's XeLL)" : "Optical F5Low low latency";
+}
 
-    if (queue == nullptr)
-        return;
-
-    ID3D12Device* device = nullptr;
-
-    if (FAILED(queue->GetDevice(IID_PPV_ARGS(&device))))
-        return;
-
-    ID3D12Fence* fence = nullptr;
-
-    if (SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))))
-    {
-        if (SUCCEEDED(queue->Signal(fence, 1)) && fence->GetCompletedValue() < 1)
-        {
-            if (HANDLE event = CreateEventW(nullptr, FALSE, FALSE, nullptr); event != nullptr)
-            {
-                if (SUCCEEDED(fence->SetEventOnCompletion(1, event)) && WaitForSingleObject(event, 250) == WAIT_TIMEOUT)
-                    LOG_WARN("Optical F5Low low latency: the game's queue did not go idle within 250 ms");
-
-                CloseHandle(event);
-            }
-        }
-
-        fence->Release();
-    }
-
-    device->Release();
+std::string CapText(float capFps)
+{
+    return capFps > 0.0f ? std::format("frame cap {:.0f} fps", capFps) : std::string("no frame cap");
 }
 
 const char* PathText(Api api)
@@ -479,7 +455,13 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     {
         if (g_running.load(std::memory_order_relaxed))
         {
-            LOG_INFO("Optical F5Low low latency: stopped ({})", DecisionText(decision));
+            LOG_INFO("{}: stopped ({})", LogName(), DecisionText(decision));
+
+            // XeLL's frame IDs go on from the game's own now, which can be below ours (Intel: they rise)
+            if (decision == Decision::GameRunsReflex && g_xellFrameIdForFrameGeneration.load() != 0)
+                LOG_WARN("{}: the game's own Reflex now feeds XeFG's XeLL; its frame IDs may restart below ours",
+                         LogName());
+
             Stop(api, device);
         }
 
@@ -497,7 +479,8 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     const auto method = capInputs.method;
 
     // The plan in force: a new one once it has held for a few presents (frame generation's short pauses)
-    const auto cap = SettleCap(g_capSettle, PlanCap(capInputs));
+    const auto planned = PlanCap(capInputs);
+    const auto cap = SettleCap(g_capSettle, planned);
 
     SleepModeCall call;
     call.api = api;
@@ -516,10 +499,6 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         const bool changed =
             !g_sent || g_sent->minimumIntervalUs != call.minimumIntervalUs || g_sent->boost != call.boost;
         const bool newXellContext = g_sent && g_sent->xellGeneration != call.xellGeneration;
-
-        if (api == Api::D3D && (method == Method::XellWithXefg || capInputs.fakenvapiXell))
-            WaitForGameQueueIdle();
-
         const auto result = SetSleepMode(api, device, true, call.minimumIntervalUs, call.boost);
 
         g_sleepModeSent = true;
@@ -530,29 +509,29 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         g_sentRefused = result != NVAPI_OK;
 
         if (!g_running.load(std::memory_order_relaxed))
-            LOG_INFO("Optical F5Low low latency: started ({}{})", PathText(api),
-                     g_forXefgOnly.load() ? ", feeding XeFG's XeLL" : "");
+            LOG_INFO("{}: started ({})", LogName(), PathText(api));
 
         // Refused: the latency calls still go out, but the method never took the cap, so the limiter keeps it
         if (g_sentRefused && !wasRefused)
         {
-            LOG_WARN("Optical F5Low low latency: SetSleepMode refused ({}), OptiScaler's limiter keeps the frame cap",
+            LOG_WARN("{}: SetSleepMode refused ({}), OptiScaler's limiter keeps the frame cap", LogName(),
                      magic_enum::enum_name(result));
         }
         else if (!g_sentRefused && newXellContext && !changed)
         {
-            LOG_INFO("Optical F5Low low latency: frame cap {:.0f} fps sent again, XeFG made a new XeLL context",
-                     capInputs.capFps);
+            LOG_INFO("{}: {} sent again, XeFG made a new XeLL context", LogName(), CapText(capInputs.capFps));
         }
         else if (!g_sentRefused && (changed || wasRefused))
         {
-            LOG_INFO("Optical F5Low low latency: frame cap {:.0f} fps in {}, Boost {}", capInputs.capFps,
+            LOG_INFO("{}: {} in {}, Boost {}", LogName(), CapText(capInputs.capFps),
                      cap.owner == CapOwner::Limiter ? "OptiScaler's limiter" : PathText(api),
                      call.boost ? "on" : "off");
         }
     }
 
-    g_capOwner = OwnerAfterCall(cap, g_sentRefused);
+    // XeLL doing nothing cannot hold the cap for the settle window either: the limiter takes it at once (XeLL's interval
+    // waits for the settled plan, it does nothing meanwhile anyway)
+    g_capOwner = OwnerAfterCall(XellIdle(capInputs) ? planned : cap, g_sentRefused);
     g_xellIdle = XellIdle(capInputs);
 
     if (g_presentStarted)
@@ -681,11 +660,6 @@ uint32_t FrameIdForFrameGeneration()
     if (const auto ours = g_xellFrameIdForFrameGeneration.load(); ours != 0 && Running())
         return ours;
 
-    // The game's own Reflex reaches XeLL through fakenvapi with its IDs: the frame being rendered is the one whose
-    // render submit started last (its simulation may already be a frame ahead)
-    if (ReflexHooks::gameCalledReflex() && ReflexHooks::gameIsSendingMarkers())
-        return (uint32_t) ReflexHooks::lastMarkerFrameId(RENDERSUBMIT_START);
-
     return 0;
 }
 
@@ -693,6 +667,46 @@ bool WantsBoostForFrameGeneration()
 {
     return g_decision.load(std::memory_order_relaxed) == Decision::FrameGenerationOwnsReflex &&
            Config::Instance()->DlssNrNativeLowLatencyBoost.value_or_default();
+}
+
+void WaitForGameQueueIdle()
+{
+    static std::mutex mutex;
+    static HANDLE event = nullptr; // reused; one a timed-out wait may still signal is let go, never closed
+
+    std::scoped_lock lock(mutex);
+
+    auto* queue = static_cast<ID3D12CommandQueue*>(const_cast<void*>(GameQueue()));
+
+    if (queue == nullptr)
+        return;
+
+    if (event == nullptr)
+        event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+
+    ID3D12Device* device = nullptr;
+
+    if (event == nullptr || FAILED(queue->GetDevice(IID_PPV_ARGS(&device))))
+        return;
+
+    // A fence of its own each time: held across calls it would keep a released device alive. The calls are rare.
+    ID3D12Fence* fence = nullptr;
+
+    if (SUCCEEDED(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, IID_PPV_ARGS(&fence))))
+    {
+        if (SUCCEEDED(queue->Signal(fence, 1)) && fence->GetCompletedValue() < 1 &&
+            SUCCEEDED(fence->SetEventOnCompletion(1, event)) && WaitForSingleObject(event, 250) == WAIT_TIMEOUT)
+        {
+            LOG_WARN("Low latency: the game's queue did not go idle within 250 ms before a sleep mode change");
+
+            // The fence may still signal it: a new event next time
+            event = nullptr;
+        }
+
+        fence->Release();
+    }
+
+    device->Release();
 }
 
 Status GetStatus()

@@ -5693,6 +5693,14 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
 
         ImGui::Text("Current method: %s", currentMethod.c_str());
 
+        // Run for XeFG alone, the low latency's switch is on a page an XeFG player may never open
+        if (f5lowRunning && !state.reflexLimitsFps && native::lowlatency::GetStatus().forXefgOnly)
+        {
+            ImGui::TextDisabled("OptiScaler feeds XeFG's XeLL itself (the game has no Reflex).");
+            ShowHelpMarker("XeFG always uses XeLL, and XeLL lowers latency only when something sleeps and marks the "
+                           "frames.\nSwitch: Neural Rendering > Optical F5Low > Low latency.");
+        }
+
         if (fakenvapiMode == LowLatencyMode::AntiLag2)
             ShowHelpMarker("FSR Anti-Lag 2.0 is the new name for AntiLag 2\nDon't ask me why");
 

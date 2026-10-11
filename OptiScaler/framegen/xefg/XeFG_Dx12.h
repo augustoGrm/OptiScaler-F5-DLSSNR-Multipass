@@ -1,7 +1,7 @@
 #pragma once
 
 #include <framegen/IFGFeature_Dx12.h>
-#include <native/NativeLowLatencyRule.h>
+#include "XeFGFrameId.h"
 
 #include <proxies/XeLL_Proxy.h>
 #include <proxies/XeFG_Proxy.h>
@@ -30,15 +30,10 @@ class XeFG_Dx12 : public virtual IFGFeature_Dx12
 
     // XeFG's frame ID of each slot's frame (FrameIdFor): XeLL's ID for that frame where one is known
     std::mutex _frameIdMutex;
-    UINT64 _frameIdFgFrame[BUFFER_COUNT] = {};
-    uint32_t _frameId[BUFFER_COUNT] = {};
-    bool _frameIdSteppedBack[BUFFER_COUNT] = {};
-    uint32_t _lastFrameId = 0;
-    uint32_t _spareFrameId = native::lowlatency::kSpareFrameIdBase;
-    native::lowlatency::FrameIdHistory _recentFrameIds;
+    xefg::FrameIds<BUFFER_COUNT> _frameIds;
     std::optional<bool> _frameIdFollowsXell;
 
-    uint32_t FrameIdFor(UINT64 fgFrame);
+    xefg::FrameIdPick FrameIdFor(UINT64 fgFrame);
 
     static void xefgLogCallback(const char* message, xefg_swapchain_logging_level_t level, void* userData);
 

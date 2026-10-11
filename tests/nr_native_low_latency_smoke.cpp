@@ -2,6 +2,7 @@
 // game. cl /std:c++20 /EHsc /W4 tests/nr_native_low_latency_smoke.cpp
 #include "../OptiScaler/native/NativeLowLatencyRule.h"
 #include "../OptiScaler/native/NativeLowLatencyVkSync.h"
+#include "../OptiScaler/framegen/xefg/XeFGFrameId.h"
 
 #include <cstdio>
 #include <cstring>
@@ -416,6 +417,9 @@ int main()
             // The first plan at once
             CHECK(SettleCap(settle, xell) == xell);
 
+            // Frame generation's own pause (IFGFeature::UpdateTarget, 10 frames) is shorter than the settle window
+            static_assert(kCapSettlePresents > 10);
+
             // A pause shorter than kCapSettlePresents: nothing changes
             for (int i = 0; i < kCapSettlePresents - 1; ++i)
                 CHECK(SettleCap(settle, limiter) == xell);
@@ -487,85 +491,93 @@ int main()
         CHECK(NeedsSleepModeResend(&last, true, now, true));
     }
 
-    // One frame ID for XeLL and XeFG (NextFrameGenerationId)
+    // One frame ID for XeLL and XeFG (framegen/xefg/XeFGFrameId.h)
     {
-        FrameIdHistory recent;
-        uint32_t spare = kSpareFrameIdBase;
+        using xefg::FrameIds;
+        using xefg::kSpareFrameIdBase;
 
-        auto use = [&](const FrameGenerationId& pick) { recent.Add(pick.id); return pick; };
+        // No XeLL ID: XeFG numbers on its own
+        FrameIds<4> ids;
+        CHECK(ids.For(1, 0).id == 1);
+        CHECK(ids.For(2, 0).id == 2);
+        CHECK(!ids.For(3, 0).followsXell);
 
-        // No XeLL ID: XeFG counts on by itself
-        CHECK(use(NextFrameGenerationId(0, 0, recent, spare)).id == 1);
-        CHECK(use(NextFrameGenerationId(0, 1, recent, spare)).id == 2);
-        CHECK(!NextFrameGenerationId(0, 2, recent, spare).followsXell);
+        // XeLL fed from the next frame on: followed, no reset (nothing followed before)
+        auto pick = ids.For(4, 18);
+        CHECK(pick.id == 18 && pick.followsXell && !pick.steppedBack && pick.picked);
+        CHECK(ids.For(5, 19).id == 19);
 
-        // XeLL fed from its next frame on: XeFG follows a rising ID
-        auto pick = use(NextFrameGenerationId(18, 2, recent, spare));
-        CHECK(pick.id == 18 && pick.followsXell && !pick.steppedBack);
-        CHECK(use(NextFrameGenerationId(19, 18, recent, spare)).id == 19);
+        // The frame's ID is kept for all of its uses (tags, constants, present), whatever XeLL says by then
+        pick = ids.For(5, 20);
+        CHECK(pick.id == 19 && !pick.picked);
 
-        // XeLL's IDs below XeFG's (the game's Reflex began after XeFG had numbered frames itself): followed, with a
-        // history reset on the step back, and on from there
-        FrameIdHistory r2;
-        uint32_t spare2 = kSpareFrameIdBase;
-        for (uint32_t id = 4400; id <= 4420; ++id)
-            r2.Add(id);
+        // Low latency started after XeFG numbered thousands of frames: followed downwards with no reset
+        FrameIds<4> late;
+        for (uint64_t f = 1; f <= 4420; ++f)
+            late.For(f, 0);
+        pick = late.For(4421, 1);
+        CHECK(pick.id == 1 && pick.followsXell && !pick.steppedBack);
 
-        pick = NextFrameGenerationId(4190, 4420, r2, spare2);
-        CHECK(pick.id == 4190 && pick.followsXell && pick.steppedBack);
-        r2.Add(pick.id);
-        pick = NextFrameGenerationId(4191, 4190, r2, spare2);
-        CHECK(pick.id == 4191 && pick.followsXell && !pick.steppedBack);
+        // The game restarts its IDs (NBA 2K27: 241 -> 2): followed, with a history reset
+        FrameIds<4> restart;
+        for (uint32_t id = 230; id <= 241; ++id)
+            restart.For(id, id);
+        pick = restart.For(242, 2);
+        CHECK(pick.id == 2 && pick.followsXell && pick.steppedBack);
+        pick = restart.For(243, 3);
+        CHECK(pick.id == 3 && pick.followsXell && !pick.steppedBack);
 
-        // An XeLL ID XeFG still holds (a frame started twice): a spare ID, never a held one
-        FrameIdHistory r3;
-        uint32_t spare3 = kSpareFrameIdBase;
-        r3.Add(50);
-        pick = NextFrameGenerationId(50, 50, r3, spare3);
-        CHECK(pick.id == kSpareFrameIdBase && !pick.followsXell);
-        r3.Add(pick.id);
+        // XeLL's ID does not advance (a frame started twice, XeLL a frame behind): a spare, and the next new XeLL
+        // ID is followed again with no reset (a spare is not a step back)
+        FrameIds<4> twice;
+        CHECK(twice.For(1, 50).id == 50);
+        pick = twice.For(2, 50);
+        CHECK(pick.id == kSpareFrameIdBase && !pick.followsXell && !pick.steppedBack);
+        pick = twice.For(3, 51);
+        CHECK(pick.id == 51 && pick.followsXell && !pick.steppedBack);
 
-        // ... and XeLL's next ID is followed again (it was never held)
-        pick = NextFrameGenerationId(51, kSpareFrameIdBase, r3, spare3);
-        CHECK(pick.id == 51 && pick.followsXell && pick.steppedBack);
-
-        // XeLL a few frames behind XeFG's own count: spares until its IDs are no longer held, then followed for good
-        FrameIdHistory r4;
-        uint32_t spare4 = kSpareFrameIdBase;
-        uint32_t last = 0;
-        for (uint32_t id = 1; id <= 100; ++id)
+        // An XeLL ID that stays the same for a long time is never followed again (no reset every few frames)
+        FrameIds<4> stale;
+        stale.For(1, 70);
+        int resets = 0;
+        int follows = 0;
+        for (uint64_t f = 2; f < 40; ++f)
         {
-            r4.Add(id);
-            last = id;
+            pick = stale.For(f, 70);
+            resets += pick.steppedBack ? 1 : 0;
+            follows += pick.followsXell ? 1 : 0;
+            CHECK(pick.id != 70);
         }
+        CHECK(resets == 0 && follows == 0);
 
+        // XeLL a few frames behind XeFG's own numbers: spares until its IDs are no longer held, then followed for good,
+        // with no reset
+        FrameIds<4> behind;
+        for (uint64_t f = 1; f <= 100; ++f)
+            behind.For(f, 0);
         uint32_t xell = 97; // three behind
-        int spares = 0;
         bool followed = false;
-        for (int frame = 0; frame < 20 && !followed; ++frame, ++xell)
+        int spares = 0;
+        uint64_t frame = 101;
+        for (; frame < 130 && !followed; ++frame, ++xell)
         {
-            pick = NextFrameGenerationId(xell, last, r4, spare4);
-            r4.Add(pick.id);
-            last = pick.id;
+            pick = behind.For(frame, xell);
             followed = pick.followsXell;
             spares += pick.followsXell ? 0 : 1;
-            CHECK(pick.id != 0);
+            CHECK(!pick.steppedBack);
         }
-
         CHECK(followed);
-        CHECK(spares <= FrameIdHistory::kSize);
-
-        // ... after which it keeps following
-        pick = NextFrameGenerationId(xell, last, r4, spare4);
+        CHECK(spares <= xefg::FrameIdHistory::kSize);
+        pick = behind.For(frame, xell);
         CHECK(pick.followsXell && pick.id == xell);
 
         // The history holds the newest kSize IDs only
-        FrameIdHistory r5;
-        for (uint32_t id = 1; id <= FrameIdHistory::kSize + 1; ++id)
-            r5.Add(id);
-        CHECK(!r5.Contains(1));
-        CHECK(r5.Contains(2));
-        CHECK(r5.Contains(FrameIdHistory::kSize + 1));
+        xefg::FrameIdHistory history;
+        for (uint32_t id = 1; id <= xefg::FrameIdHistory::kSize + 1; ++id)
+            history.Add(id);
+        CHECK(!history.Contains(1));
+        CHECK(history.Contains(2));
+        CHECK(history.Contains(xefg::FrameIdHistory::kSize + 1));
     }
 
     printf(fails == 0 ? "nr_native_low_latency_smoke: PASS\n" : "nr_native_low_latency_smoke: %d FAIL\n", fails);

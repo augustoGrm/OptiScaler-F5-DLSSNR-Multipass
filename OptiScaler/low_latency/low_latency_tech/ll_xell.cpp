@@ -3,6 +3,7 @@
 
 #include <magic_enum.hpp>
 #include <proxies/XeLL_Proxy.h>
+#include <native/NativeLowLatency.h>
 #include <nvapi/fakenvapi/log.h>
 
 void XeLL::xell_sleep(uint32_t frame_id)
@@ -147,6 +148,9 @@ void XeLL::set_sleep_mode(SleepMode* sleep_mode)
         xell_sleep_params.minimumIntervalUs != last_minimumIntervalUs ||
         xell_sleep_params.bLowLatencyBoost != last_bLowLatencyBoost)
     {
+        // Intel: all GPU work finished first (R11)
+        native::lowlatency::WaitForGameQueueIdle();
+
         auto result = o_xellSetSleepMode(xell_context, &xell_sleep_params) == XELL_RESULT_SUCCESS;
 
         last_bLowLatencyMode = xell_sleep_params.bLowLatencyMode;

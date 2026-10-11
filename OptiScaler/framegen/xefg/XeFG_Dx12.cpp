@@ -5,10 +5,13 @@
 #include <misc/REFrameworkCompat.h>
 #include <resource_tracking/ResTrack_dx12.h>
 
+#include <hooks/Reflex_Hooks.h>
 #include <native/NativeLowLatency.h>
 #include <nvapi/fakenvapi.h>
 
 #include <magic_enum.hpp>
+
+static uint32_t XellFrameId();
 
 #include <DirectXMath.h>
 
@@ -929,21 +932,15 @@ bool XeFG_Dx12::Dispatch()
     constData.motionVectorScaleX = _mvScaleX[fIndex];
     constData.motionVectorScaleY = _mvScaleY[fIndex];
 
-    // The frame's XeLL ID (FrameIdFor): Present Id and Reflex Id (the last marker's) match while XeLL is fed
-    auto frameId = FrameIdFor(willDispatchFrame);
+    // The frame's XeLL ID (FrameIdFor): Present Id and Present Start Id (XeLL's PRESENT_START) match while XeLL is fed
+    const auto framePick = FrameIdFor(willDispatchFrame);
+    const auto frameId = framePick.id;
 
+    // An XeLL ID below the last one followed (the game restarted its IDs): no interpolation across it
     if (!Config::Instance()->FGSkipReset.value_or_default())
-        constData.resetHistory = _reset[fIndex];
+        constData.resetHistory = _reset[fIndex] || framePick.steppedBack;
     else
         constData.resetHistory = false;
-
-    // An ID below the last one (XeFG started numbering before XeLL was fed): no interpolation across it
-    {
-        std::scoped_lock lock(_frameIdMutex);
-
-        if (_frameIdSteppedBack[fIndex])
-            constData.resetHistory = true;
-    }
 
     switch (Config::Instance()->FTInput.value_or_default())
     {
@@ -961,10 +958,10 @@ bool XeFG_Dx12::Dispatch()
     }
 
     LOG_DEBUG("Reset: {}, Opti FT: {}, Source FT: {}, Set FT: {}, Opti Id: {}, Present Id: {}, Reflex Id: {}, XeLL Id "
-              "now: {}",
+              "now: {}, Present Start Id: {}",
               constData.resetHistory, constData.frameRenderTime, _ftDelta[fIndex], constData.frameRenderTime,
-              _frameCount, frameId, State::Instance().reflexFrameId,
-              native::lowlatency::FrameIdForFrameGeneration());
+              _frameCount, frameId, State::Instance().reflexFrameId, XellFrameId(),
+              ReflexHooks::lastMarkerFrameId(PRESENT_START));
 
     auto result = XeFGProxy::TagFrameConstants()(_swapChainContext, frameId, &constData);
     if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
@@ -1399,19 +1396,28 @@ bool XeFG_Dx12::Present()
     return Dispatch();
 }
 
+// XeLL's frame ID of the frame being rendered: ours while Optical F5Low's low latency feeds XeFG's XeLL, else the
+// game's when its own Reflex feeds XeLL, else 0 (XeFG numbers frames itself)
+static uint32_t XellFrameId()
+{
+    if (const auto ours = native::lowlatency::FrameIdForFrameGeneration(); ours != 0)
+        return ours;
+
+    return ReflexHooks::gameXellFrameId();
+}
+
 // Picked at the frame's first use (its first tagged resource, else its Dispatch) and kept for all of the frame's tags
-// and its present (Intel: one ID per frame for XeLL's markers, the tags and xefgSwapChainSetPresentId)
-uint32_t XeFG_Dx12::FrameIdFor(UINT64 fgFrame)
+// and its present (framegen/xefg/XeFGFrameId.h)
+xefg::FrameIdPick XeFG_Dx12::FrameIdFor(UINT64 fgFrame)
 {
     std::scoped_lock lock(_frameIdMutex);
 
-    const auto slot = fgFrame % BUFFER_COUNT;
+    const auto lastFollowed = _frameIds.LastFollowedXell();
+    const auto xellId = XellFrameId();
+    const auto pick = _frameIds.For(fgFrame, xellId);
 
-    if (_frameIdFgFrame[slot] == fgFrame && _frameId[slot] != 0)
-        return _frameId[slot];
-
-    const auto xellId = native::lowlatency::FrameIdForFrameGeneration();
-    const auto pick = native::lowlatency::NextFrameGenerationId(xellId, _lastFrameId, _recentFrameIds, _spareFrameId);
+    if (!pick.picked)
+        return pick;
 
     if (_frameIdFollowsXell != pick.followsXell && (xellId != 0 || _frameIdFollowsXell.has_value()))
     {
@@ -1422,17 +1428,11 @@ uint32_t XeFG_Dx12::FrameIdFor(UINT64 fgFrame)
     }
     else if (pick.steppedBack)
     {
-        LOG_INFO("XeFG frame ID steps back to XeLL's {} (from {}), history reset", pick.id, _lastFrameId);
+        LOG_INFO("XeFG frame IDs step back to XeLL's {} (from {}), history reset", pick.id, lastFollowed);
     }
 
     _frameIdFollowsXell = pick.followsXell;
-    _frameIdFgFrame[slot] = fgFrame;
-    _frameId[slot] = pick.id;
-    _frameIdSteppedBack[slot] = pick.steppedBack;
-    _lastFrameId = pick.id;
-    _recentFrameIds.Add(pick.id);
-
-    return pick.id;
+    return pick;
 }
 
 bool XeFG_Dx12::SetResource(Dx12Resource* inputResource)
@@ -1659,7 +1659,7 @@ bool XeFG_Dx12::SetResource(Dx12Resource* inputResource)
         if (type != FG_ResourceType::UIColor ||
             (XeFGProxy::SetUiCompositionState() != nullptr || Config::Instance()->FGDrawUIOverFG.value_or_default()))
         {
-            auto frameId = FrameIdFor(_frameCount - indexDiff);
+            auto frameId = FrameIdFor(_frameCount - indexDiff).id;
             auto result =
                 XeFGProxy::D3D12TagFrameResource()(_swapChainContext, fResource->cmdList, frameId, &resourceParam);
             LOG_DEBUG("D3D12TagFrameResource, frameId: {}, type: {} result: {} ({})", frameId,
