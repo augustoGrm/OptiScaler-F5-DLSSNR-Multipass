@@ -11,6 +11,7 @@
 #include <dlssnr/DlssNr.h>
 #include <native/VirtualUpscalerDriver.h>
 #include <native/NativeLowLatency.h>
+#include <native/VkPresentBridge.h>
 
 #include "input/input_system.h"
 
@@ -1604,6 +1605,15 @@ void MenuCommon::UpdateRenderTiming(RenderMenuContext& ctx)
             MenuCommon::Present();
 
         frameTime = lastFrameTime;
+        frameRate = 1000.0 / frameTime;
+    }
+
+    // A dxvk game on the Vulkan bridge: the menu is drawn on the game's presents only, frame generation's swapchain
+    // presents the generated frames past our hooks. The shown frames come that many times as often.
+    if (auto fg = state.currentFG; VkPresentBridge::MenuOnGamePresents() && fg != nullptr && fg->IsActive() &&
+                                   !fg->IsPaused() && frameTime > 0.0)
+    {
+        frameTime /= (double) (fg->GetInterpolatedFrameCount() + 1);
         frameRate = 1000.0 / frameTime;
     }
 

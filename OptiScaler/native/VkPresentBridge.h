@@ -75,6 +75,10 @@ bool OutputActive();
 // any thread. Not a reference: it lives as long as the bridge.
 ID3D12Device* Device();
 
+// The up output draws the menu (and so counts the overlay's frames) on the game's presents only: frame generation's
+// swapchain from the system DXGI (a dxvk game) presents its generated frames past OptiScaler's hooks. Lock-free.
+bool MenuOnGamePresents();
+
 // The frame source has processed this present: puts the shared picture into the D3D12 swapchain's back buffer. `picture`
 // (null: none this frame) is ready once `copied` is reached on `fence` and the producer's `doneFence` (null: none) has
 // reached `doneValue`; `signalValue` is signalled on `fence` once the copy is done. False when the copy could not be queued.
