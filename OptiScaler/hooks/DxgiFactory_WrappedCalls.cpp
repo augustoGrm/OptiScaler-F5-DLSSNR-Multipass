@@ -22,19 +22,22 @@
 #include <magic_enum.hpp>
 #endif
 #include <misc/IdentifyGpu.h>
+#include <native/VkPresentBridge.h>
 
 static bool ShouldCreateDx11wDx12Swapchain()
 {
     return State::Instance().activeFgInput == FGInput::Upscaler && State::Instance().activeFgOutput != FGOutput::NoFG &&
-           State::Instance().activeFgInput != FGInput::NvngxFG;
+           State::Instance().activeFgInput != FGInput::NvngxFG &&
+           !VkPresentBridge::DxvkThroughVulkan();
 }
 
 static bool PrepareDx12InteropDesc(DXGI_SWAP_CHAIN_DESC& desc)
 {
+    // The D3D12 side's desc, forced to one sample below; the bridge resolves the game's multisampled back buffer.
     if (desc.SampleDesc.Count > 1)
     {
-        LOG_WARN("Dx11wDx12 interop does not support MSAA swapchains!");
-        return false;
+        LOG_INFO("Dx11wDx12 interop: the game's swapchain is multisampled ({} samples); the D3D12 side is single-sample",
+                 desc.SampleDesc.Count);
     }
 
     if (desc.BufferCount < 2)
@@ -55,8 +58,8 @@ static bool PrepareDx12InteropDesc1(DXGI_SWAP_CHAIN_DESC1& desc)
 {
     if (desc.SampleDesc.Count > 1)
     {
-        LOG_ERROR("Dx11wDx12 interop does not support MSAA swapchains!");
-        return false;
+        LOG_INFO("Dx11wDx12 interop: the game's swapchain is multisampled ({} samples); the D3D12 side is single-sample",
+                 desc.SampleDesc.Count);
     }
 
     if (desc.BufferCount < 2)
@@ -370,7 +373,8 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChain(IDXGIFactory* realFactory, Wrap
         if (result == S_OK)
         {
             State::Instance().currentSwapchainDesc = localDesc;
-            State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
+            if (!(VkPresentBridge::DxvkThroughVulkan() && VkPresentBridge::IsUp()))
+                State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
 
             // Check for SL proxy
             IDXGISwapChain* realSC = nullptr;
@@ -769,7 +773,8 @@ HRESULT DxgiFactoryWrappedCalls::CreateSwapChainForHwnd(IDXGIFactory2* realFacto
 
         if (result == S_OK)
         {
-            State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
+            if (!(VkPresentBridge::DxvkThroughVulkan() && VkPresentBridge::IsUp()))
+                State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
 
             // check for SL proxy
             IDXGISwapChain1* realSC = nullptr;

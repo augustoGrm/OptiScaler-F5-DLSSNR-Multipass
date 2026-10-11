@@ -11,6 +11,7 @@
 #include <spoofing/Dxgi_Spoofing.h>
 
 #include <misc/HiddenWindow.h>
+#include <native/VkPresentBridge.h>
 #include <with_dx12/with_dx12.h>
 #include <wrapped/wrapped_swapchain.h>
 #include <with_dx12/dx11_with_dx12_sc.h>
@@ -24,6 +25,21 @@
 #ifdef DETAILED_SC_LOGS
 #include <magic_enum.hpp>
 #endif
+
+// NativeDxvkVulkan: a dxvk game's frame generation is the Vulkan present bridge (native/VkPresentBridge.h) on dxvk's own
+// Vulkan swapchain, not the D3D11 bridge (Dx11wDx12SC). That one cannot work on dxvk: dxvk's shared fence and texture
+// handles do not open on a native D3D12 device (OpenSharedHandle E_HANDLE, then a crash in Batman: Arkham Knight).
+static bool DxvkFrameGenerationViaVulkan() { return VkPresentBridge::DxvkThroughVulkan(); }
+
+// A plain (wrapped) game swapchain has no interop. Except a dxvk game's D3D11 one while the Vulkan present bridge carries
+// its frames: the bridge's VkwDx12 stays (a dxvk that makes its Vulkan swapchain inside CreateSwapChain sets it first).
+static void SetPlainSwapchainInterop()
+{
+    if (VkPresentBridge::DxvkThroughVulkan() && VkPresentBridge::IsUp())
+        return;
+
+    State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
+}
 
 static bool IsTearingSupported(IDXGIFactory* factory)
 {
@@ -74,11 +90,12 @@ static bool PrepareDx12FlipFormat(DXGI_FORMAT& format)
 
 static bool PrepareDx12InteropDesc(DXGI_SWAP_CHAIN_DESC& desc, bool tearingSupported)
 {
-    // D3D12 swapchain backbuffers cannot be multisampled.
+    // D3D12 swapchain backbuffers cannot be multisampled: this desc is the D3D12 side's, forced to one sample below. The
+    // game's own D3D11 swap chain keeps the samples it asked for, and the bridge resolves them into single-sample copies.
     if (desc.SampleDesc.Count > 1)
     {
-        LOG_WARN("Dx11wDx12 interop does not support MSAA swapchains! SampleCount: {}", desc.SampleDesc.Count);
-        return false;
+        LOG_INFO("Dx11wDx12 interop: the game's swapchain is multisampled ({} samples); the D3D12 side is single-sample",
+                 desc.SampleDesc.Count);
     }
 
     // Flip-model swapchains support a limited set of formats.
@@ -155,11 +172,12 @@ static bool PrepareDx12InteropDesc(DXGI_SWAP_CHAIN_DESC& desc, bool tearingSuppo
 
 static bool PrepareDx12InteropDesc1(DXGI_SWAP_CHAIN_DESC1& desc, bool tearingSupported)
 {
-    // D3D12 swapchain backbuffers cannot be multisampled.
+    // D3D12 swapchain backbuffers cannot be multisampled: this desc is the D3D12 side's, forced to one sample below (see the
+    // other overload).
     if (desc.SampleDesc.Count > 1)
     {
-        LOG_WARN("Dx11wDx12 interop does not support MSAA swapchains! SampleCount: {}", desc.SampleDesc.Count);
-        return false;
+        LOG_INFO("Dx11wDx12 interop: the game's swapchain is multisampled ({} samples); the D3D12 side is single-sample",
+                 desc.SampleDesc.Count);
     }
 
     if (!PrepareDx12FlipFormat(desc.Format))
@@ -354,7 +372,8 @@ void DxgiFactoryHooks::HookToFactory(IDXGIFactory* pFactory)
 }
 
 HRESULT DxgiFactoryHooks::CreateDx12BridgeSwapChain(IDXGIFactory* factory, ID3D12CommandQueue* queue,
-                                                    DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain4** out, bool* realFG)
+                                                    DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain4** out, bool* realFG,
+                                                    bool systemFactory)
 {
     *out = nullptr;
     *realFG = false;
@@ -363,7 +382,9 @@ HRESULT DxgiFactoryHooks::CreateDx12BridgeSwapChain(IDXGIFactory* factory, ID3D1
         return E_INVALIDARG;
 
     // A Vulkan game never made a DXGI factory of its own: frame generation's swapchain is made through this hooked one.
-    HookToFactory(factory);
+    // Not Windows' own beside dxvk's: the hooks' originals (o_*) are dxvk's methods, which must not be called on it.
+    if (!systemFactory)
+        HookToFactory(factory);
 
     if (!PrepareDx12InteropDesc(*desc, IsTearingSupported(factory)))
         return E_INVALIDARG;
@@ -383,7 +404,8 @@ HRESULT DxgiFactoryHooks::CreateDx12BridgeSwapChain(IDXGIFactory* factory, ID3D1
         LOG_WARN("Vulkan bridge FG swapchain creation failed: {:X}; creating plain DX12 swapchain", (UINT) result);
 
         ScopedSkipParentWrapping skipParentWrapping {};
-        result = o_CreateSwapChain(factory, queue, desc, &swapChain);
+        result = systemFactory ? factory->CreateSwapChain(queue, desc, &swapChain)
+                               : o_CreateSwapChain(factory, queue, desc, &swapChain);
     }
 
     if (SUCCEEDED(result) && swapChain != nullptr)
@@ -391,6 +413,12 @@ HRESULT DxgiFactoryHooks::CreateDx12BridgeSwapChain(IDXGIFactory* factory, ID3D1
         result = swapChain->QueryInterface(IID_PPV_ARGS(out));
         swapChain->Release();
     }
+
+    // The game owns full screen (Vulkan, or dxvk's own DXGI): DXGI's Alt+Enter on the window must not put this swapchain
+    // into exclusive full screen behind its back. The bridge lets the swapchain go on every remake, and releasing one in
+    // exclusive full screen raises DXGI_ERROR_INVALID_CALL (Batman: Arkham Knight on dxvk, Alt+Enter).
+    if (SUCCEEDED(result) && *out != nullptr && desc->OutputWindow != nullptr)
+        factory->MakeWindowAssociation(desc->OutputWindow, DXGI_MWA_NO_ALT_ENTER);
 
     return result;
 }
@@ -619,7 +647,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
 
             if (!_skipFGSwapChainCreation && State::Instance().activeFgInput == FGInput::Upscaler &&
                 State::Instance().activeFgOutput != FGOutput::NoFG &&
-                State::Instance().activeFgInput != FGInput::NvngxFG)
+                State::Instance().activeFgInput != FGInput::NvngxFG && !DxvkFrameGenerationViaVulkan())
             {
                 auto hiddenHwnd = CreateHiddenSwapchainWindow();
 
@@ -765,7 +793,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChain(IDXGIFactory* realFactory, IUnknown* p
             }
 
             State::Instance().currentSwapchainDesc = localDesc;
-            State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
+            SetPlainSwapchainInterop();
 
             // Check for SL proxy
             IDXGISwapChain* realSC = nullptr;
@@ -1022,7 +1050,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
 
             if (!_skipFGSwapChainCreation && State::Instance().activeFgInput == FGInput::Upscaler &&
                 State::Instance().activeFgOutput != FGOutput::NoFG &&
-                State::Instance().activeFgInput != FGInput::NvngxFG)
+                State::Instance().activeFgInput != FGInput::NvngxFG && !DxvkFrameGenerationViaVulkan())
             {
                 // For dx11 swapchain
                 auto hiddenHwnd = CreateHiddenSwapchainWindow();
@@ -1170,7 +1198,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForHwnd(IDXGIFactory2* realFactory, IUn
 
         if (result == S_OK)
         {
-            State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
+            SetPlainSwapchainInterop();
 
             // check for SL proxy
             IDXGISwapChain1* realSC = nullptr;
@@ -1389,7 +1417,7 @@ HRESULT DxgiFactoryHooks::CreateSwapChainForComposition(IDXGIFactory2* realFacto
     State::Instance().currentRealSwapchain = created;
     State::Instance().currentSwapchain = wrapped;
     State::Instance().currentWrappedSwapchain = wrapped;
-    State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
+    SetPlainSwapchainInterop();
     State::Instance().SCAllowTearing = (resolved.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) != 0;
     State::Instance().SCLastFlags = resolved.Flags;
     State::Instance().realExclusiveFullscreen = false;

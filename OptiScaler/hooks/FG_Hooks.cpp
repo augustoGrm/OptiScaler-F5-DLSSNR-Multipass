@@ -16,11 +16,13 @@
 #include <misc/FrameLimit.h>
 
 #include <misc/IdentifyGpu.h>
+#include <misc/REFrameworkCompat.h>
 #include <hooks/Reflex_Hooks.h>
 #include <menu/menu_overlay_dx.h>
 #include <native/NativeDriverDx12.h>
 #include <native/NativeLowLatency.h>
 #include <native/PresentStageTiming.h>
+#include <native/VkPresentBridge.h>
 
 #include <d3d12.h>
 #include <detours/detours.h>
@@ -1200,8 +1202,12 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
 
     // Native input runs here, on the game's picture and queue, ahead of frame generation and before its lock below: when it
     // presents to the virtual upscaler, that call feeds frame generation (UpscaleStart takes the same lock).
+    //
+    // Not under the Vulkan bridge's D3D12 swapchain: its picture belongs to the Vulkan driver (hooks/Vulkan_Hooks.cpp), which
+    // runs the same step on the Vulkan game's presents. The interop state alone is not enough to tell: it is reset when a
+    // device of the game's is destroyed, and this driver then ran on the bridge's own D3D12 device.
     if (willPresent && state.swapchainInteropApi == SwapchainInteropApi::None && gameQueue != nullptr &&
-        state.currentD3D12Device != nullptr)
+        state.currentD3D12Device != nullptr && !VkPresentBridge::OutputActive())
     {
         NativeMotionDx12::OnFGPresent(This, gameQueue, state.currentD3D12Device);
     }
@@ -1342,6 +1348,20 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
             if (SyncInterval < 1)
                 SyncInterval = 1;
 
+            // XeFG runs with XeLL, and XeLL needs sync interval 1 with VSync on (Intel's XeLL guide)
+            if (SyncInterval > 1 && state.activeFgOutput == FGOutput::XeFG)
+            {
+                static bool logged = false;
+
+                if (!logged)
+                {
+                    logged = true;
+                    LOG_WARN("VsyncInterval {} with XeFG: using 1, XeLL needs sync interval 1", SyncInterval);
+                }
+
+                SyncInterval = 1;
+            }
+
             LOG_DEBUG("Removing DXGI_PRESENT_ALLOW_TEARING");
             Flags &= ~DXGI_PRESENT_ALLOW_TEARING;
         }
@@ -1420,8 +1440,11 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     if (state.swapchainInteropApi == SwapchainInteropApi::None)
         Hudfix_Dx12::PresentEnd();
 
-    if (willPresent && !state.reflexLimitsFps && state.activeFgOutput != FGOutput::NoFG &&
-        !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
+    // A dxvk game's frame generation through the Vulkan present bridge (NativeDxvkVulkan) presents a real D3D12 swapchain
+    // here, as a native Vulkan game's does: the limiter applies to it.
+    if (willPresent && !state.reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
+        state.activeFgOutput != FGOutput::NoFG &&
+        (!IdentifyGpu::getPrimaryGpu().usesDxvk || VkPresentBridge::DxvkThroughVulkan()) && !XellHooks::canLimit())
     {
         FrameLimit::sleep(fg != nullptr ? fg->IsActive() && !fg->IsPaused() : false);
     }
@@ -1500,7 +1523,16 @@ ULONG FGHooks::hkFGRelease(IUnknown* This)
             DXGI_SWAP_CHAIN_DESC scDesc {};
             ((IDXGISwapChain*) This)->GetDesc(&scDesc);
 
+            // The loops below release references OptiScaler never took (a backbuffer down to one, the game's wrapped
+            // swapchain down to none). Next to a REFramework drawing on XeFG's frames those are REFramework's own, and it
+            // releases them again later: misc/REFrameworkCompat.h leaves both alone.
+            const bool onlyOwnReferences = REFrameworkCompat::Active();
+
+            if (onlyOwnReferences)
+                LOG_INFO("REFramework compatibility: FG swapchain released, other components' references left alone");
+
             // Release swapchain backbuffers to prevent errors when releasing FG swapchain
+            if (!onlyOwnReferences)
             {
                 for (UINT i = 0; i < scDesc.BufferCount; i++)
                 {
@@ -1541,7 +1573,8 @@ ULONG FGHooks::hkFGRelease(IUnknown* This)
             LOG_DEBUG("FG Swapchain released, clearing currentFGSwapchain");
             State::Instance().currentFGSwapchain = nullptr;
 
-            if (State::Instance().currentWrappedSwapchain != nullptr &&
+            // currentWrappedSwapchain is the game's swapchain, held by the game: kept, as it is still alive
+            if (!onlyOwnReferences && State::Instance().currentWrappedSwapchain != nullptr &&
                 State::Instance().currentSwapchainDesc.OutputWindow == _hwnd)
             {
                 auto refCount = State::Instance().currentWrappedSwapchain->Release();

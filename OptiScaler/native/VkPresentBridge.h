@@ -17,9 +17,18 @@
 #include <vulkan/vulkan.h>
 
 #include <cstdint>
+#include <string>
 
 namespace VkPresentBridge
 {
+
+// A D3D11 game running on dxvk with [DlssNr] NativeDxvkVulkan on: Optical F5Low reads dxvk's own Vulkan presents and
+// frame generation is this bridge on dxvk's Vulkan swapchain. The D3D11 side then stands aside: no D3D11 frame
+// generation bridge (Dx11wDx12SC, which cannot work on dxvk), and the game's wrapped D3D11 swapchain leaves frame
+// generation, the menu and the swapchain State to the bridge. Cached once the GPU is identified (the key is startup only).
+bool DxvkThroughVulkan();
+// The game runs on dxvk, key or not (IdentifyGpu's usesDxvk), cached the same way: it is asked on every present.
+bool DxvkGame();
 
 // The fullScreenExclusive mode of a VkSurfaceFullScreenExclusiveInfoEXT in a create info's chain, or null. The swapchain
 // made on the hidden surface is asked for DISALLOWED through it (and the game's value put back after the call): the hidden
@@ -62,8 +71,13 @@ bool IsUp();
 // longer points at the bridge's queue). Lock-free: XeFG's present thread asks while the teardown waits for that thread.
 bool OutputActive();
 
-// The bridge's private D3D12 device while its output is up, else null. Not a reference: it lives as long as the bridge.
+// The bridge's private D3D12 device while its output is up, else null (from the start of its teardown on). Lock-free,
+// any thread. Not a reference: it lives as long as the bridge.
 ID3D12Device* Device();
+
+// The up output draws the menu (and so counts the overlay's frames) on the game's presents only: frame generation's
+// swapchain from the system DXGI (a dxvk game) presents its generated frames past OptiScaler's hooks. Lock-free.
+bool MenuOnGamePresents();
 
 // The frame source has processed this present: puts the shared picture into the D3D12 swapchain's back buffer. `picture`
 // (null: none this frame) is ready once `copied` is reached on `fence` and the producer's `doneFence` (null: none) has
@@ -86,6 +100,10 @@ bool WantsNewSwapchain(VkSwapchainKHR swapchain);
 // The D3D12 swapchain is up on `device` (FG only: a Vulkan-on-D3D12 upscaler feeds frame generation only when it runs on
 // the bridge's device).
 bool OutputActiveOn(ID3D12Device* device);
+
+// Why the bridge was turned off for the rest of the session because its D3D12 swapchain could not present; empty while it
+// was not. For the menu.
+std::string FailureReason();
 
 // FG only: the game's upscaler call, run on a Vulkan-on-D3D12 feature, queued frame generation's copies of its motion
 // vectors and depth; they are done once `fence` reaches `value`. Frame generation's queue waits for it before the next

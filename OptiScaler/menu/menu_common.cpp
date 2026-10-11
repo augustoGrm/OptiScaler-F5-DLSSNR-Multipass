@@ -10,6 +10,8 @@
 
 #include <dlssnr/DlssNr.h>
 #include <native/VirtualUpscalerDriver.h>
+#include <native/NativeLowLatency.h>
+#include <native/VkPresentBridge.h>
 
 #include "input/input_system.h"
 
@@ -1606,6 +1608,15 @@ void MenuCommon::UpdateRenderTiming(RenderMenuContext& ctx)
         frameRate = 1000.0 / frameTime;
     }
 
+    // A dxvk game on the Vulkan bridge: the menu is drawn on the game's presents only, frame generation's swapchain
+    // presents the generated frames past our hooks. The shown frames come that many times as often.
+    if (auto fg = state.currentFG; VkPresentBridge::MenuOnGamePresents() && fg != nullptr && fg->IsActive() &&
+                                   !fg->IsPaused() && frameTime > 0.0)
+    {
+        frameTime /= (double) (fg->GetInterpolatedFrameCount() + 1);
+        frameRate = 1000.0 / frameTime;
+    }
+
     state.frameTimes.pop_front();
     state.frameTimes.push_back(frameTime);
 }
@@ -2481,7 +2492,19 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                         localFrameCount = fg->FrameCount();
 
                     ImGui::Text("FGId: %llu, RfxId: %llu", localFrameCount, state.reflexFrameId);
-                    ImGui::Text("Reflex timings, whole frame: %.1fms", rangeInNs / 1000.0);
+                    // fakenvapi (XeFG's XeLL, Anti-Lag 2, LatencyFlex) has only the markers' times: its driver, queue
+                    // and GPU entries are made up, so they are not drawn
+                    const bool estimated = ReflexHooks::timingEstimated();
+
+                    if (estimated)
+                    {
+                        ImGui::Text("Latency, simulation to present: %.1fms", rangeInNs / 1000.0);
+                        ImGui::TextDisabled("From the frame markers (fakenvapi: no GPU times)");
+                    }
+                    else
+                    {
+                        ImGui::Text("Reflex timings, whole frame: %.1fms", rangeInNs / 1000.0);
+                    }
 
                     const auto maxWidth =
                         config->FpsOverlayHorizontal.value_or_default() ? ImGui::GetWindowWidth() : plotSize.x;
@@ -2509,9 +2532,13 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                     drawTiming(TimingType::Simulation, "Simulation", ImVec4(0.768f, 0.169f, 0.169f, 1.0f));
                     drawTiming(TimingType::RenderSubmit, "RenderSubmit", ImVec4(0.235f, 0.705f, 0.294f, 1.0f));
                     drawTiming(TimingType::Present, "Present", ImVec4(1.0f, 0.88f, 0.098f, 1.0f));
-                    drawTiming(TimingType::Driver, "Driver", ImVec4(0.263f, 0.388f, 0.847f, 1.0f));
-                    drawTiming(TimingType::OsRenderQueue, "RenderQueue", ImVec4(0.76f, 0.51f, 0.188f, 1.0f));
-                    drawTiming(TimingType::GpuRender, "GpuRender", ImVec4(0.569f, 0.117f, 0.705f, 1.0f));
+
+                    if (!estimated)
+                    {
+                        drawTiming(TimingType::Driver, "Driver", ImVec4(0.263f, 0.388f, 0.847f, 1.0f));
+                        drawTiming(TimingType::OsRenderQueue, "RenderQueue", ImVec4(0.76f, 0.51f, 0.188f, 1.0f));
+                        drawTiming(TimingType::GpuRender, "GpuRender", ImVec4(0.569f, 0.117f, 0.705f, 1.0f));
+                    }
                 }
 #endif
             }
@@ -3600,10 +3627,9 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     {
         if (ImGui::Checkbox("Built-in RTX 40 MFG unlock (experimental; restart)", &adaUnlock))
             config->FGDLSSGAdaMfgUnlock = adaUnlock;
-        ShowHelpMarker("Optional RTX 40 (Ada) unlock. Save Settings and restart to enable or remove it.\n"
-                       "Requires a supported DLSSG runtime and Streamline 2.7.1+ for multiplier overrides.\n"
-                       "Do not combine with another MFG unlocker. Does not add FG to an unsupported game.\n"
-                       "Not validated on RTX 40 hardware here; RTX 20/30/50 are left unchanged.");
+        ShowHelpMarker("Unlocks multi-frame generation on RTX 40. Save and restart to apply. Needs a supported DLSSG "
+                       "runtime and Streamline 2.7.1+. Don't combine with other unlockers. Not tested on RTX 40 "
+                       "here.");
     }
     if (adaUnlock && !disableAda)
     {
@@ -5629,7 +5655,11 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
     auto& menuResScale = ctx.menuResScale;
 
     // Framerate ---------------------
-    if (state.reflexLimitsFps || config->OverlayMenu.value_or_default())
+    // While Optical F5Low's low latency runs, it or OptiScaler's limiter keeps the cap (native/NativeLowLatency.h
+    // OwnsFrameCap); the section stays up either way, so it does not come and go as frame generation pauses
+    const bool f5lowRunning = native::lowlatency::Running();
+
+    if (state.reflexLimitsFps || f5lowRunning || config->OverlayMenu.value_or_default())
     {
         SeparatorWithHelpMarker(
             "Framerate", "Uses Reflex when possible\nOn AMD/Intel cards, you can use Fakenvapi to substitute Reflex");
@@ -5664,10 +5694,18 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
         }
         else
         {
-            if (XellHooks::canLimit())
+            // Optical F5Low's low latency, also run for XeFG alone (it feeds XeFG's XeLL when the game does not)
+            const auto lowLatency = f5lowRunning ? native::lowlatency::GetStatus() : native::lowlatency::Status {};
+            const char* owner = lowLatency.forXefgOnly ? " (OptiScaler, for XeFG)" : " (Optical F5Low)";
+
+            if (f5lowRunning && native::lowlatency::OwnsFrameCap())
+                currentMethod = std::string(lowLatency.path) + owner;
+            else if (f5lowRunning)
+                currentMethod = std::string("OptiScaler's limiter") + owner;
+            else if (XellHooks::canLimit())
                 currentMethod = "Game's XeLL";
             else
-                currentMethod = "Fallback";
+                currentMethod = "OptiScaler's limiter";
         }
 
         if (state.rtssReflexInjection)
@@ -5680,6 +5718,14 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
             currentMethod.append(" (inactive)");
 
         ImGui::Text("Current method: %s", currentMethod.c_str());
+
+        // Run for XeFG alone, the low latency's switch is on a page an XeFG player may never open
+        if (f5lowRunning && !state.reflexLimitsFps && native::lowlatency::GetStatus().forXefgOnly)
+        {
+            ImGui::TextDisabled("OptiScaler feeds XeFG's XeLL itself (the game has no Reflex).");
+            ShowHelpMarker("XeFG always uses XeLL, and XeLL lowers latency only when something sleeps and marks the "
+                           "frames.\nSwitch: Neural Rendering > Optical F5Low > Low latency.");
+        }
 
         if (fakenvapiMode == LowLatencyMode::AntiLag2)
             ShowHelpMarker("FSR Anti-Lag 2.0 is the new name for AntiLag 2\nDon't ask me why");
@@ -6808,11 +6854,8 @@ void MenuCommon::RenderThemeSettings(RenderMenuContext& ctx)
         }
 
         ImGui::SameLine(0.0f, 6.0f);
-        ShowHelpMarker(
-            "Rounder, roomier layout with Inter text, section cards and an accent bar on the selected page.\n"
-            "The performance overlay keeps the fixed-width font so its numbers stay steady.\n"
-            "A custom TTFFontPath still replaces the text font, and with HQ font off only the layout and "
-            "colors change.");
+        ShowHelpMarker("Rounder layout with section cards and the Inter font. The performance overlay keeps its "
+                       "fixed-width font.");
 
         ImGui::SeparatorText("Accent Colour");
 
@@ -7455,6 +7498,14 @@ void MenuCommon::RenderApiAndTextureSettings(RenderMenuContext& ctx)
             }
 
             ShowHelpMarker("Force V-Sync On/Off & Sync Interval options");
+
+            // FGHooks::FGPresent sends 1 instead (Intel: XeLL, which XeFG runs with, needs sync interval 1)
+            if (config->ForceVsync.value_or(false) && config->VsyncInterval.value_or_default() > 1 &&
+                state.activeFgOutput == FGOutput::XeFG)
+            {
+                ImGui::TextDisabled("XeFG presents with sync interval 1: %d is not used while it runs.",
+                                    config->VsyncInterval.value_or_default());
+            }
 
             if (vsyncChanged && state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr)
             {

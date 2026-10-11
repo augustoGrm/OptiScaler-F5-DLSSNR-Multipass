@@ -23,6 +23,7 @@
 #include <d3d11.h>
 #include <d3d12.h>
 #include <misc/IdentifyGpu.h>
+#include <misc/REFrameworkCompat.h>
 #include <hooks/Xell_Hooks.h>
 
 #include <magic_enum.hpp>
@@ -287,10 +288,13 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             return ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
     }
 
-    // This lock will delay/prevent release of buffers while present is ongoing
+    // This lock will delay/prevent release of buffers while present is ongoing. Not for a dxvk game on the Vulkan bridge:
+    // the swapchain here is then the game's own (frame generation's comes from the system DXGI, unwrapped), and dxvk's
+    // present remakes its Vulkan swapchain after a resize, which takes the exclusive side on this same thread
+    // (VkPresentBridge BeginResize): it would wait for itself. A native Vulkan game's present takes none either.
     std::shared_lock<std::shared_mutex> dx11wDx12PresentLock(Dx11wDx12Sync::PresentResizeMutex(), std::defer_lock);
     if (State::Instance().swapchainInteropApi != SwapchainInteropApi::None &&
-        State::Instance().activeFgOutput == FGOutput::XeFG)
+        State::Instance().activeFgOutput == FGOutput::XeFG && !VkPresentBridge::DxvkThroughVulkan())
     {
         dx11wDx12PresentLock.lock();
     }
@@ -755,11 +759,27 @@ ULONG STDMETHODCALLTYPE WrappedIDXGISwapChain4::Release()
 
     if (ret == 0)
     {
+        // The teardown below asks REFramework to let go of frame generation's swapchain, and it can take and drop a
+        // reference to this one while it does: that second final release would tear down and delete this twice
+        const bool nested = _finalReleaseInProgress.exchange(true);
+
+        if (nested && REFrameworkCompat::Active())
+        {
+            LOG_DEBUG("Nested final release while this swapchain is being released, left to the first one");
+            return 0;
+        }
+
 #ifdef USE_LOCAL_MUTEX
         OwnedLockGuard lock(_localMutex, 999);
 #endif
 
-        MenuOverlayDx::CleanupRenderTarget(true, _handle);
+        // A dxvk game whose frames the Vulkan present bridge carries (VkPresentBridge::DxvkThroughVulkan): the menu and frame
+        // generation are the bridge's, on this same window, and it lets go of them itself when dxvk's Vulkan swapchain goes
+        // (in _real->Release() below). Tearing them down here would pull XeFG out from under its queued presents.
+        const bool bridgeOwns = VkPresentBridge::DxvkThroughVulkan();
+
+        if (!bridgeOwns)
+            MenuOverlayDx::CleanupRenderTarget(true, _handle);
 
         if (State::Instance().currentSwapchain == this)
             State::Instance().currentSwapchain = nullptr;
@@ -768,7 +788,7 @@ ULONG STDMETHODCALLTYPE WrappedIDXGISwapChain4::Release()
             State::Instance().currentRealSwapchain = nullptr;
 
         auto fg = State::Instance().currentFG;
-        if (fg != nullptr && fg->Mutex.getOwner() != 1 && fg->SwapchainContext() != nullptr)
+        if (!bridgeOwns && fg != nullptr && fg->Mutex.getOwner() != 1 && fg->SwapchainContext() != nullptr)
         {
             fg->Deactivate();
             fg->ReleaseSwapchain(_handle);
@@ -855,8 +875,9 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present(UINT SyncInterval, UIN
     {
         result = LocalPresent(_real, SyncInterval, Flags, nullptr, _device, _handle, _uwp);
 
-        // When Reflex can't be used to limit, sleep in present
-        if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
+        // When Reflex can't be used to limit (and Optical F5Low's low latency does not keep the cap), sleep in present
+        if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
+            State::Instance().activeFgOutput == FGOutput::NoFG &&
             !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
             FrameLimit::sleep(false);
     }
@@ -969,7 +990,9 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers(UINT BufferCount
         State::Instance().fgChanged = true;
     }
 
-    MenuOverlayDx::CleanupRenderTarget(true, _handle);
+    // Not on a dxvk game whose menu the Vulkan present bridge draws (see Release).
+    if (!VkPresentBridge::DxvkThroughVulkan())
+        MenuOverlayDx::CleanupRenderTarget(true, _handle);
 
     State::Instance().scChanged = true;
 
@@ -1221,8 +1244,9 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present1(UINT SyncInterval, UI
     {
         result = LocalPresent(_real1, SyncInterval, Flags, pPresentParameters, _device, _handle, _uwp);
 
-        // When Reflex can't be used to limit, sleep in present
-        if (!State::Instance().reflexLimitsFps && State::Instance().activeFgOutput == FGOutput::NoFG &&
+        // When Reflex can't be used to limit (and Optical F5Low's low latency does not keep the cap), sleep in present
+        if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
+            State::Instance().activeFgOutput == FGOutput::NoFG &&
             !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
             FrameLimit::sleep(false);
     }
@@ -1415,7 +1439,9 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers1(UINT BufferCoun
         State::Instance().fgChanged = true;
     }
 
-    MenuOverlayDx::CleanupRenderTarget(true, _handle);
+    // Not on a dxvk game whose menu the Vulkan present bridge draws (see Release).
+    if (!VkPresentBridge::DxvkThroughVulkan())
+        MenuOverlayDx::CleanupRenderTarget(true, _handle);
 
     State::Instance().scChanged = true;
 

@@ -43,6 +43,7 @@
 #include <nvapi/NvApiHooks.h>
 
 #include "spoofing/User32_Spoofing.h"
+#include <misc/REFrameworkCompat.h>
 
 #include <cwctype>
 #include <magic_enum.hpp>
@@ -352,6 +353,12 @@ void LoadAsiPlugins()
         }
     }
 }
+
+// nvapi64.dll is loaded only because the startup check below (isNvidiaViaNvapi) keeps it loaded after NvAPI_Initialize.
+// CheckWorkingMode must not take that for the game's own nvapi: it runs inside DLL_PROCESS_ATTACH, where GPU detection
+// fails, and LoadNvApi would then pick fakenvapi as the main nvapi on an NVIDIA card. The game's own load of nvapi goes
+// through the LoadLibrary hooks later, when the GPU is known.
+static bool nvapiHeldByStartupCheck = false;
 
 static void CheckWorkingMode()
 {
@@ -948,7 +955,7 @@ static void CheckWorkingMode()
 
     // NVAPI
     // Doesn't seem to like GetModuleHandle for some reason, so call our load to make sure
-    if (GetDllNameWModule(&nvapiNamesW) != nullptr)
+    if (!nvapiHeldByStartupCheck && GetDllNameWModule(&nvapiNamesW) != nullptr)
     {
         // This hooks nvapi as well when possible
         auto nvapi64 = LibraryLoadHooks::LoadNvApi();
@@ -1323,6 +1330,9 @@ static void printQuirks(flag_set<GameQuirk>& quirks)
     if (quirks & GameQuirk::XeFGBridgeResizeAsCreated)
         stringQuirks.push_back("XeFG bridge resizes as created");
 
+    if (quirks & GameQuirk::REFrameworkCompat)
+        stringQuirks.push_back("REFramework compatibility (XeFG)");
+
     state->detectedQuirks.append_range(stringQuirks);
     for (auto& stringQuirk : stringQuirks)
         spdlog::info("Quirk: {}", stringQuirk);
@@ -1554,6 +1564,30 @@ static void CheckQuirks(bool isNvidia)
     }
     else
         quirks.reset(GameQuirk::DoNotPreserveFGSwapChain);
+
+    // misc/REFrameworkCompat.h, decided before the menu quirk below that it changes
+    REFrameworkCompat::Init(quirks[GameQuirk::REFrameworkCompat]);
+
+    if (REFrameworkCompat::Active())
+    {
+        // The old overlay menu switches frame generation off, and that REFramework is there to draw on XeFG's frames
+        if (quirks & GameQuirk::OldOverlayMenu && !Config::Instance()->OverlayMenu.has_value())
+        {
+            quirks.reset(GameQuirk::OldOverlayMenu);
+            LOG_INFO("REFramework compatibility: old overlay menu quirk not applied (it turns frame generation off)");
+        }
+
+        // REFramework's menu is on Insert as well: with both on one key it misses every other press in some games
+        if (!Config::Instance()->ShortcutKey.has_value())
+        {
+            Config::Instance()->ShortcutKey.set_volatile_value(VK_HOME);
+            LOG_INFO("REFramework compatibility: menu key is Home (REFramework uses Insert; ShortcutKey changes it)");
+        }
+    }
+    else
+    {
+        quirks.reset(GameQuirk::REFrameworkCompat);
+    }
 
     if (quirks & GameQuirk::OldOverlayMenu && !Config::Instance()->OverlayMenu.has_value())
     {
@@ -1913,6 +1947,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
         auto isNvidiaViaNvapi = [&]()
         {
             bool nvidiaDetected = false;
+            const bool nvapiWasLoaded = GetDllNameWModule(&nvapiNamesW) != nullptr;
 
             // Only try to load the real nvapi which is located in system32
             auto nvapiModule = NtdllProxy::LoadLibraryExW_Ldr(L"nvapi64.dll", NULL, LOAD_LIBRARY_SEARCH_SYSTEM32);
@@ -1958,12 +1993,16 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
                 {
                     spdlog::debug("Using Nvidia's nvapi");
                     auto init = GET_INTERFACE(NvAPI_Initialize, o_NvAPI_QueryInterface);
-                    if (init && init() == NVAPI_OK)
+                    if (init)
                     {
-                        nvidiaDetected = true;
+                        nvidiaDetected = init() == NVAPI_OK;
 
-                        if (auto unload = GET_INTERFACE(NvAPI_Unload, o_NvAPI_QueryInterface))
-                            unload();
+                        // nvapi64.dll stays loaded once NvAPI_Initialize ran (no NvAPI_Unload, no FreeLibrary): it
+                        // leaves driver work scheduled inside nvapi64_impl.dll, and in a game that never loads nvapi
+                        // itself (BeamNG.drive on Vulkan) unloading it here lets that work crash the game later.
+                        nvapiHeldByStartupCheck = !nvapiWasLoaded;
+                        spdlog::debug("Nvidia detected: {}", nvidiaDetected);
+                        return nvidiaDetected;
                     }
                 }
             }

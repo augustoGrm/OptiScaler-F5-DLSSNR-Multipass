@@ -6,6 +6,7 @@
 #include <vector>
 
 #include <shaders/dlssnr/DlssNr_Common.h>
+#include <shaders/dlssnr/DlssNr_Spatial.h>
 #include <nvsdk_ngx.h>
 #include <menu/MenuPages.h>
 #include <menu/HeaderBanner.h>
@@ -98,11 +99,12 @@ bool NativeInputBlockedBySwapChainInterop();
 // PRESENT. False when it did not run (the reason is in FinishedPictureStatus()).
 // `colorSpace` is what the picture's values mean (NativeInputColourSpace() reads it off a swap chain); `pictureState` is the
 // state `color` is in on entry and is left in. `historyDistrust` (optional) is the producer's trust mask
-// (DlssNrFrameInfo::HistoryDistrust).
+// (DlssNrFrameInfo::HistoryDistrust). `epoch` numbers the frame: one present count of the API the picture came from, so it
+// moves by exactly 1 per presented frame and keeps moving on frames NR skips (native::PresentEpoch).
 bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
                       ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
                       bool depthReversed, bool reset,
-                      DXGI_COLOR_SPACE_TYPE colorSpace, D3D12_RESOURCE_STATES pictureState);
+                      DXGI_COLOR_SPACE_TYPE colorSpace, D3D12_RESOURCE_STATES pictureState, unsigned long long epoch);
 // The colour space of a swap chain's picture, from what the game set (SDR when it set nothing), for a native-input frame.
 DXGI_COLOR_SPACE_TYPE NativeInputColourSpace(IDXGISwapChain* swapchain, DXGI_FORMAT format);
 void FinishedPictureColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE colorSpace);
@@ -253,6 +255,11 @@ void DismissExposureCalibration();
 // the manual slider, or (post-SR + Auto) the derived render:output ratio. So the menu can show the
 // live value instead of the stale manual one while Auto is overriding it.
 int CurrentModelResolutionPercent();
+
+// Compress screen edges (shaders/dlssnr/DlssNr_Spatial.h), as of the last frame NR ran on Direct3D 12: a status code, the
+// size the model works on and the one it would have without it, and the boxes to draw on screen (fractions of the
+// frame). Status::Off until a frame has run since the setting changed. The menu owns every word for it.
+Spatial::Published EdgeCompressionStatus();
 
 // The size NR hands the model, in pixels, or 0x0 before the first frame. The network pools that 2x2 before
 // its body runs, so the body sees half of it (rounded up); the menu and log show both so tuning is not

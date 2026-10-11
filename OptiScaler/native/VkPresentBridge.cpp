@@ -2,6 +2,8 @@
 
 #include "VkPresentBridge.h"
 #include "VkPresentBridgeCore.h"
+#include "VkDeviceRules.h"
+#include "VkOutputFailureRule.h"
 #include "VkPresentCopyRule.h"
 
 #include <native/NativeDriverVk.h>
@@ -21,6 +23,7 @@
 #include <with_dx12/with_dx12.h>
 
 #include <atomic>
+#include <chrono>
 #include <memory>
 #include <mutex>
 #include <set>
@@ -63,9 +66,13 @@ struct Bridge
     std::set<VkSwapchainKHR> swapchains; // the game's, made on the hidden surface and not yet destroyed
     bool outputUp = false;
     bool realFG = false;
+    // The D3D12 swapchain came from Windows' own DXGI beside dxvk's (MakeFactory). XeFG's inner swapchain is then not
+    // wrapped (that factory is not hooked), so nothing draws the menu on it: PresentOutput does.
+    bool systemFactory = false;
     bool copied = false; // CopyToOutput queued this frame's picture; PresentOutput follows
     native::VkCopyOutcome outcome = native::VkCopyOutcome::NoPicture; // what CopyToOutput did this frame
     native::VkCopyFailureRule copyRule;
+    native::VkOutputFailureRule outputRule; // this output's presents only, under g_mutex
     uint64_t presents = 0;
 };
 
@@ -73,6 +80,12 @@ std::mutex g_mutex;
 // Outputs that are up or being let go, without the mutex: XeFG's present thread asks (wrapped_swapchain.cpp LocalPresent)
 // while LetGoOfOutput waits for that thread
 std::atomic<int> g_outputsActive { 0 };
+// The up output's private D3D12 device (Device), without the mutex: the game's Reflex calls and XeFG's present thread
+// ask every frame (hooks/Reflex_Hooks.cpp), the latter while LetGoOfOutput holds the mutex and waits for it. Cleared
+// before frame generation lets go of its swapchain; the device itself lives as long as the bridge.
+std::atomic<ID3D12Device*> g_outputDevice { nullptr };
+// The up output draws the menu on the game's presents only (MenuOnGamePresents)
+std::atomic<bool> g_menuOnGamePresents { false };
 std::unordered_map<VkSurfaceKHR, HWND> g_windows;
 std::unique_ptr<Bridge> g_bridge;
 std::vector<std::unique_ptr<Bridge>> g_retired; // output gone, hidden surface kept until their swapchains are destroyed
@@ -111,6 +124,10 @@ bool IsBridgedSwapchain(VkSwapchainKHR swapchain)
     return false;
 }
 
+// The game runs on dxvk (IdentifyGpu's usesDxvk), asked once the GPU is identified: getAllGpus builds its list on every
+// call, and this is asked on every present. -1: not known yet (nothing identified, e.g. too early in the process).
+std::atomic<int> g_dxvkGame { -1 };
+
 // Whether this swapchain is one to bridge. An empty reason: not a case worth a line in the log (frame generation is not
 // chosen at all). Called with g_mutex held.
 // Frame generation is chosen and nothing rules the bridge out before a swapchain is looked at.
@@ -118,7 +135,12 @@ bool FrameGenerationChosen()
 {
     auto& state = State::Instance();
 
-    if (state.vulkanSkipHooks || IdentifyGpu::getPrimaryGpu().usesDxvk)
+    if (state.vulkanSkipHooks)
+        return false;
+
+    // A dxvk game's Vulkan swapchain is dxvk's, for its D3D11 one. Bridged only with NativeDxvkVulkan on, where it is
+    // that game's frame generation (the D3D11 bridge cannot work on dxvk, hooks/DxgiFactory_Hooks.cpp).
+    if (DxvkGame() && !DxvkThroughVulkan())
         return false;
 
     return state.activeFgInput == FGInput::Upscaler && state.activeFgOutput != FGOutput::NoFG;
@@ -131,7 +153,9 @@ bool ModeOn()
 {
     auto* config = Config::Instance();
 
-    if (config->DlssNrNativeFrameGenerationOnly.value_or_default())
+    // Not for a dxvk game: its upscaler calls are D3D11 ones, so nothing would feed OptiFG (the menu does not offer it;
+    // this covers a NativeFrameGenerationOnly left in the ini).
+    if (config->DlssNrNativeFrameGenerationOnly.value_or_default() && !DxvkGame())
         return true;
 
     return config->DlssNrEnabled.value_or_default() && config->DlssNrNativeMotion.value_or_default() &&
@@ -141,9 +165,20 @@ bool ModeOn()
 // The game was told once to make a new swapchain for the bridge since the mode was last switched on.
 bool g_newSwapchainAsked = false;
 
+// The D3D12 swapchain was given up because its present kept failing (GiveUpOutput): no new bridge for the rest of the
+// session, and the game is told its hidden swapchain is out of date a few times so it makes one on its own window.
+bool g_outputGivenUp = false;
+std::string g_giveUpReason; // for the menu, plain; the log has the code
+int g_giveUpAsks = 0;
+constexpr int kGiveUpAsksMax = 60;
+
 bool Wanted(const VkSwapchainCreateInfoKHR& in, HWND window, std::string& why)
 {
     if (!FrameGenerationChosen())
+        return false;
+
+    // Said when it was given up
+    if (g_outputGivenUp)
         return false;
 
     if (!ModeOn())
@@ -176,9 +211,29 @@ bool Wanted(const VkSwapchainCreateInfoKHR& in, HWND window, std::string& why)
     return true;
 }
 
-bool MakeFactory(ComPtr<IDXGIFactory2>& factory)
+// *system: the factory is Windows' own beside dxvk's DXGI, which makes no swapchain for a real D3D12 queue
+// (DXGI_ERROR_UNSUPPORTED). It is not hooked (DxgiFactoryHooks::CreateDx12BridgeSwapChain).
+bool MakeFactory(ComPtr<IDXGIFactory2>& factory, bool* system = nullptr)
 {
     ScopedSkipSpoofingGlobal skipSpoofing {};
+
+    if (system != nullptr)
+        *system = false;
+
+    if (DxvkThroughVulkan())
+    {
+        factory.Attach(DxgiProxy::CreateSystemFactory2());
+
+        if (factory != nullptr)
+        {
+            if (system != nullptr)
+                *system = true;
+
+            return true;
+        }
+
+        LOG_WARN("Vulkan bridge: no system DXGI factory beside dxvk's; trying dxvk's");
+    }
 
     const HRESULT hr = DxgiProxy::Module() == nullptr
                            ? CreateDXGIFactory2(0, IID_PPV_ARGS(&factory))
@@ -202,6 +257,9 @@ void LetGoOfOutput(Bridge& bridge, IDXGISwapChain4* output)
     auto& state = State::Instance();
     HWND window = bridge.window;
 
+    if (auto* device = bridge.device12; device != nullptr && g_outputDevice.compare_exchange_strong(device, nullptr))
+        g_menuOnGamePresents = false;
+
     MenuOverlayDx::CleanupRenderTarget(true, window);
 
     if (state.currentSwapchain == output)
@@ -217,6 +275,15 @@ void LetGoOfOutput(Bridge& bridge, IDXGISwapChain4* output)
 
     state.currentRealSwapchain = nullptr;
     state.swapchainInteropApi = SwapchainInteropApi::None;
+
+    // A swapchain released in exclusive full screen makes DXGI raise DXGI_ERROR_INVALID_CALL: back to windowed first.
+    // CreateDx12BridgeSwapChain keeps DXGI's own Alt+Enter off; this is for anything else that put it there.
+    if (BOOL fullscreen = FALSE;
+        output != nullptr && SUCCEEDED(output->GetFullscreenState(&fullscreen, nullptr)) && fullscreen)
+    {
+        LOG_INFO("Vulkan bridge: the D3D12 swapchain was in exclusive full screen, back to windowed before it goes");
+        output->SetFullscreenState(FALSE, nullptr);
+    }
 
     auto fg = state.currentFG;
 
@@ -339,8 +406,9 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
     {
         auto& state = State::Instance();
         ComPtr<IDXGIFactory2> factory;
+        bool systemFactory = false;
 
-        if (!MakeFactory(factory))
+        if (!MakeFactory(factory, &systemFactory))
         {
             reason = "could not make a DXGI factory";
             return false;
@@ -355,7 +423,7 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
 
         bool realFG = false;
         const HRESULT hr =
-            DxgiFactoryHooks::CreateDx12BridgeSwapChain(factory.Get(), self->queue12, &desc, &out, &realFG);
+            DxgiFactoryHooks::CreateDx12BridgeSwapChain(factory.Get(), self->queue12, &desc, &out, &realFG, systemFactory);
 
         state.vulkanCreatingSC = creatingSC;
 
@@ -366,6 +434,7 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
         }
 
         self->realFG = realFG;
+        self->systemFactory = systemFactory;
         state.currentSwapchainDesc = desc;
         state.currentD3D12Device = self->device12;
         state.currentCommandQueue = self->queue12;
@@ -375,7 +444,10 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
             FGHooks::SetDx12InteropPresentSC(out.Get(), self->window);
 
         self->outputUp = true;
+        self->outputRule = native::VkOutputFailureRule {};
         ++g_outputsActive;
+        g_outputDevice = self->device12;
+        g_menuOnGamePresents = systemFactory;
         LOG_INFO("Vulkan bridge: D3D12 swapchain {:X} on window {:X} ({}x{}, format {}, {} buffers, {})",
                  (size_t) out.Get(), (size_t) self->window, desc.BufferDesc.Width, desc.BufferDesc.Height,
                  (int) desc.BufferDesc.Format, desc.BufferCount, realFG ? "frame generation's own" : "plain");
@@ -388,6 +460,27 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
 }
 
 } // namespace
+
+bool DxvkGame()
+{
+    int known = g_dxvkGame.load(std::memory_order_relaxed);
+
+    if (known < 0)
+    {
+        if (IdentifyGpu::getAllGpus().empty())
+            return false;
+
+        known = IdentifyGpu::getPrimaryGpu().usesDxvk ? 1 : 0;
+        g_dxvkGame.store(known, std::memory_order_relaxed);
+    }
+
+    return known == 1;
+}
+
+bool DxvkThroughVulkan()
+{
+    return DxvkGame() && Config::Instance()->DlssNrNativeDxvkVulkan.value_or_default();
+}
 
 int32_t* FullScreenExclusiveMode(const void* chain, bool* readOnly)
 {
@@ -596,7 +689,20 @@ void OnDeviceDestroying(VkDevice device)
 {
     std::lock_guard lock(g_mutex);
 
-    if (g_bridge != nullptr && g_bridge->device == device)
+    // Only the bridge's own device (or a bridge already let go of, still waiting for its hidden swapchains) is of
+    // concern. A game that makes more Vulkan devices after its swapchain (a probe per feature level, as dxvk does) and
+    // destroys them again must leave the bridge, frame generation and the shared D3D12 device alone.
+    std::vector<VkDevice> retiredDevices;
+
+    for (const auto& retired : g_retired)
+        retiredDevices.push_back(retired->device);
+
+    if (!native::BridgeConcernedBy(device, g_bridge != nullptr ? g_bridge->device : VkDevice {}, retiredDevices))
+        return;
+
+    const bool liveBridge = g_bridge != nullptr && g_bridge->device == device;
+
+    if (liveBridge)
     {
         g_bridge->core.ReleaseOutput();
         g_retired.push_back(std::move(g_bridge));
@@ -607,6 +713,11 @@ void OnDeviceDestroying(VkDevice device)
         if (retired->device == device)
             retired->core.ReleaseOutput();
     }
+
+    // Only a retired bridge's device went while a newer bridge is up on another one: that bridge keeps its interop state
+    // and its D3D12 device
+    if (!liveBridge && g_bridge != nullptr && g_bridge->outputUp)
+        return;
 
     auto& state = State::Instance();
 
@@ -656,11 +767,9 @@ bool OutputActive()
     return g_outputsActive.load(std::memory_order_acquire) > 0;
 }
 
-ID3D12Device* Device()
-{
-    std::lock_guard lock(g_mutex);
-    return g_bridge != nullptr && g_bridge->outputUp ? g_bridge->device12 : nullptr;
-}
+ID3D12Device* Device() { return g_outputDevice.load(std::memory_order_acquire); }
+
+bool MenuOnGamePresents() { return g_menuOnGamePresents.load(std::memory_order_relaxed); }
 
 bool CopyToOutput(ID3D12Resource* picture, ID3D12Fence* fence, uint64_t copied, ID3D12Fence* doneFence,
                   uint64_t doneValue, uint64_t signalValue)
@@ -693,9 +802,56 @@ bool CopyToOutput(ID3D12Resource* picture, ID3D12Fence* fence, uint64_t copied, 
     return true;
 }
 
+namespace
+{
+
+// The D3D12 swapchain's present keeps failing: the bridge is turned off instead of presenting into it for ever. The game's
+// swapchain sits on a hidden window, so it cannot simply go on presenting; what can be done safely is to let go of the D3D12
+// swapchain (the real window is free again, the same way a switched-off mode ends the bridge), refuse a new bridge, and tell
+// the game its swapchain is out of date (WantsNewSwapchain) so it makes the next one on its own window and presents there.
+// Until it does, the window keeps the last picture, but the game is no longer held up on a present that cannot work.
+// `reason` goes to the log (with the code), `plain` to the menu.
+void GiveUpOutput(const std::string& reason, const std::string& plain)
+{
+    {
+        std::lock_guard lock(g_mutex);
+
+        if (g_bridge == nullptr || !g_bridge->outputUp || g_outputGivenUp)
+            return;
+
+        g_outputGivenUp = true;
+        g_giveUpReason = plain;
+        g_giveUpAsks = 0;
+    }
+
+    LOG_ERROR("Vulkan bridge: {}. The D3D12 swapchain is given up; the game is told to make a new swapchain on its own "
+              "window, and frame generation stays off until the game is restarted",
+              reason);
+
+    // The resize hold only drains frame generation: it is switched off, its present in flight finishes, and its next one no
+    // longer takes the shared side of the resize lock (the interop is no longer this bridge's). The hold must be let go
+    // BEFORE the swapchain is retired: retiring destroys XeFG's swapchain, which waits for XeFG's present thread, and that
+    // thread would be waiting for the shared side of the very lock held here (the order OnCreateSwapchain keeps too).
+    {
+        const auto hold = BeginResize();
+        State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
+    }
+
+    std::lock_guard lock(g_mutex);
+
+    if (g_bridge == nullptr || !g_bridge->outputUp)
+        return;
+
+    Retire(g_bridge);
+    NativeMotionVk::ReleaseBridgeDevice();
+}
+
+} // namespace
+
 void PresentOutput()
 {
     ComPtr<IDXGISwapChain4> output;
+    ID3D12Device* device12 = nullptr;
     ID3D12CommandQueue* queue12 = nullptr;
     ID3D12Fence* copyFence = nullptr;
     uint64_t copyValue = 0;
@@ -705,6 +861,7 @@ void PresentOutput()
     native::VkCopyFailureRule::Decision copy;
     ComPtr<ID3D12Fence> feedFence;
     uint64_t feedValue = 0;
+    bool menuHere = false;
 
     {
         std::lock_guard lock(g_mutex);
@@ -718,12 +875,14 @@ void PresentOutput()
             return;
 
         output = g_bridge->core.Output();
+        device12 = g_bridge->device12;
         queue12 = g_bridge->queue12;
         copyFence = g_bridge->core.CopyFence();
         copyValue = g_bridge->copied ? g_bridge->core.LastCopyValue() : 0;
         window = g_bridge->window;
         sync = g_bridge->core.SyncInterval();
         flags = g_bridge->core.PresentFlags();
+        menuHere = g_bridge->systemFactory;
         copy = g_bridge->copyRule.OnFrame(g_bridge->copied ? native::VkCopyOutcome::Copied : g_bridge->outcome);
         g_bridge->copied = false;
         g_bridge->outcome = native::VkCopyOutcome::NoPicture;
@@ -760,15 +919,19 @@ void PresentOutput()
     if (feedFence != nullptr && feedValue != 0)
         (fgQueue != nullptr ? fgQueue : queue12)->Wait(feedFence.Get(), feedValue);
 
-    // A frame generation swapchain draws the menu itself; a plain one gets it here, as a D3D11 game's bridge does.
+    // A frame generation swapchain draws the menu itself; a plain one gets it here, as a D3D11 game's bridge does. So does
+    // frame generation's swapchain from the system DXGI (a dxvk game), whose inner swapchain is not wrapped: the menu is
+    // then in the picture frame generation reads.
     const bool fgHookedPresenter = state.currentFGSwapchain == output.Get() && !FGHooks::IsDx12InteropPresentSC(output.Get());
 
-    if (!fgHookedPresenter)
+    if (!fgHookedPresenter || menuHere)
         MenuOverlayDx::Present(output.Get(), sync, flags, nullptr, queue12, window, false);
 
     const HRESULT hr = output->Present(sync, flags);
+    const bool presentFailed = FAILED(hr) && hr != DXGI_ERROR_WAS_STILL_DRAWING;
+    const bool deviceGone = presentFailed && device12 != nullptr && FAILED(device12->GetDeviceRemovedReason());
 
-    if (FAILED(hr) && hr != DXGI_ERROR_WAS_STILL_DRAWING)
+    if (presentFailed)
     {
         static int logged = 0;
 
@@ -787,6 +950,33 @@ void PresentOutput()
             }
         }
     }
+
+    bool giveUp = false;
+    uint64_t failures = 0;
+    {
+        std::lock_guard lock(g_mutex);
+
+        // This output's own rule: a bridge made again in the meantime starts its count afresh
+        if (g_bridge != nullptr && g_bridge->outputUp && g_bridge->core.Output() == output.Get())
+        {
+            const uint64_t nowMs = (uint64_t) std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       std::chrono::steady_clock::now().time_since_epoch())
+                                       .count();
+            giveUp = g_bridge->outputRule.OnPresent(presentFailed, deviceGone, nowMs);
+            failures = g_bridge->outputRule.Failures();
+        }
+    }
+
+    if (giveUp)
+    {
+        if (deviceGone)
+            GiveUpOutput(std::format("the D3D12 device was removed (Present returned 0x{:X})", (unsigned) hr),
+                         "the graphics device used for frame generation stopped working");
+        else
+            GiveUpOutput(std::format("the D3D12 swapchain's Present keeps failing (0x{:X}, {} times in a row)",
+                                     (unsigned) hr, failures),
+                         "frame generation's window could not be shown any more");
+    }
 }
 
 bool OutputActiveOn(ID3D12Device* device)
@@ -802,9 +992,20 @@ void FrameGenerationInputsQueued(ID3D12Fence* fence, uint64_t value)
     g_feedValue = fence != nullptr ? value : 0;
 }
 
+std::string FailureReason()
+{
+    std::lock_guard lock(g_mutex);
+    return g_outputGivenUp ? g_giveUpReason : std::string {};
+}
+
 bool WantsNewSwapchain(VkSwapchainKHR swapchain)
 {
     std::lock_guard lock(g_mutex);
+
+    // The bridge was given up (GiveUpOutput): the game's swapchain is still on the hidden window, and it is told until it
+    // makes one on its own (a game that never does is left alone after a while)
+    if (g_outputGivenUp)
+        return IsBridgedSwapchain(swapchain) && ++g_giveUpAsks <= kGiveUpAsksMax;
 
     if (!FrameGenerationChosen() || !ModeOn())
     {

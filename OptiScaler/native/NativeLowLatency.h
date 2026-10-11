@@ -1,7 +1,7 @@
 #pragma once
 
 // Optical F5Low's low latency: OptiScaler calls the Reflex API itself, because a game that makes no upscaler call makes
-// no Reflex call either. One path for every vendor: through ReflexHooks' function table, so real Reflex on NVIDIA and
+// no Reflex call either, and XeFG's XeLL needs those calls in any game that does not make them. One path for every vendor: through ReflexHooks' function table, so real Reflex on NVIDIA and
 // fakenvapi (Anti-Lag 2, XeLL or LatencyFlex, whichever the fakenvapi settings pick) everywhere else. D3D11 and D3D12
 // go through the D3D-flavoured NVAPI entry points (NvAPI_D3D_*); a native Vulkan game goes through the Vulkan-flavoured
 // ones (NvAPI_Vulkan_*, OnPresentBeginVulkan/OnPresentEndVulkan below) -- different device handle, different call
@@ -13,8 +13,8 @@
 //   RENDERSUBMIT_START
 //   just before Present: RENDERSUBMIT_END, PRESENT_START
 // The markers are approximate, so useMarkersToOptimize stays off. It runs only while native/NativeLowLatencyRule.h
-// says so (an Optical F5Low mode runs, the game makes no Reflex call itself, fakenvapi's Force Reflex and Force XeLL
-// are not in the way) and stands aside the moment the game calls Reflex. Our own calls are not counted as the game's.
+// says so (an Optical F5Low mode or XeFG runs, the game makes no Reflex call itself, fakenvapi's Force Reflex and Force
+// XeLL are not in the way) and stands aside the moment the game calls Reflex. Our own calls are not counted as the game's.
 // Never writes a fakenvapi setting.
 
 #include "NativeLowLatencyRule.h"
@@ -54,8 +54,40 @@ struct Status
     const char* path = ""; // plain words for the method in use, empty unless decision is Run
     bool hasLatency = false;
     float latencyMs = 0.0f; // the game's simulation start to the end of the GPU work, from GetLatency
+    bool latencyEstimated = false; // fakenvapi's report (no GPU times): latencyMs runs to the present's end instead
+    CapOwner capOwner = CapOwner::NotOurs;
+    bool xellIdle = false; // XeLL on an NVIDIA/AMD GPU with no XeFG generating frames: it does nothing
+    bool forXefgOnly = false; // runs for XeFG's XeLL alone (Auto, no Optical F5Low mode)
+    // The game's own Reflex calls are sent to XeFG's XeLL (ReflexHooks::gameReflexFeedsXell): DecisionText says so
+    bool gameReflexFeedsXell = false;
+    bool forceReflexDisabled = false; // fakenvapi's Force Disable: XeLL gets the game's calls with low latency off
 };
 
 // The menu's line. Cheap; GetLatency is asked at most twice a second.
 Status GetStatus();
+
+// We run (markers and Sleep go out). Any thread, two relaxed loads.
+bool Running();
+
+// We run and our SetSleepMode carries the frame cap (NativeLowLatencyRule.h PlanCap): OptiScaler's own limiter
+// (misc/FrameLimit) must not wait as well. Any thread, one relaxed load.
+bool OwnsFrameCap();
+
+// Our frame in flight's XeLL frame ID while XeFG runs on our XeLL, for XeFG to tag and present it with (Intel: one ID
+// for both), else 0. Any thread.
+uint32_t FrameIdForFrameGeneration();
+
+// DLSS frame generation runs Reflex itself through Streamline (Decision::FrameGenerationOwnsReflex) and the player
+// asked for Boost: framegen/dlssg sets Streamline's Reflex mode with Boost.
+bool WantsBoostForFrameGeneration();
+
+// XeFG is the output and generates frames: active, not paused, not in real exclusive full screen (Intel: it passes
+// frames through there). Whether XeLL does anything on NVIDIA and AMD (NativeLowLatencyRule.h XellIdle). Any thread.
+bool XefgGenerating();
+
+// Intel's XeLL guide: all GPU work finished before xellSetSleepMode (R11). Drains the game's D3D12 queue (frame
+// generation's game queue, else the current one; the bridges' D3D12 queue for D3D11 and Vulkan games), 250 ms at most.
+// Called by fakenvapi's XeLL right before it changes the sleep mode, whoever asked (our low latency, the game's
+// Reflex, the frame cap). Any thread.
+void WaitForGameQueueIdle();
 } // namespace native::lowlatency

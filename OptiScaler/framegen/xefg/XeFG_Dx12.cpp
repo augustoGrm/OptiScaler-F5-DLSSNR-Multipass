@@ -2,11 +2,16 @@
 #include "XeFG_Dx12.h"
 #include <hudfix/Hudfix_Dx12.h>
 #include <menu/menu_overlay_dx.h>
+#include <misc/REFrameworkCompat.h>
 #include <resource_tracking/ResTrack_dx12.h>
 
+#include <hooks/Reflex_Hooks.h>
+#include <native/NativeLowLatency.h>
 #include <nvapi/fakenvapi.h>
 
 #include <magic_enum.hpp>
+
+static uint32_t XellFrameId();
 
 #include <DirectXMath.h>
 
@@ -381,10 +386,11 @@ bool XeFG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQu
     if (_framesToInterpolate > intTarget)
         Config::Instance()->FGXeFGInterpolationCount.set_volatile_value(intTarget);
 
+    params.maxInterpolatedFrames = intTarget;
+
+    // Force XeLL generates nothing: one interpolated frame is enough (this used to be overwritten by the line above)
     if (Config::Instance()->ForceXeLL.value_or_default())
         params.maxInterpolatedFrames = 1;
-
-    params.maxInterpolatedFrames = intTarget;
 
     params.initFlags = XEFG_SWAPCHAIN_INIT_FLAG_NONE;
 
@@ -548,10 +554,11 @@ bool XeFG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
     if (_framesToInterpolate > intTarget)
         Config::Instance()->FGXeFGInterpolationCount.set_volatile_value(intTarget);
 
+    params.maxInterpolatedFrames = intTarget;
+
+    // Force XeLL generates nothing: one interpolated frame is enough (this used to be overwritten by the line above)
     if (Config::Instance()->ForceXeLL.value_or_default())
         params.maxInterpolatedFrames = 1;
-
-    params.maxInterpolatedFrames = intTarget;
 
     params.initFlags = XEFG_SWAPCHAIN_INIT_FLAG_NONE;
 
@@ -925,8 +932,13 @@ bool XeFG_Dx12::Dispatch()
     constData.motionVectorScaleX = _mvScaleX[fIndex];
     constData.motionVectorScaleY = _mvScaleY[fIndex];
 
+    // The frame's XeLL ID (FrameIdFor): Present Id and Present Start Id (XeLL's PRESENT_START) match while XeLL is fed
+    const auto framePick = FrameIdFor(willDispatchFrame);
+    const auto frameId = framePick.id;
+
+    // An XeLL ID below the last one followed (the game restarted its IDs): no interpolation across it
     if (!Config::Instance()->FGSkipReset.value_or_default())
-        constData.resetHistory = _reset[fIndex];
+        constData.resetHistory = _reset[fIndex] || framePick.steppedBack;
     else
         constData.resetHistory = false;
 
@@ -945,11 +957,11 @@ bool XeFG_Dx12::Dispatch()
         break;
     }
 
-    LOG_DEBUG("Reset: {}, Opti FT: {}, Source FT: {}, Set FT: {}, Opti Id: {}, Reflex Id: {}", _reset[fIndex],
-              constData.frameRenderTime, _ftDelta[fIndex], constData.frameRenderTime, _frameCount,
-              State::Instance().reflexFrameId);
-
-    auto frameId = static_cast<uint32_t>(willDispatchFrame);
+    LOG_DEBUG("Reset: {}, Opti FT: {}, Source FT: {}, Set FT: {}, Opti Id: {}, Present Id: {}, Reflex Id: {}, XeLL Id "
+              "now: {}, Present Start Id: {}",
+              constData.resetHistory, constData.frameRenderTime, _ftDelta[fIndex], constData.frameRenderTime,
+              _frameCount, frameId, State::Instance().reflexFrameId, XellFrameId(),
+              ReflexHooks::lastMarkerFrameId(PRESENT_START));
 
     auto result = XeFGProxy::TagFrameConstants()(_swapChainContext, frameId, &constData);
     if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
@@ -1384,6 +1396,45 @@ bool XeFG_Dx12::Present()
     return Dispatch();
 }
 
+// XeLL's frame ID of the frame being rendered: ours while Optical F5Low's low latency feeds XeFG's XeLL, else the
+// game's when its own Reflex feeds XeLL, else 0 (XeFG numbers frames itself)
+static uint32_t XellFrameId()
+{
+    if (const auto ours = native::lowlatency::FrameIdForFrameGeneration(); ours != 0)
+        return ours;
+
+    return ReflexHooks::gameXellFrameId();
+}
+
+// Picked at the frame's first use (its first tagged resource, else its Dispatch) and kept for all of the frame's tags
+// and its present (framegen/xefg/XeFGFrameId.h)
+xefg::FrameIdPick XeFG_Dx12::FrameIdFor(UINT64 fgFrame)
+{
+    std::scoped_lock lock(_frameIdMutex);
+
+    const auto lastFollowed = _frameIds.LastFollowedXell();
+    const auto xellId = XellFrameId();
+    const auto pick = _frameIds.For(fgFrame, xellId);
+
+    if (!pick.picked)
+        return pick;
+
+    if (_frameIdFollowsXell != pick.followsXell && (xellId != 0 || _frameIdFollowsXell.has_value()))
+    {
+        if (pick.followsXell)
+            LOG_INFO("XeFG frame IDs follow XeLL's (from {})", pick.id);
+        else
+            LOG_INFO("XeFG frame ID {} numbered on its own (XeLL's: {})", pick.id, xellId);
+    }
+    else if (pick.steppedBack)
+    {
+        LOG_INFO("XeFG frame IDs step back to XeLL's {} (from {}), history reset", pick.id, lastFollowed);
+    }
+
+    _frameIdFollowsXell = pick.followsXell;
+    return pick;
+}
+
 bool XeFG_Dx12::SetResource(Dx12Resource* inputResource)
 {
     if (inputResource == nullptr || inputResource->resource == nullptr ||
@@ -1608,7 +1659,7 @@ bool XeFG_Dx12::SetResource(Dx12Resource* inputResource)
         if (type != FG_ResourceType::UIColor ||
             (XeFGProxy::SetUiCompositionState() != nullptr || Config::Instance()->FGDrawUIOverFG.value_or_default()))
         {
-            auto frameId = static_cast<uint32_t>(_frameCount - indexDiff);
+            auto frameId = FrameIdFor(_frameCount - indexDiff).id;
             auto result =
                 XeFGProxy::D3D12TagFrameResource()(_swapChainContext, fResource->cmdList, frameId, &resourceParam);
             LOG_DEBUG("D3D12TagFrameResource, frameId: {}, type: {} result: {} ({})", frameId,
@@ -1647,6 +1698,11 @@ bool XeFG_Dx12::ReleaseSwapchain(HWND hwnd)
         return false;
 
     LOG_DEBUG("");
+
+    // Every teardown of XeFG's swapchain comes through here (a new swapchain in CreateSwapchain/CreateSwapchain1,
+    // FGHooks::hkFGRelease, the wrapped swapchain's Release): a REFramework drawing on it lets go first. Before frame
+    // generation's lock: REFramework takes its own lock in there, and the fork's author saw the other order deadlock
+    REFrameworkCompat::BeforeXeFGSwapchainRetire(State::Instance().currentFGSwapchain, _swapChainContext, hwnd);
 
     if (Config::Instance()->FGUseMutexForSwapchain.value_or_default())
     {

@@ -493,6 +493,20 @@ class Config
     // overridden by Ray Reconstruction); the manual slider applies as usual.
     CustomOptional<bool> DlssNrModelResolutionAuto { false };
 
+    // Compress screen edges (shaders/dlssnr/DlssNr_Spatial.h): NR works on a smaller picture whose middle stays 1:1 and
+    // whose edges are squeezed, and the answer is stretched back. Off by default. Centre and work are percentages of the
+    // frame on each axis (centre < work <= 100); offset moves the centre band and shift moves pixels between the two
+    // edges, both in percent of the frame. Out-of-range values leave compression off (the menu says why).
+    CustomOptional<bool> DlssNrSpatialCompression { false };
+    CustomOptional<float> DlssNrSpatialCenterX { 80.0f };
+    CustomOptional<float> DlssNrSpatialCenterY { 80.0f };
+    CustomOptional<float> DlssNrSpatialWorkX { 90.0f };
+    CustomOptional<float> DlssNrSpatialWorkY { 90.0f };
+    CustomOptional<float> DlssNrSpatialOffsetX { 0.0f };
+    CustomOptional<float> DlssNrSpatialOffsetY { 0.0f };
+    CustomOptional<float> DlssNrSpatialShiftX { 0.0f };
+    CustomOptional<float> DlssNrSpatialShiftY { 0.0f };
+
     // Filter used for NR supersampling (working scale > 1): the model runs above native, and this is
     // the downscaler that averages its answer back to native. Independent of OutputScalingDownscaler
     // so NR and Output Scaling can run different filters at once. Lanczos3 is the sharp default.
@@ -597,6 +611,14 @@ class Config
     // asks for that itself. Can cost a little depth compression on some GPUs. Off: Vulkan depth reads as not readable,
     // and Optical F5Low runs on motion only. Startup only (images are made once). See resource_tracking/GenericDepth_Vk.h.
     CustomOptional<bool> DlssNrNativeDepthVkCopyUsage { true };
+    // NativeDxvkVulkan: experimental. A D3D11 game running on dxvk (doitsujin/dxvk: its D3D11 calls become Vulkan ones)
+    // normally gets Optical F5Low's D3D11 driver (native/NativeDriverDx11.h), the same shared-texture bridge to a private
+    // D3D12 device a real D3D11 game gets. On: that D3D11 driver stands aside, and the Vulkan driver (native/NativeDriverVk.h,
+    // resource_tracking/GenericDepth_Vk.h -- the same code a native Vulkan game uses) reads dxvk's own Vulkan calls instead,
+    // and frame generation (FGInput=Upscaler) goes through the Vulkan present bridge (native/VkPresentBridge.h) on dxvk's
+    // Vulkan swapchain, its D3D12 swapchain from Windows' own DXGI, instead of the D3D11 bridge, which cannot work on dxvk
+    // (dxvk's shared handles do not open on a native D3D12 device). Off by default. See misc/IdentifyGpu.h (usesDxvk).
+    CustomOptional<bool> DlssNrNativeDxvkVulkan { false };
     // NativeDepthWarmupFrames: presented frames to watch before the finder trusts that the game makes no upscaler call of its
     // own (it stands down for good the moment one is seen). NativeDepthOverlay: debug; copies the picked depth buffer at its
     // busiest clear and shows it in the DLSS-NR menu (D3D12 only; no preview round-trip exists for D3D11 yet). That copy is
@@ -637,12 +659,16 @@ class Config
     // bridge's device, whose evaluate hands frame generation the game's motion vectors, depth and output
     // (upscalers/IFeature_VkwDx12.cpp). No Optical F5Low motion. The Optical F5Low page's "FG only (game's upscaler)" Mode.
     CustomOptional<bool> DlssNrNativeFrameGenerationOnly { false };
-    // NativeLowLatency: Optical F5Low calls the Reflex API itself, since a game that makes no upscaler call makes no
-    // Reflex call either (see native/NativeLowLatency.h). Real Reflex on NVIDIA; fakenvapi answers elsewhere (Anti-Lag
-    // 2, XeLL or LatencyFlex, chosen by the fakenvapi settings). auto: on while an Optical F5Low mode runs; true: also
-    // without one, in any game that makes no Reflex call of its own; false: off. Stands aside the moment the game calls
-    // Reflex itself.
+    // NativeLowLatency: OptiScaler calls the Reflex API itself, since a game that makes no upscaler call makes no Reflex
+    // call either, and XeFG's XeLL needs the calls (see native/NativeLowLatency.h). Real Reflex on NVIDIA; fakenvapi
+    // answers elsewhere (Anti-Lag 2, XeLL or LatencyFlex, chosen by the fakenvapi settings). auto: on while an Optical
+    // F5Low mode or XeFG runs; true: also without either, in any game that makes no Reflex call of its own; false: off.
+    // Stands aside the moment the game calls Reflex itself.
     CustomOptional<native::lowlatency::Setting> DlssNrNativeLowLatency { native::lowlatency::Setting::Auto };
+    // NativeLowLatencyBoost: Reflex's Boost with it (the GPU keeps its clocks up between frames), also for DLSS frame
+    // generation's Streamline Reflex on an Optical F5Low game. NVIDIA Reflex only: XeLL, Anti-Lag 2 and LatencyFlex
+    // ignore it (XeLL: "Boost is not supported as of now").
+    CustomOptional<bool> DlssNrNativeLowLatencyBoost { false };
     // AutoExposureAdaptBrighterSeconds / AutoExposureAdaptDarkerSeconds are the menu's "Eye adaptation": how long
     // Automatic takes to follow a scene getting brighter / darker, as a time constant in seconds; 0 = at once. Faster to
     // brighter, as in Unreal and Unity HDRP. See shaders/dlssnr/DlssNr_ExposureAdapt.h.
@@ -904,6 +930,8 @@ class Config
     // Hotfixes
     CustomOptional<bool> CheckForUpdate { true };
     CustomOptional<bool, SoftDefault> DisableOverlays { false };
+    // misc/REFrameworkCompat.h; auto (no value) = on in RE Engine games with the REFramework fork that follows XeFG
+    CustomOptional<bool, NoDefault> REFrameworkCompat; // true / false kept as set; no value = auto
 
     CustomOptional<bool> SimulateWaitableObject { false };
 

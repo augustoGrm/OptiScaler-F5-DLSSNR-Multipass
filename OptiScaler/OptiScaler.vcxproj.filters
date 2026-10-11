@@ -452,6 +452,9 @@
     <ClInclude Include="native\DepthResolve_Hlsl.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="native\MsaaPicture_Hlsl.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="native\F5LowShaderBytecode.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -483,6 +486,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="native\DepthResolveDx12.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="native\MsaaPictureDx11.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="native\SharedFrame.h">
@@ -521,6 +527,9 @@
     <ClInclude Include="native\NativeLowLatency.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="native\XefgReflexRule.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="native\NativeLowLatencyRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -528,6 +537,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="native\PresentStageTiming.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="native\VkDeviceRules.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="native\VkOutputFailureRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="native\VkPresentCopyRule.h">
@@ -900,6 +915,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="misc\IdentifyGpu.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="misc\REFrameworkCompat.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="misc\REFrameworkCompatCore.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="shaders\hud_copy\precompile\HudCopy_Shader.h">
@@ -1385,6 +1406,9 @@
     <ClCompile Include="native\DepthResolveDx12.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="native\MsaaPictureDx11.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="native\SharedFrame.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -1605,6 +1629,9 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="misc\IdentifyGpu.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="misc\REFrameworkCompat.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="framegen\dlssg\DLSSG_Dx12.cpp">

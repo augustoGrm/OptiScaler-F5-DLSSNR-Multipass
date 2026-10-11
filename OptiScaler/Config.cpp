@@ -464,6 +464,15 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (DlssNrReducedUpscaleMethod.has_value() && DlssNrReducedUpscaleMethod.value() > 1u)
                 DlssNrReducedUpscaleMethod = 0u;
             DlssNrModelResolutionAuto.set_from_config(readBool("DlssNr", "ModelResolutionAuto"));
+            DlssNrSpatialCompression.set_from_config(readBool("DlssNr", "SpatialCompression"));
+            DlssNrSpatialCenterX.set_from_config(readFloat("DlssNr", "SpatialCenterX"));
+            DlssNrSpatialCenterY.set_from_config(readFloat("DlssNr", "SpatialCenterY"));
+            DlssNrSpatialWorkX.set_from_config(readFloat("DlssNr", "SpatialWorkX"));
+            DlssNrSpatialWorkY.set_from_config(readFloat("DlssNr", "SpatialWorkY"));
+            DlssNrSpatialOffsetX.set_from_config(readFloat("DlssNr", "SpatialOffsetX"));
+            DlssNrSpatialOffsetY.set_from_config(readFloat("DlssNr", "SpatialOffsetY"));
+            DlssNrSpatialShiftX.set_from_config(readFloat("DlssNr", "SpatialShiftX"));
+            DlssNrSpatialShiftY.set_from_config(readFloat("DlssNr", "SpatialShiftY"));
 
             if (auto v = readEnum<Scaler>("DlssNr", "ScalingDownscaler"))
                 DlssNrScalingDownscaler.set_from_config(*v);
@@ -483,6 +492,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrAutoExposureMeterHighPercent.set_from_config(readFloat("DlssNr", "AutoExposureMeterHighPercent"));
             DlssNrNativeDepthFinder.set_from_config(readBool("DlssNr", "NativeDepthFinder"));
             DlssNrNativeDepthVkCopyUsage.set_from_config(readBool("DlssNr", "NativeDepthVkCopyUsage"));
+            DlssNrNativeDxvkVulkan.set_from_config(readBool("DlssNr", "NativeDxvkVulkan"));
             DlssNrNativeDepthWarmupFrames.set_from_config(readUInt("DlssNr", "NativeDepthWarmupFrames"));
             DlssNrNativeDepthOverlay.set_from_config(readBool("DlssNr", "NativeDepthOverlay"));
             DlssNrNativeDebugView.set_from_config(readBool("DlssNr", "NativeDebugView"));
@@ -499,6 +509,7 @@ bool Config::Reload(std::filesystem::path iniPath)
                 else if (lowLatency.value() == "false")
                     DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::Off);
             }
+            DlssNrNativeLowLatencyBoost.set_from_config(readBool("DlssNr", "NativeLowLatencyBoost"));
             DlssNrAutoExposureAdaptBrighterSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptBrighterSeconds"));
             DlssNrAutoExposureAdaptDarkerSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptDarkerSeconds"));
             DlssNrAutoExposureAdaptSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptSeconds"));
@@ -924,6 +935,7 @@ bool Config::Reload(std::filesystem::path iniPath)
         {
             CheckForUpdate.set_from_config(readBool("Hotfix", "CheckForUpdate"));
             DisableOverlays.set_from_config(readBool("Hotfix", "DisableOverlays"));
+            REFrameworkCompat.set_from_config(readBool("Hotfix", "REFrameworkCompat"));
 
             SimulateWaitableObject.set_from_config(readBool("Hotfix", "SimulateWaitableObject"));
 
@@ -1501,6 +1513,16 @@ bool Config::SaveIni()
                  GetIntValue(Instance()->DlssNrReducedUpscaleMethod.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ModelResolutionAuto",
                  GetBoolValue(Instance()->DlssNrModelResolutionAuto.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SpatialCompression",
+                 GetBoolValue(Instance()->DlssNrSpatialCompression.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SpatialCenterX", GetFloatValue(Instance()->DlssNrSpatialCenterX.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SpatialCenterY", GetFloatValue(Instance()->DlssNrSpatialCenterY.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SpatialWorkX", GetFloatValue(Instance()->DlssNrSpatialWorkX.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SpatialWorkY", GetFloatValue(Instance()->DlssNrSpatialWorkY.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SpatialOffsetX", GetFloatValue(Instance()->DlssNrSpatialOffsetX.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SpatialOffsetY", GetFloatValue(Instance()->DlssNrSpatialOffsetY.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SpatialShiftX", GetFloatValue(Instance()->DlssNrSpatialShiftX.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "SpatialShiftY", GetFloatValue(Instance()->DlssNrSpatialShiftY.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ScalingDownscaler", GetIntValue(Instance()->DlssNrScalingDownscaler).c_str());
     ini.SetValue("DlssNr", "AutoCapture", GetBoolValue(Instance()->DlssNrAutoCapture.value_for_config()).c_str());
 
@@ -1526,6 +1548,7 @@ bool Config::SaveIni()
                  GetBoolValue(Instance()->DlssNrNativeDepthFinder.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeDepthVkCopyUsage",
                  GetBoolValue(Instance()->DlssNrNativeDepthVkCopyUsage.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "NativeDxvkVulkan", GetBoolValue(Instance()->DlssNrNativeDxvkVulkan.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeDepthWarmupFrames",
                  GetIntValue(Instance()->DlssNrNativeDepthWarmupFrames.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeDepthOverlay",
@@ -1548,6 +1571,8 @@ bool Config::SaveIni()
 
         ini.SetValue("DlssNr", "NativeLowLatency", lowLatency);
     }
+    ini.SetValue("DlssNr", "NativeLowLatencyBoost",
+                 GetBoolValue(Instance()->DlssNrNativeLowLatencyBoost.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoExposureAdaptBrighterSeconds",
                  GetFloatValue(Instance()->DlssNrAutoExposureAdaptBrighterSeconds.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoExposureAdaptDarkerSeconds",
@@ -1869,6 +1894,8 @@ bool Config::SaveIni()
         ini.SetValue("Hotfix", "SimulateWaitableObject",
                      GetBoolValue(Instance()->SimulateWaitableObject.value_for_config()).c_str());
         ini.SetValue("Hotfix", "DisableOverlays", GetBoolValue(Instance()->DisableOverlays.value_for_config()).c_str());
+        ini.SetValue("Hotfix", "REFrameworkCompat",
+                     GetBoolValue(Instance()->REFrameworkCompat.value_for_config()).c_str());
 
         ini.SetValue("Hotfix", "RoundInternalResolution",
                      GetIntValue(Instance()->RoundInternalResolution.value_for_config()).c_str());

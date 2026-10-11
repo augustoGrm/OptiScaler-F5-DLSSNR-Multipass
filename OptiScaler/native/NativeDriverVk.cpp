@@ -31,6 +31,11 @@ VkSemaphore g_presentWait = VK_NULL_HANDLE;
 // The mode with frame generation is chosen but the game's swapchain was made without the bridge.
 bool g_frameGenerationMode = false;
 
+// Why the frame source left the present's Vulkan device alone (a second device the game made), for the menu. Copied out of
+// the frame source under the run mutex; the menu thread reads it under its own.
+std::mutex g_refusalMutex;
+std::string g_refusal;
+
 } // namespace
 
 namespace NativeMotionVk
@@ -38,8 +43,17 @@ namespace NativeMotionVk
 
 void OnPresent(VkQueue queue, VkPresentInfoKHR* present, VkDevice device, VkPhysicalDevice physical)
 {
-    // A dxvk game presents its D3D frames through here as well; those belong to the D3D drivers.
-    if (IdentifyGpu::getPrimaryGpu().usesDxvk)
+    // A dxvk game presents its D3D frames through here as well; those belong to the D3D drivers, unless the
+    // experimental DlssNrNativeDxvkVulkan key asks this driver to read dxvk's own Vulkan calls instead
+    // (NativeDriverDx11.cpp::OnPresent stands aside in that case).
+    if (VkPresentBridge::DxvkGame() && !VkPresentBridge::DxvkThroughVulkan())
+        return;
+
+    // Whenever the D3D11 bridge (with_dx12/dx11_with_dx12_sc.h, NativeMotionDx11::OnFGPresent) owns the frame, this
+    // driver stays out of its way, the invariant NativeDriverDx11.h describes ("only one of the two drivers' OnPresent is
+    // ever fed real work"). With DlssNrNativeDxvkVulkan on it is never made for a dxvk game: that game's frame generation
+    // is the Vulkan present bridge, as for a native Vulkan game (hooks/DxgiFactory_Hooks.cpp).
+    if (State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12)
         return;
 
     if (present == nullptr || present->swapchainCount != 1 || queue == VK_NULL_HANDLE || device == VK_NULL_HANDLE ||
@@ -120,7 +134,16 @@ void OnPresent(VkQueue queue, VkPresentInfoKHR* present, VkDevice device, VkPhys
     // Why a frame could not be handed over, once each time the reason changes.
     static std::string lastError;
 
-    if (g_source.Error() != lastError)
+    {
+        std::lock_guard lock(g_refusalMutex);
+        g_refusal = g_source.Refusal();
+    }
+
+    // A refused second device has its own line (once per device, VkFrameSource::EnsureDevices): its presents alternate with
+    // the held device's, and would flip this one every frame
+    const bool refused = !g_source.Refusal().empty() && g_source.Error() == g_source.Refusal();
+
+    if (!refused && g_source.Error() != lastError)
     {
         lastError = g_source.Error();
 
@@ -175,19 +198,45 @@ void OnDeviceDestroyed(VkDevice device)
 {
     std::lock_guard lock(g_runMutex);
     g_source.OnDeviceDestroyed(device);
+
+    // A refusal for that device is over; the menu would otherwise keep it until the next present gets this far
+    std::lock_guard refusalLock(g_refusalMutex);
+    g_refusal = g_source.Refusal();
 }
 
 void DrawStatus()
 {
+    // The bridge was turned off because its D3D12 swapchain could not present (VkPresentBridge::PresentOutput)
+    if (const std::string given = VkPresentBridge::FailureReason(); !given.empty())
+    {
+        ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f),
+                           "Frame generation stopped: %s. The game was asked to show its pictures on its own window "
+                           "again. Restart the game to try frame generation again.",
+                           given.c_str());
+        return;
+    }
+
+    // Under the status, not instead of it: Optical F5Low still runs on the first device. Only while it is on: a refusal
+    // copied before it was switched off would otherwise stay.
+    std::string refusal;
+    {
+        std::lock_guard lock(g_refusalMutex);
+        refusal = g_refusal;
+    }
+
     if (g_frameGenerationMode)
     {
         ImGui::TextDisabled("Waiting for the game to make a new swapchain for frame generation (it was told to). If "
                             "nothing changes, switch the game's window mode or resolution once. OptiFG (Upscaler) and "
                             "an output must be set when the game starts.");
-        return;
+    }
+    else
+    {
+        g_driver.DrawStatus();
     }
 
-    g_driver.DrawStatus();
+    if (!refusal.empty() && g_driver.Enabled())
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "%s", refusal.c_str());
 }
 
 bool NrOnlyRunning() { return g_driver.NrOnlyRunning(); }

@@ -2,6 +2,7 @@
 
 #include <dxgi.h>
 #include <d3d12.h>
+#include <atomic>
 #include <unordered_map>
 #include "low_latency/ll_util.h"
 
@@ -18,6 +19,7 @@ class fakenvapi
     inline static void* _lowLatencyTechContext = nullptr;
     inline static LowLatencyMode _lowLatencyMode = LowLatencyMode::LatencyFlex;
     inline static HMODULE _dllForNvidia = nullptr;
+    inline static std::atomic<uint32_t> _forcedModeGeneration = 0;
 
     static std::unordered_map<NvU32, void*> idToFuncMapping;
 
@@ -40,6 +42,9 @@ class fakenvapi
     static void* queryInterface(NvU32 id);
     static void reportFGPresent(IDXGISwapChain* pSwapChain, bool fg_state, bool frame_interpolated);
     static bool forceMode(IUnknown* device, LowLatencyMode mode);
+    // Counts forceMode calls: each can destroy the current low latency context and make a new one, which may land at the
+    // old one's address, so a context is told apart by this rather than by its pointer
+    static uint32_t forcedModeGeneration();
     static bool isLowLatencyActive();
 
     static LowLatencyMode getCurrentMode();

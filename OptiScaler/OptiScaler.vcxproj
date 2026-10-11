@@ -256,6 +256,7 @@ copy "$(SolutionDir)Licenses\MFGUnlock_LICENSE.txt" $(SolutionDir)x64\Release\a\
 copy "$(SolutionDir)Licenses\ReShade_GenericDepth_LICENSE.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
 copy "$(SolutionDir)Licenses\DLSS5Feeder_LICENSE.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
 copy "$(SolutionDir)Licenses\Inter_OFL.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
+copy "$(SolutionDir)Licenses\PeripheralWarp_LICENSE.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
 md $(SolutionDir)x64\Release\a\OptiScaler
 copy $(SolutionDir)external\xess\bin\*.dll $(SolutionDir)x64\Release\a\OptiScaler\ /Y
 copy $(SolutionDir)external\FidelityFX-SDK\docs\license.md $(SolutionDir)x64\Release\a\OptiScaler\Licenses\FidelityFX_v1_LICENSE.md /Y
@@ -407,6 +408,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="spoofing\User32_Spoofing.h" />
     <ClInclude Include="hooks\VulkanwDx12_Hooks.h" />
     <ClInclude Include="misc\IdentifyGpu.h" />
+    <ClInclude Include="misc\REFrameworkCompat.h" />
+    <ClInclude Include="misc\REFrameworkCompatCore.h" />
     <ClInclude Include="inputs\FSR2_Dx11.h" />
     <ClInclude Include="inputs\FSR2_Vk.h" />
     <ClInclude Include="inputs\XeSS_Dx11.h" />
@@ -445,6 +448,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="shaders\dlssnr\DlssNr_Vk.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_LutVk.h" />
     <ClInclude Include="shaders\dlssnr\DlssNrDetailReuse_Vk.h" />
+    <ClInclude Include="shaders\dlssnr\DlssNrSpatial_Vk.h" />
     <ClInclude Include="shaders\dlssnr\precompile\dlssnr_detail_reuse_Shader_Vk.h" />
     <ClInclude Include="dlssnr\DlssNrFeature_Vk.h" />
     <ClInclude Include="dlssnr\DlssNr_ExposureScan.h" />
@@ -527,6 +531,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="native\SharedFrame.h" />
     <ClInclude Include="native\DepthCopyDx11.h" />
     <ClInclude Include="native\DepthResolveDx12.h" />
+    <ClInclude Include="native\MsaaPictureDx11.h" />
     <ClInclude Include="native\Dx11FrameSource.h" />
     <ClInclude Include="native\SharedFrameVk.h" />
     <ClInclude Include="native\VkFrameSource.h" />
@@ -537,10 +542,13 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="resource_tracking\GenericDepth_VkEvents.h" />
     <ClInclude Include="native\VirtualUpscalerDriver.h" />
     <ClInclude Include="native\NativeDriver.h" />
+    <ClInclude Include="native\XefgReflexRule.h" />
     <ClInclude Include="native\NativeLowLatency.h" />
     <ClInclude Include="native\NativeLowLatencyRule.h" />
     <ClInclude Include="native\NativeLowLatencyVkSync.h" />
     <ClInclude Include="native\PresentStageTiming.h" />
+    <ClInclude Include="native\VkDeviceRules.h" />
+    <ClInclude Include="native\VkOutputFailureRule.h" />
     <ClInclude Include="native\VkPresentCopyRule.h" />
     <ClInclude Include="LogAsyncRule.h" />
     <ClInclude Include="motion\OpticalFlow_Hlsl.h" />
@@ -549,6 +557,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="motion\TrustMask_Hlsl.h" />
     <ClInclude Include="native\DepthCopyDx11_Hlsl.h" />
     <ClInclude Include="native\DepthResolve_Hlsl.h" />
+    <ClInclude Include="native\MsaaPicture_Hlsl.h" />
     <ClInclude Include="native\F5LowShaderBytecode.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_WatchedLists.h" />
     <ClInclude Include="native\VirtualUpscalerHold.h" />
@@ -725,6 +734,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="menu\input\input_system_windows_hooks.cpp" />
     <ClCompile Include="menu\input\input_system_xinput.cpp" />
     <ClCompile Include="misc\IdentifyGpu.cpp" />
+    <ClCompile Include="misc\REFrameworkCompat.cpp" />
     <ClCompile Include="inputs\FSR2_Dx11.cpp" />
     <ClCompile Include="inputs\FSR2_Vk.cpp" />
     <ClCompile Include="inputs\XeSS_Dx11.cpp" />
@@ -866,6 +876,11 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='ReleaseDebug|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="native\MsaaPictureDx11.cpp">
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='ReleaseDebug|x64'">NotUsing</PrecompiledHeader>
+      <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Release|x64'">NotUsing</PrecompiledHeader>
+    </ClCompile>
     <ClCompile Include="native\SharedFrame.cpp">
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">NotUsing</PrecompiledHeader>
       <PrecompiledHeader Condition="'$(Configuration)|$(Platform)'=='ReleaseDebug|x64'">NotUsing</PrecompiledHeader>
@@ -976,6 +991,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="shaders\dlssnr\DlssNr_Vk.cpp" />
     <ClCompile Include="shaders\dlssnr\DlssNr_LutVk.cpp" />
     <ClCompile Include="shaders\dlssnr\DlssNrDetailReuse_Vk.cpp" />
+    <ClCompile Include="shaders\dlssnr\DlssNrSpatial_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNrFeature_Vk.cpp" />
     <ClCompile Include="dlssnr\DlssNr_ExposureScan.cpp" />
     <ClCompile Include="dlssnr\DlssNr_ColourEncodingStatus.cpp" />
