@@ -1509,7 +1509,7 @@ static void RenderLowLatencySection(Config* config)
 
     // Run with no path yet: the first frame, before the first Reflex call went out
     const char* reason = status.decision == Decision::Run ? (status.path[0] != '\0' ? status.path : "Starting")
-                                                          : native::lowlatency::DecisionText(status.decision);
+                                                          : native::lowlatency::DecisionText(status.decision, status.gameReflexFeedsXell);
 
     ImGui::TextWrapped("Status: [%s]: %s", native::lowlatency::StatusLabel(status.decision), reason);
 

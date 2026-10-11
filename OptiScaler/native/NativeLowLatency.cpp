@@ -449,13 +449,20 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         return;
 
     const auto decision = Evaluate(api, device);
-    g_decision = decision;
+    const auto previousDecision = g_decision.exchange(decision);
 
     if (decision != Decision::Run)
     {
+        // Once whenever it changes (a running one logs its stop below)
+        if (decision != previousDecision && !g_running.load(std::memory_order_relaxed))
+        {
+            LOG_INFO("{}: not running ({})", LogName(),
+                     DecisionText(decision, ReflexHooks::bridgedReflexForwarding()));
+        }
+
         if (g_running.load(std::memory_order_relaxed))
         {
-            LOG_INFO("{}: stopped ({})", LogName(), DecisionText(decision));
+            LOG_INFO("{}: stopped ({})", LogName(), DecisionText(decision, ReflexHooks::bridgedReflexForwarding()));
 
             // XeLL's frame IDs go on from the game's own now, which can be below ours (Intel: they rise)
             if (decision == Decision::GameRunsReflex && g_xellFrameIdForFrameGeneration.load() != 0)
@@ -713,6 +720,7 @@ Status GetStatus()
 {
     Status status;
     status.decision = g_decision.load();
+    status.gameReflexFeedsXell = ReflexHooks::bridgedReflexForwarding();
 
     if (status.decision != Decision::Run || !g_running.load(std::memory_order_relaxed))
         return status;

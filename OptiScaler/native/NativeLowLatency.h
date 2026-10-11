@@ -57,6 +57,8 @@ struct Status
     CapOwner capOwner = CapOwner::NotOurs;
     bool xellIdle = false; // XeLL on an NVIDIA/AMD GPU with no XeFG generating frames: it does nothing
     bool forXefgOnly = false; // runs for XeFG's XeLL alone (Auto, no Optical F5Low mode)
+    // The game's own Reflex calls are sent to XeFG's XeLL (bridged Vulkan game): DecisionText says so
+    bool gameReflexFeedsXell = false;
 };
 
 // The menu's line. Cheap; GetLatency is asked at most twice a second.
