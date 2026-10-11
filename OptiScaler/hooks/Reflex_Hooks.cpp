@@ -222,8 +222,11 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_SetSleepMode(IUnknown* pDev, NV_SET_SLEEP_
     // latency keeps it (native/NativeLowLatencyRule.h PlanCap) and _minimumIntervalUs is never put into them.
     if (_ownCall)
     {
-        if (State::Instance().activeFgOutput == FGOutput::XeFG)
-            return nvapi_calls::NvAPI_D3D_SetSleepMode(pDev, pSetSleepModeParams);
+        if (XefgOutput())
+        {
+            auto forXefg = ForOutput(*pSetSleepModeParams);
+            return nvapi_calls::NvAPI_D3D_SetSleepMode(pDev, &forXefg);
+        }
 
         return o_NvAPI_D3D_SetSleepMode(pDev, pSetSleepModeParams);
     }
@@ -847,7 +850,11 @@ bool ReflexHooks::updateTimingData()
     std::scoped_lock lock(_sleepModeMutex);
 
     // The game's Reflex device, else Optical F5Low's own Sleep device
-    if (auto sleepDev = _lastSleepDev != nullptr ? _lastSleepDev : _ownSleepDev; sleepDev && o_NvAPI_D3D_GetLatency)
+    // A game that only marks frames for XeFG's XeLL sets no sleep device: its markers' device asks
+    auto* markersDev = XefgOutput() && gameIsSendingMarkers() ? _lastDev[SIMULATION_START] : nullptr;
+
+    if (auto sleepDev = _lastSleepDev != nullptr ? _lastSleepDev : (_ownSleepDev != nullptr ? _ownSleepDev : markersDev);
+        sleepDev && o_NvAPI_D3D_GetLatency)
     {
         // Not calling free on this but it's static so hopefully fine
         static NV_LATENCY_RESULT_PARAMS* results = new NV_LATENCY_RESULT_PARAMS();
@@ -903,11 +910,12 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
         return;
     }
 
-    if (isVulkan && bridgedXellDevice() != nullptr)
+    if (isVulkan && bridgedXellDevice() != nullptr && (_lastVkSleepDev || _lastLl2ModeSet || gameIsSendingMarkers()))
     {
-        // XeFG's XeLL holds the cap, with the game's sleep mode or one we send (setFPSLimit). The Vulkan present and the
-        // bridge's D3D12 present both come here: the answer must not depend on fgActive, or it flips every frame.
-        State::Instance().reflexLimitsFps = true;
+        // XeFG's XeLL holds the cap, with the game's sleep mode or one we send (setFPSLimit) once markers come, as on
+        // D3D; Force Disable leaves it to OptiScaler's limiter. The Vulkan present and the bridge's D3D12 present both
+        // come here: the answer must not depend on fgActive, or it flips every frame.
+        State::Instance().reflexLimitsFps = !ForceDisabled();
     }
     else if (isVulkan && _lastVkSleepDev)
     {
@@ -1128,8 +1136,10 @@ NvAPI_Status ReflexHooks::ownSetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARA
 {
     std::scoped_lock lock(_sleepModeMutex);
 
-    // The game's own SetSleepMode is the last word, even one that came in just before ours
-    if (_gameCalledSetSleepMode)
+    // The game's own SetSleepMode is the last word, even one that came in just before ours. With XeFG so is any mode its
+    // side set (Streamline's calls are not the game's module) or that we sent for a game that only marks frames
+    // (setFPSLimit): our stop would turn XeLL's low latency and cap off under it.
+    if (_gameCalledSetSleepMode || (XefgOutput() && (_lastSleepDev != nullptr || gameIsSendingMarkers())))
         return NVAPI_OK;
 
     OwnCallScope scope(_ownCall);

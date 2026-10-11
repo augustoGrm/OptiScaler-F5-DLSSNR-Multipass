@@ -720,7 +720,9 @@ Status GetStatus()
 {
     Status status;
     status.decision = g_decision.load();
-    status.gameReflexFeedsXell = ReflexHooks::bridgedReflexForwarding();
+    // The bridge forwards a Vulkan game's Reflex; a D3D game's goes to XeFG's XeLL through the D3D hooks
+    status.gameReflexFeedsXell = ReflexHooks::bridgedReflexForwarding() ||
+                                 (State::Instance().activeFgOutput == FGOutput::XeFG && ReflexHooks::gameCalledReflex());
 
     if (status.decision != Decision::Run || !g_running.load(std::memory_order_relaxed))
         return status;
