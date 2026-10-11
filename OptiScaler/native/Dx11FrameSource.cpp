@@ -48,6 +48,7 @@ void Dx11FrameSource::SetPresent(IDXGISwapChain* swapChain, ID3D11Device* device
         _fence.Reset();
         _picture.Reset();
         _depth.Reset();
+        _msaa.Release();
     }
 }
 
@@ -121,9 +122,13 @@ AcquireStatus Dx11FrameSource::Acquire(FrameInput& input)
     _backBuffer->GetDesc(&desc);
 
     const DXGI_FORMAT pictureFormat = SharedPictureFormat(desc.Format);
+    const bool multisampled = desc.SampleDesc.Count > 1;
 
     if (!_picture.Matches(desc.Width, desc.Height, pictureFormat))
     {
+        // The multisampled path holds the picture's read view
+        _msaa.Release();
+
         // DLSS-NR's compose pass writes its result straight back into `color` through a UAV (the same in-place
         // pattern as the D3D12 finished-picture path): shader-resource-only here left the D3D12 side unable to
         // create that view, so the model ran (GPU time, "successful" dispatch) but its write never landed anywhere.
@@ -155,7 +160,40 @@ AcquireStatus Dx11FrameSource::Acquire(FrameInput& input)
         _sharedInUse = false;
     }
 
-    _context11->CopyResource(_picture.Tex11(), _backBuffer.Get());
+    if (!multisampled)
+    {
+        _context11->CopyResource(_picture.Tex11(), _backBuffer.Get());
+    }
+    else
+    {
+        // A copy between a multisampled and a single-sample texture is dropped by D3D11 without a word: NR would cost GPU time
+        // and show nothing. Resolve the samples into the picture instead (Return draws the result back into every sample).
+        // Under frame generation's swap chain (Dx11wDx12SC) the back buffer is the hidden real one; the bridge copies the
+        // same buffer out on its own (resolving it too) before this runs and takes NR's result from the D3D12 side, so
+        // nothing here depends on the order of the two.
+        static bool loggedMultisampled = false;
+
+        if (!loggedMultisampled)
+        {
+            loggedMultisampled = true;
+            LOG_INFO("Native motion (D3D11): the game's swap chain is multisampled ({} samples): resolved in, drawn back",
+                     desc.SampleDesc.Count);
+        }
+
+        if (const char* why = _msaa.ResolveIn(_context11.Get(), _backBuffer.Get(), _picture.Tex11()))
+        {
+            _error = why;
+            static const char* loggedReason = nullptr;
+
+            if (loggedReason != why)
+            {
+                loggedReason = why;
+                LOG_WARN("Native motion (D3D11): resolving the multisampled back buffer failed: {}", why);
+            }
+
+            return AcquireStatus::Unavailable;
+        }
+    }
 
     const auto depthSnap = GenericDepthDx11::BestSnapshot();
     bool depthReady = false;
@@ -272,7 +310,26 @@ void Dx11FrameSource::Return(const FrameInput& input, const FrameOutput& output)
         _context4->Wait(_fence.Fence11(), doneValue);
     }
 
-    _context11->CopyResource(_backBuffer.Get(), _picture.Tex11());
+    D3D11_TEXTURE2D_DESC backDesc {};
+    _backBuffer->GetDesc(&backDesc);
+
+    if (backDesc.SampleDesc.Count <= 1)
+    {
+        _context11->CopyResource(_backBuffer.Get(), _picture.Tex11());
+    }
+    else if (const char* why = _msaa.WriteBack(_context11.Get(), _picture.Tex11(), _backBuffer.Get()))
+    {
+        // The frame goes out as the game drew it
+        _error = why;
+        static const char* loggedReason = nullptr;
+
+        if (loggedReason != why)
+        {
+            loggedReason = why;
+            LOG_WARN("Native motion (D3D11): drawing the result into the multisampled back buffer failed: {}", why);
+        }
+    }
+
     _backBuffer.Reset();
 }
 
@@ -281,6 +338,7 @@ void Dx11FrameSource::OnResize()
     _picture.Reset();
     _depth.Reset();
     _backBuffer.Reset();
+    _msaa.Release();
 }
 
 } // namespace native

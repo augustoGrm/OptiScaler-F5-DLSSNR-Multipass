@@ -90,11 +90,12 @@ static bool PrepareDx12FlipFormat(DXGI_FORMAT& format)
 
 static bool PrepareDx12InteropDesc(DXGI_SWAP_CHAIN_DESC& desc, bool tearingSupported)
 {
-    // D3D12 swapchain backbuffers cannot be multisampled.
+    // D3D12 swapchain backbuffers cannot be multisampled: this desc is the D3D12 side's, forced to one sample below. The
+    // game's own D3D11 swap chain keeps the samples it asked for, and the bridge resolves them into single-sample copies.
     if (desc.SampleDesc.Count > 1)
     {
-        LOG_WARN("Dx11wDx12 interop does not support MSAA swapchains! SampleCount: {}", desc.SampleDesc.Count);
-        return false;
+        LOG_INFO("Dx11wDx12 interop: the game's swapchain is multisampled ({} samples); the D3D12 side is single-sample",
+                 desc.SampleDesc.Count);
     }
 
     // Flip-model swapchains support a limited set of formats.
@@ -171,11 +172,12 @@ static bool PrepareDx12InteropDesc(DXGI_SWAP_CHAIN_DESC& desc, bool tearingSuppo
 
 static bool PrepareDx12InteropDesc1(DXGI_SWAP_CHAIN_DESC1& desc, bool tearingSupported)
 {
-    // D3D12 swapchain backbuffers cannot be multisampled.
+    // D3D12 swapchain backbuffers cannot be multisampled: this desc is the D3D12 side's, forced to one sample below (see the
+    // other overload).
     if (desc.SampleDesc.Count > 1)
     {
-        LOG_WARN("Dx11wDx12 interop does not support MSAA swapchains! SampleCount: {}", desc.SampleDesc.Count);
-        return false;
+        LOG_INFO("Dx11wDx12 interop: the game's swapchain is multisampled ({} samples); the D3D12 side is single-sample",
+                 desc.SampleDesc.Count);
     }
 
     if (!PrepareDx12FlipFormat(desc.Format))
