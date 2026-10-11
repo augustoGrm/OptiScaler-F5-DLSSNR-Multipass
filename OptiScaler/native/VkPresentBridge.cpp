@@ -84,6 +84,8 @@ std::atomic<int> g_outputsActive { 0 };
 // ask every frame (hooks/Reflex_Hooks.cpp), the latter while LetGoOfOutput holds the mutex and waits for it. Cleared
 // before frame generation lets go of its swapchain; the device itself lives as long as the bridge.
 std::atomic<ID3D12Device*> g_outputDevice { nullptr };
+// The up output draws the menu on the game's presents only (MenuOnGamePresents)
+std::atomic<bool> g_menuOnGamePresents { false };
 std::unordered_map<VkSurfaceKHR, HWND> g_windows;
 std::unique_ptr<Bridge> g_bridge;
 std::vector<std::unique_ptr<Bridge>> g_retired; // output gone, hidden surface kept until their swapchains are destroyed
@@ -255,8 +257,8 @@ void LetGoOfOutput(Bridge& bridge, IDXGISwapChain4* output)
     auto& state = State::Instance();
     HWND window = bridge.window;
 
-    if (auto* device = bridge.device12; device != nullptr)
-        g_outputDevice.compare_exchange_strong(device, nullptr);
+    if (auto* device = bridge.device12; device != nullptr && g_outputDevice.compare_exchange_strong(device, nullptr))
+        g_menuOnGamePresents = false;
 
     MenuOverlayDx::CleanupRenderTarget(true, window);
 
@@ -273,6 +275,15 @@ void LetGoOfOutput(Bridge& bridge, IDXGISwapChain4* output)
 
     state.currentRealSwapchain = nullptr;
     state.swapchainInteropApi = SwapchainInteropApi::None;
+
+    // A swapchain released in exclusive full screen makes DXGI raise DXGI_ERROR_INVALID_CALL: back to windowed first.
+    // CreateDx12BridgeSwapChain keeps DXGI's own Alt+Enter off; this is for anything else that put it there.
+    if (BOOL fullscreen = FALSE;
+        output != nullptr && SUCCEEDED(output->GetFullscreenState(&fullscreen, nullptr)) && fullscreen)
+    {
+        LOG_INFO("Vulkan bridge: the D3D12 swapchain was in exclusive full screen, back to windowed before it goes");
+        output->SetFullscreenState(FALSE, nullptr);
+    }
 
     auto fg = state.currentFG;
 
@@ -436,6 +447,7 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
         self->outputRule = native::VkOutputFailureRule {};
         ++g_outputsActive;
         g_outputDevice = self->device12;
+        g_menuOnGamePresents = systemFactory;
         LOG_INFO("Vulkan bridge: D3D12 swapchain {:X} on window {:X} ({}x{}, format {}, {} buffers, {})",
                  (size_t) out.Get(), (size_t) self->window, desc.BufferDesc.Width, desc.BufferDesc.Height,
                  (int) desc.BufferDesc.Format, desc.BufferCount, realFG ? "frame generation's own" : "plain");
@@ -756,6 +768,8 @@ bool OutputActive()
 }
 
 ID3D12Device* Device() { return g_outputDevice.load(std::memory_order_acquire); }
+
+bool MenuOnGamePresents() { return g_menuOnGamePresents.load(std::memory_order_relaxed); }
 
 bool CopyToOutput(ID3D12Resource* picture, ID3D12Fence* fence, uint64_t copied, ID3D12Fence* doneFence,
                   uint64_t doneValue, uint64_t signalValue)

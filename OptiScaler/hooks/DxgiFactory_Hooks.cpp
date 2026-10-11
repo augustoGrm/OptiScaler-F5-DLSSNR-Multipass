@@ -412,6 +412,12 @@ HRESULT DxgiFactoryHooks::CreateDx12BridgeSwapChain(IDXGIFactory* factory, ID3D1
         swapChain->Release();
     }
 
+    // The game owns full screen (Vulkan, or dxvk's own DXGI): DXGI's Alt+Enter on the window must not put this swapchain
+    // into exclusive full screen behind its back. The bridge lets the swapchain go on every remake, and releasing one in
+    // exclusive full screen raises DXGI_ERROR_INVALID_CALL (Batman: Arkham Knight on dxvk, Alt+Enter).
+    if (SUCCEEDED(result) && *out != nullptr && desc->OutputWindow != nullptr)
+        factory->MakeWindowAssociation(desc->OutputWindow, DXGI_MWA_NO_ALT_ENTER);
+
     return result;
 }
 
