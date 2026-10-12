@@ -532,9 +532,49 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc)
     return result;
 }
 
+// ResizeBuffers(0, 0) means "the window's size". With the window still hidden or minimised (a game leaving exclusive full screen
+// before it sizes its window) that is 1x1, and the picture, XeFG and the upscaler all end up at 1x1 for good. Keep the size the
+// swapchain has until the window is real: the game resizes again when it is.
+static void KeepSizeWhileWindowTiny(IDXGISwapChain* swapChain, HWND window, UINT& width, UINT& height)
+{
+    if (width != 0 && height != 0)
+        return;
+
+    RECT client {};
+    const bool haveClient = window != nullptr && GetClientRect(window, &client);
+
+    LOG_INFO("ResizeBuffers 0x0: window {:X} client {}x{} (read {}), iconic {}, visible {}", (uintptr_t) window,
+             client.right, client.bottom, haveClient, window != nullptr && IsIconic(window),
+             window != nullptr && IsWindowVisible(window));
+
+    if (!haveClient || swapChain == nullptr)
+        return;
+
+    // A real window: say its size ourselves. The swapchain behind the bridge came out 1x1 from a 0x0 here (Call to Arms leaving
+    // exclusive full screen, window 2560x1440).
+    if (client.right >= 16 && client.bottom >= 16)
+    {
+        width = (UINT) client.right;
+        height = (UINT) client.bottom;
+        return;
+    }
+
+    DXGI_SWAP_CHAIN_DESC current {};
+
+    if (FAILED(swapChain->GetDesc(&current)))
+        return;
+
+    LOG_WARN("ResizeBuffers 0x0 with a {}x{} window: keeping {}x{}", client.right, client.bottom,
+             current.BufferDesc.Width, current.BufferDesc.Height);
+    width = current.BufferDesc.Width;
+    height = current.BufferDesc.Height;
+}
+
 HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat,
                                                      UINT SwapChainFlags)
 {
+    KeepSizeWhileWindowTiny(_fgSwapChain, _handle, Width, Height);
+
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers: count {}, size {}x{}, format {}, flags {:X}", BufferCount, Width, Height,
               (UINT) NewFormat, SwapChainFlags);
 
@@ -588,6 +628,14 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Widt
     }
 
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers results: real {:X}, fg {:X}", (UINT) realResult, (UINT) fgResult);
+
+    if (_real != nullptr)
+    {
+        DXGI_SWAP_CHAIN_DESC after {};
+
+        if (SUCCEEDED(_real->GetDesc(&after)))
+            LOG_INFO("ResizeBuffers: the game's swapchain is now {}x{}", after.BufferDesc.Width, after.BufferDesc.Height);
+    }
 
     if (SUCCEEDED(realResult) && SUCCEEDED(fgResult))
     {
@@ -780,6 +828,8 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers1(UINT BufferCount, UINT Wid
                                                       UINT SwapChainFlags, const UINT* pCreationNodeMask,
                                                       IUnknown* const* ppPresentQueue)
 {
+    KeepSizeWhileWindowTiny(_fgSwapChain, _handle, Width, Height);
+
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers1: count {}, size {}x{}, format {}, flags {:X}", BufferCount, Width, Height,
               (UINT) Format, SwapChainFlags);
 
