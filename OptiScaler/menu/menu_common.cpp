@@ -112,21 +112,25 @@ static ImVec2 lastPosition(-1000.0f, -1000.0f);
 // How many frames DLSS frame generation adds per real frame (0: off). A game's own DLSS frame generation reports it on
 // each evaluate; OptiScaler's own DLSSG output (OptiFG input, e.g. Optical F5Low's upscaler) gets no such report back,
 // so there it is the count OptiScaler asked for while its frame generation runs.
+
 static int DlssgInterpolationCount(const State& state)
 {
+    if (state.activeFgOutput == FGOutput::DLSSG)
+    {
+        const auto fg = state.currentFG;
+
+        if (fg != nullptr && fg->IsActive() && !fg->IsPaused())
+            return std::max(0, (int) fg->GetInterpolatedFrameCount());
+
+        return 0;
+    }
+
     if (const int reported = state.dlssgDetectedInterpolationCount; reported > 0)
         return reported;
 
-    const auto fg = state.currentFG;
-
-    if (state.activeFgOutput == FGOutput::DLSSG && state.activeFgInput == FGInput::Upscaler && fg != nullptr &&
-        fg->IsActive() && !fg->IsPaused())
-    {
-        return (int) fg->GetInterpolatedFrameCount();
-    }
-
     return 0;
 }
+
 
 static ImVec2 splashPosition(-1000.0f, -1000.0f);
 static ImVec2 splashSize(0.0f, 0.0f);
