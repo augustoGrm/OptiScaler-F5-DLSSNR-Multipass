@@ -911,7 +911,56 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
         LOG_INFO("Optical F5Low Vulkan: timelineSemaphore feature {}", what);
     }
 
+    // VK_AMD_anti_lag (added by VulkanSpoofing when the device offers it) does nothing until its antiLag feature is
+    // switched on too: vkAntiLagUpdateAMD needs it, and without it Anti-Lag Vk neither waited nor kept the frame cap
+    // (AMD tester, dxvk on the Vulkan bridge, XeFG with Anti-Lag 2 as the Output: the same frame rate under every cap).
+    // Where the game already chains the feature struct, the flag is set in it for the call and put back after; otherwise
+    // ours goes at the head of the chain.
+    VkPhysicalDeviceAntiLagFeaturesAMD antiLagFeature {};
+    VkBool32* antiLagBorrowedFlag = nullptr;
+
+    if (State::Instance().vkAntiLagSupported &&
+        DlssNr::VkExt::ListHas(localCreteInfo.ppEnabledExtensionNames, localCreteInfo.enabledExtensionCount,
+                               VK_AMD_ANTI_LAG_EXTENSION_NAME))
+    {
+        const char* what = nullptr;
+
+        for (auto* node = (VkBaseOutStructure*) localCreteInfo.pNext; node != nullptr && what == nullptr;
+             node = node->pNext)
+        {
+            if (node->sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD)
+                continue;
+
+            auto* flag = &((VkPhysicalDeviceAntiLagFeaturesAMD*) node)->antiLag;
+
+            if (*flag)
+                what = "already on (the game's own)";
+            else if (!DlssNr::VkExt::IsWritable(flag))
+                what = "left off: the game's feature struct is read-only";
+            else
+            {
+                *flag = VK_TRUE;
+                antiLagBorrowedFlag = flag;
+                what = "switched on in the game's feature struct for the create call";
+            }
+        }
+
+        if (what == nullptr)
+        {
+            antiLagFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD;
+            antiLagFeature.antiLag = VK_TRUE;
+            antiLagFeature.pNext = (void*) localCreteInfo.pNext;
+            localCreteInfo.pNext = &antiLagFeature;
+            what = "switched on here";
+        }
+
+        LOG_INFO("Vulkan Anti-Lag: antiLag feature {}", what);
+    }
+
     auto result = o_vkCreateDevice(physicalDevice, &localCreteInfo, pAllocator, pDevice);
+
+    if (antiLagBorrowedFlag != nullptr)
+        *antiLagBorrowedFlag = VK_FALSE;
 
     // As the call had it, before a borrowed flag is put back
     if (result == VK_SUCCESS && pDevice != nullptr && *pDevice != VK_NULL_HANDLE &&
