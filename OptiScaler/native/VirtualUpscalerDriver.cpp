@@ -200,18 +200,32 @@ bool VirtualUpscalerDriver::CreateFeature(ID3D12GraphicsCommandList* cmd, const 
 
     std::unique_ptr<IFeature_Dx12> feature;
 
-    if (!FeatureProvider_Dx12::GetFeature(backend, kVirtualHandleId, _params, &feature) || feature == nullptr)
+    // A backend library can throw (the FSR upscaler does on a size it cannot use): not into the game's present.
+    try
     {
-        _error = std::format("could not create the {} backend", UpscalerDisplayName(backend));
-        LOG_WARN("Virtual upscaler: {}", _error);
-        return false;
-    }
+        if (!FeatureProvider_Dx12::GetFeature(backend, kVirtualHandleId, _params, &feature) || feature == nullptr)
+        {
+            _error = std::format("could not create the {} backend", UpscalerDisplayName(backend));
+            LOG_WARN("Virtual upscaler: {}", _error);
+            return false;
+        }
 
-    if (!feature->Init(_device, cmd, _params))
+        if (!feature->Init(_device, cmd, _params))
+        {
+            _error = std::format("the {} backend failed to initialise", feature->Name());
+            LOG_WARN("Virtual upscaler: {}", _error);
+            Util::DelayedDestroy(std::move(feature));
+            return false;
+        }
+    }
+    catch (...)
     {
-        _error = std::format("the {} backend failed to initialise", feature->Name());
-        LOG_WARN("Virtual upscaler: {}", _error);
-        Util::DelayedDestroy(std::move(feature));
+        _error = std::format("the {} backend threw an exception while starting", UpscalerDisplayName(backend));
+        LOG_ERROR("Virtual upscaler: {}", _error);
+
+        if (feature != nullptr)
+            Util::DelayedDestroy(std::move(feature));
+
         return false;
     }
 
@@ -395,6 +409,17 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     key.hdr = frame.space == ColorSpace::ScRgb; // PQ is a perceptual encoding, as sRGB is: passed as it comes
     key.backend = (int) WantedBackend();
 
+    // No usable size yet (a swapchain still being made or resized): wait for the next frame, build nothing.
+    if (key.width == 0 || key.height == 0)
+    {
+        if (_zeroSizeFrames++ == 0)
+            LOG_WARN("Virtual upscaler: the picture is {}x{}, waiting for a real size", key.width, key.height);
+
+        return false;
+    }
+
+    _zeroSizeFrames = 0;
+
     auto& state = State::Instance();
     auto& cfg = *Config::Instance();
 
@@ -542,7 +567,15 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     bool evaluated = false;
     {
         ScopedSkipHeapCapture skip {};
-        evaluated = _feature->Evaluate(cmd, _params);
+        try
+        {
+            evaluated = _feature->Evaluate(cmd, _params);
+        }
+        catch (...)
+        {
+            LOG_ERROR("Virtual upscaler: the {} backend threw an exception while evaluating", _backendName);
+            evaluated = false;
+        }
     }
 
     _params->Set(NVSDK_NGX_Parameter_Depth, frame.depth);
