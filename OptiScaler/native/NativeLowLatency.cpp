@@ -257,13 +257,21 @@ bool ForceReflexDisabled()
     return Config::Instance()->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable;
 }
 
+// Frame generation that runs Reflex itself (DLSS FG, an external owner): it cannot work with low latency off
+bool FrameGenerationNeedsReflex()
+{
+    return State::Instance().externalFrameGeneration || State::Instance().activeFgOutput == FGOutput::DLSSG;
+}
+
 Inputs GatherInputs(bool deviceAvailable)
 {
     auto config = Config::Instance();
     auto& state = State::Instance();
 
     Inputs in;
-    in.setting = config->DlssNrNativeLowLatency.value_or_default();
+    const auto rule = RuleForInput(config->FramerateLowLatencyInput.value_or_default());
+    in.setting = rule.setting;
+    in.blockGameLowLatency = rule.blockGameLowLatency && !FrameGenerationNeedsReflex();
 
     const auto shown = DlssNrNativeMode::FromKeys(
         { config->DlssNrNativeDepthFinder.value_or_default(), config->DlssNrNativeMotion.value_or_default(),
@@ -283,7 +291,7 @@ Inputs GatherInputs(bool deviceAvailable)
     in.gameRunsXell = XellHooks::canLimit();
     in.forceReflexDisabled = ForceReflexDisabled();
     in.forceXell = config->ForceXeLL.value_or_default() || state.activeFgInput == FGInput::ForceXeLL;
-    in.otherFrameGenerationOwner = state.externalFrameGeneration || state.activeFgOutput == FGOutput::DLSSG;
+    in.otherFrameGenerationOwner = FrameGenerationNeedsReflex();
     in.apiAvailable = g_table != Table::Missing;
     in.deviceAvailable = deviceAvailable;
     return in;
@@ -435,6 +443,19 @@ const char* PathText(Api api)
     default:
         return fakenvapi::isUsingAsMainNvapi() ? "fakenvapi (no method active yet)" : "NVIDIA Reflex";
     }
+}
+
+// What lowers latency here, whoever makes the calls (the menu's "Active: <input> -> <output>"). PathText names the method
+// our own calls reach; XeFG, Force XeLL and a game's own XeLL come first because they decide it.
+const char* OutputText(Api api)
+{
+    if (State::Instance().activeFgOutput == FGOutput::XeFG || State::Instance().activeFgInput == FGInput::ForceXeLL)
+        return "XeLL";
+
+    if (XellHooks::canLimit())
+        return "XeLL (the game's)";
+
+    return PathText(api);
 }
 
 void PresentBegin(Api api, IUnknown* device, PresentSource source)
@@ -745,12 +766,21 @@ void WaitForGameQueueIdle()
     device->Release();
 }
 
+bool GameLowLatencyBlocked()
+{
+    return BlocksGameLowLatency(Config::Instance()->FramerateLowLatencyInput.value_or_default(),
+                                FrameGenerationNeedsReflex());
+}
+
 Status GetStatus()
 {
     Status status;
     status.decision = g_decision.load();
     status.gameReflexFeedsXell = ReflexHooks::gameReflexFeedsXell();
     status.forceReflexDisabled = ForceReflexDisabled();
+    status.output = OutputText(g_deviceApi.load());
+    status.offKeptForFrameGeneration =
+        Config::Instance()->FramerateLowLatencyInput.value_or_default() == Input::Off && FrameGenerationNeedsReflex();
 
     if (status.decision != Decision::Run || !g_running.load(std::memory_order_relaxed))
         return status;

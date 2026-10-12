@@ -112,6 +112,23 @@ static native::xefgreflex::SleepMode Ll2SleepMode(const VkLatencySleepModeInfoNV
     return mode;
 }
 
+// The Framerate page's Input is Off (native::lowlatency::GameLowLatencyBlocked): the mode goes to the driver with low
+// latency off, no Boost and no interval; OptiScaler's limiter keeps the frame cap
+static VkLatencySleepModeInfoNV Ll2ForDriver(const VkLatencySleepModeInfoNV& info)
+{
+    VkLatencySleepModeInfoNV out = info;
+
+    if (native::lowlatency::GameLowLatencyBlocked())
+    {
+        const auto off = native::xefgreflex::SleepModeForOutput(Ll2SleepMode(&info), 0, false, false, true);
+        out.lowLatencyMode = off.lowLatency ? VK_TRUE : VK_FALSE;
+        out.lowLatencyBoost = off.boost ? VK_TRUE : VK_FALSE;
+        out.minimumIntervalUs = off.minimumIntervalUs;
+    }
+
+    return out;
+}
+
 // XeLL gets the game's mode; the driver the same call with low latency off (null: the game switched it off)
 static VkResult Ll2ForwardSleepMode(ID3D12Device* xellDevice, VkDevice device, VkSwapchainKHR swapchain,
                                     const VkLatencySleepModeInfoNV* info)
@@ -149,13 +166,46 @@ static ID3D12Device* Ll2XellDevice(VkDevice device, VkSwapchainKHR swapchain)
         if (g_ll2HaveMode && swapchain != VK_NULL_HANDLE)
         {
             if (xellDevice != nullptr)
+            {
                 Ll2ForwardSleepMode(xellDevice, device, swapchain, &g_ll2Mode);
+            }
             else
-                o_vkSetLatencySleepModeNV(device, swapchain, &g_ll2Mode);
+            {
+                const auto forDriver = Ll2ForDriver(g_ll2Mode);
+                o_vkSetLatencySleepModeNV(device, swapchain, &forDriver);
+            }
         }
     }
 
     return xellDevice;
+}
+
+// The Input was switched to or from Off since the game set its mode: the game's last mode goes out again in the other
+// shape, on this call's device and swapchain (the game may not set it again for a long time)
+static void Ll2ApplyInputChange(VkDevice device, VkSwapchainKHR swapchain, ID3D12Device* xellDevice)
+{
+    static bool applied = false;
+    const bool blocked = native::lowlatency::GameLowLatencyBlocked();
+
+    std::lock_guard lock(g_ll2Mutex);
+
+    if (blocked == applied)
+        return;
+
+    applied = blocked;
+
+    if (!g_ll2HaveMode || swapchain == VK_NULL_HANDLE)
+        return;
+
+    if (xellDevice != nullptr)
+    {
+        Ll2ForwardSleepMode(xellDevice, device, swapchain, &g_ll2Mode);
+    }
+    else
+    {
+        const auto forDriver = Ll2ForDriver(g_ll2Mode);
+        o_vkSetLatencySleepModeNV(device, swapchain, &forDriver);
+    }
 }
 
 static VkResult VKAPI_CALL hkvkSetLatencySleepModeNV(VkDevice device, VkSwapchainKHR swapchain,
@@ -180,6 +230,12 @@ static VkResult VKAPI_CALL hkvkSetLatencySleepModeNV(VkDevice device, VkSwapchai
     if (xellDevice != nullptr)
         return Ll2ForwardSleepMode(xellDevice, device, swapchain, pSleepModeInfo);
 
+    if (pSleepModeInfo != nullptr)
+    {
+        const auto forDriver = Ll2ForDriver(*pSleepModeInfo);
+        return o_vkSetLatencySleepModeNV(device, swapchain, &forDriver);
+    }
+
     return o_vkSetLatencySleepModeNV(device, swapchain, pSleepModeInfo);
 }
 
@@ -188,7 +244,10 @@ static VkResult VKAPI_CALL hkvkLatencySleepNV(VkDevice device, VkSwapchainKHR sw
 {
     ReflexHooks::noteGameVulkanLowLatency2(false);
 
-    if (auto* xellDevice = Ll2XellDevice(device, swapchain); xellDevice != nullptr && pSleepInfo != nullptr)
+    auto* xellDevice = Ll2XellDevice(device, swapchain);
+    Ll2ApplyInputChange(device, swapchain, xellDevice);
+
+    if (xellDevice != nullptr && pSleepInfo != nullptr)
     {
         ReflexHooks::xellSleep(xellDevice);
 

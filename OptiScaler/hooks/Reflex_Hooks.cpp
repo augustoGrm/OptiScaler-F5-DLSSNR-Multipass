@@ -89,12 +89,16 @@ bool ForceDisabled() { return Config::Instance()->FN_ForceReflex.value_or_defaul
 
 bool XefgOutput() { return State::Instance().activeFgOutput == FGOutput::XeFG; }
 
+// The Framerate page's Input is Off: the game's sleep mode goes out with low latency off (XefgReflexRule.h)
+bool Blocked() { return native::lowlatency::GameLowLatencyBlocked(); }
+
 // XefgReflexRule.h XellHoldsCap, from frame generation's own state: update()'s fgActive is false on every generated
 // frame's present, and the answer must not flip with it
 bool XellHoldsCap()
 {
     static const bool intelGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::Intel;
-    return native::xefgreflex::XellHoldsCap(ForceDisabled(), intelGpu, native::lowlatency::XefgGenerating());
+    return native::xefgreflex::XellHoldsCap(ForceDisabled() || Blocked(), intelGpu,
+                                            native::lowlatency::XefgGenerating());
 }
 
 // A D3D game's sleep mode (cap already in) as its Reflex output gets it: XefgReflexRule.h SleepModeForOutput
@@ -104,17 +108,32 @@ NV_SET_SLEEP_MODE_PARAMS ForOutput(const NV_SET_SLEEP_MODE_PARAMS& params)
     mode.lowLatency = params.bLowLatencyMode != 0;
     mode.boost = params.bLowLatencyBoost != 0;
     mode.minimumIntervalUs = params.minimumIntervalUs;
-    mode = native::xefgreflex::SleepModeForOutput(mode, 0, XefgOutput(), ForceDisabled());
+    mode = native::xefgreflex::SleepModeForOutput(mode, 0, XefgOutput(), ForceDisabled(), Blocked());
 
     NV_SET_SLEEP_MODE_PARAMS out = params;
     out.bLowLatencyMode = mode.lowLatency;
+    out.bLowLatencyBoost = mode.boost;
+    out.minimumIntervalUs = mode.minimumIntervalUs;
     return out;
+}
+
+// A Vulkan game's sleep mode (cap already in) with the Input's Off applied; nothing else changes
+void ForOutput(NV_VULKAN_SET_SLEEP_MODE_PARAMS& params)
+{
+    if (!Blocked())
+        return;
+
+    const auto mode = native::xefgreflex::SleepModeForOutput(ToMode(params), 0, false, false, true);
+    params.bLowLatencyMode = mode.lowLatency;
+    params.bLowLatencyBoost = mode.boost;
+    params.minimumIntervalUs = mode.minimumIntervalUs;
 }
 } // namespace
 
 NvAPI_Status ReflexHooks::xellSetSleepMode(ID3D12Device* xellDevice, const native::xefgreflex::SleepMode& game)
 {
-    const auto mode = native::xefgreflex::SleepModeForOutput(game, _minimumIntervalUs, true, ForceDisabled());
+    const auto mode =
+        native::xefgreflex::SleepModeForOutput(game, _minimumIntervalUs, true, ForceDisabled(), Blocked());
 
     NV_SET_SLEEP_MODE_PARAMS params {};
     params.version = NV_SET_SLEEP_MODE_PARAMS_VER;
@@ -202,6 +221,7 @@ ID3D12Device* ReflexHooks::vkForwardDevice()
             if (_minimumIntervalUs != 0)
                 params.minimumIntervalUs = _minimumIntervalUs;
 
+            ForOutput(params);
             o_NvAPI_Vulkan_SetSleepMode(_lastVkSleepDev, &params);
         }
     }
@@ -267,6 +287,13 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_SetSleepMode(IUnknown* pDev, NV_SET_SLEEP_
     {
         auto forXefg = ForOutput(*pSetSleepModeParams);
         return nvapi_calls::NvAPI_D3D_SetSleepMode(pDev, &forXefg);
+    }
+
+    // The Framerate page's Input is Off: real nvapi, or fakenvapi as the game's nvapi, gets the mode with low latency off
+    if (Blocked())
+    {
+        auto off = ForOutput(*pSetSleepModeParams);
+        return o_NvAPI_D3D_SetSleepMode(pDev, &off);
     }
 
     return o_NvAPI_D3D_SetSleepMode(pDev, pSetSleepModeParams);
@@ -661,6 +688,13 @@ NvAPI_Status ReflexHooks::hkNvAPI_Vulkan_SetSleepMode(HANDLE vkDevice,
     if (_minimumIntervalUs != 0)
         pSetSleepModeParams->minimumIntervalUs = _minimumIntervalUs;
 
+    if (Blocked())
+    {
+        auto off = *pSetSleepModeParams;
+        ForOutput(off);
+        return o_NvAPI_Vulkan_SetSleepMode(vkDevice, &off);
+    }
+
     return o_NvAPI_Vulkan_SetSleepMode(vkDevice, pSetSleepModeParams);
 }
 
@@ -982,6 +1016,19 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
         State::Instance().reflexLimitsFps = false;
     }
 
+    // The Framerate page's Input is Off: the game's Reflex goes out with low latency off and no interval, so it keeps no
+    // cap; OptiScaler's limiter does. A change of the Input sends the stored sleep mode again, in the other shape.
+    const bool blocked = Blocked();
+    static bool lastBlocked = false;
+    const bool blockChanged = blocked != lastBlocked;
+    lastBlocked = blocked;
+
+    if (blocked)
+    {
+        State::Instance().reflexLimitsFps = false;
+        State::Instance().reflexShowWarning = false;
+    }
+
     // Disable reflex fps limiting when reflex is force disabled
     // TODO: It changes without pressing apply, XeLL with XeFG can't actually be disabled so this is wrong
     //
@@ -1000,7 +1047,7 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
     static LowLatencyMode lastLowLatencyMode = fakenvapi::getCurrentMode();
 
     // Reset required when toggling Reflex
-    if (State::Instance().reflexLimitsFps != lastReflexLimitsFps)
+    if (State::Instance().reflexLimitsFps != lastReflexLimitsFps || blockChanged)
     {
         lastReflexLimitsFps = State::Instance().reflexLimitsFps;
         lastFps = 0;
@@ -1104,6 +1151,7 @@ void ReflexHooks::setFPSLimit(float fps)
         }
         else
         {
+            temp = ForOutput(temp); // unchanged unless the Framerate page's Input is Off
             o_NvAPI_D3D_SetSleepMode(_lastSleepDev, &temp);
         }
     }
@@ -1143,6 +1191,7 @@ void ReflexHooks::setFPSLimit(float fps)
         NV_VULKAN_SET_SLEEP_MODE_PARAMS temp {};
         memcpy(&temp, &_lastVkSleepParams, sizeof(NV_VULKAN_SET_SLEEP_MODE_PARAMS));
         temp.minimumIntervalUs = _minimumIntervalUs;
+        ForOutput(temp);
         o_NvAPI_Vulkan_SetSleepMode(_lastVkSleepDev, &temp);
     }
 }
