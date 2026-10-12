@@ -131,12 +131,16 @@ inline const char* LegacySettingText(Input input)
     }
 }
 
-// The new key if it holds a word we know, else the old one, else Auto. Both may be null (not in the ini).
-inline Input InputFromIniValues(const char* inputText, const char* legacyText)
+// The new key if it holds a word we know (an explicit "auto" is a choice, whatever the old key says), else the old one,
+// else Auto. `inputKeyPresent`: the key is in the ini at all. Both texts may be null (not in the ini).
+inline Input InputFromIniValues(bool inputKeyPresent, const char* inputText, const char* legacyText)
 {
     Input input = Input::Auto;
 
-    if (InputFromIniText(inputText, &input) || InputFromLegacyText(legacyText, &input))
+    if (inputKeyPresent && InputFromIniText(inputText, &input))
+        return input;
+
+    if (InputFromLegacyText(legacyText, &input))
         return input;
 
     return Input::Auto;

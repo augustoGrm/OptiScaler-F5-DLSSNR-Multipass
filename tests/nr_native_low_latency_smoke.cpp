@@ -758,13 +758,18 @@ int main()
         CHECK(std::strcmp(LegacySettingText(Input::Off), "false") == 0);
 
         // New key wins; a bad new key falls back to the old one; neither: Auto
-        CHECK(InputFromIniValues("off", "true") == Input::Off);
-        CHECK(InputFromIniValues("game", nullptr) == Input::Game);
-        CHECK(InputFromIniValues(nullptr, "true") == Input::OptiScaler);
-        CHECK(InputFromIniValues(nullptr, "false") == Input::Game);
-        CHECK(InputFromIniValues("banana", "false") == Input::Game);
-        CHECK(InputFromIniValues(nullptr, nullptr) == Input::Auto);
-        CHECK(InputFromIniValues("", "") == Input::Auto);
+        CHECK(InputFromIniValues(true, "off", "true") == Input::Off);
+        CHECK(InputFromIniValues(true, "game", nullptr) == Input::Game);
+        CHECK(InputFromIniValues(false, nullptr, "true") == Input::OptiScaler);
+        CHECK(InputFromIniValues(false, nullptr, "false") == Input::Game);
+        CHECK(InputFromIniValues(true, "banana", "false") == Input::Game);
+        CHECK(InputFromIniValues(false, nullptr, nullptr) == Input::Auto);
+        CHECK(InputFromIniValues(true, "", "") == Input::Auto);
+        // An explicit auto is a choice: the old key does not override it
+        CHECK(InputFromIniValues(true, "auto", "false") == Input::Auto);
+        CHECK(InputFromIniValues(true, "auto", "true") == Input::Auto);
+        // The key is there but holds nothing readable: the old key still counts
+        CHECK(InputFromIniValues(true, nullptr, "false") == Input::Game);
 
         // Decide: Game stands us down with its own answer, Off with its own, both before anything else
         Inputs g;

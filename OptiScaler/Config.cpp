@@ -305,13 +305,20 @@ bool Config::Reload(std::filesystem::path iniPath)
 
             // The new key if it holds a word we know, else the one from before the Input choice (an ini that has
             // neither stays unset: Auto, and nothing is held for the config)
-            const auto input = readString("Framerate", "LowLatencyInput", true);
+            // (readString reads "auto" as not there; an explicit auto must beat the old key, so the key's presence is
+            // asked of the ini itself)
+            const char* inputRaw = ini.GetValue("Framerate", "LowLatencyInput", nullptr);
+            const bool inputPresent = inputRaw != nullptr;
             const auto legacy = readString("DlssNr", "NativeLowLatency", true);
 
-            if (input.has_value() || legacy.has_value())
+            if (inputPresent || legacy.has_value())
             {
+                std::string inputText = inputRaw != nullptr ? inputRaw : "";
+                std::ranges::transform(inputText, inputText.begin(), [](unsigned char c) { return std::tolower(c); });
+
                 FramerateLowLatencyInput.set_from_config(native::lowlatency::InputFromIniValues(
-                    input.has_value() ? input->c_str() : nullptr, legacy.has_value() ? legacy->c_str() : nullptr));
+                    inputPresent, inputPresent ? inputText.c_str() : nullptr,
+                    legacy.has_value() ? legacy->c_str() : nullptr));
             }
         }
 
@@ -1324,11 +1331,11 @@ bool Config::SaveIni()
         ini.SetValue("XeFG", "ForceBorderless",
                      GetBoolValue(Instance()->FGXeFGForceBorderless.value_for_config()).c_str());
 
-        // Nothing held (never chosen): the default word, so the key is in the file for the player to find
-        ini.SetValue("XeFG", "LowLatencyOutput",
-                     native::lowlatency::XefgLatencyIniText(
-                         Instance()->FGXeFGLowLatencyOutput.value_for_config().value_or(
-                             native::lowlatency::XefgLatency::XeLL)));
+        // Nothing held (never chosen): auto, which reads as xell, so the key is in the file for the player to find
+        if (const auto held = Instance()->FGXeFGLowLatencyOutput.value_for_config(); held.has_value())
+            ini.SetValue("XeFG", "LowLatencyOutput", native::lowlatency::XefgLatencyIniText(held.value()));
+        else
+            ini.SetValue("XeFG", "LowLatencyOutput", "auto");
     }
 
     {
