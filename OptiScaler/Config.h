@@ -659,12 +659,6 @@ class Config
     // bridge's device, whose evaluate hands frame generation the game's motion vectors, depth and output
     // (upscalers/IFeature_VkwDx12.cpp). No Optical F5Low motion. The Optical F5Low page's "FG only (game's upscaler)" Mode.
     CustomOptional<bool> DlssNrNativeFrameGenerationOnly { false };
-    // NativeLowLatency: OptiScaler calls the Reflex API itself, since a game that makes no upscaler call makes no Reflex
-    // call either, and XeFG's XeLL needs the calls (see native/NativeLowLatency.h). Real Reflex on NVIDIA; fakenvapi
-    // answers elsewhere (Anti-Lag 2, XeLL or LatencyFlex, chosen by the fakenvapi settings). auto: on while an Optical
-    // F5Low mode or XeFG runs; true: also without either, in any game that makes no Reflex call of its own; false: off.
-    // Stands aside the moment the game calls Reflex itself.
-    CustomOptional<native::lowlatency::Setting> DlssNrNativeLowLatency { native::lowlatency::Setting::Auto };
     // NativeLowLatencyBoost: Reflex's Boost with it (the GPU keeps its clocks up between frames), also for DLSS frame
     // generation's Streamline Reflex on an Optical F5Low game. NVIDIA Reflex only: XeLL, Anti-Lag 2 and LatencyFlex
     // ignore it (XeLL: "Boost is not supported as of now").
@@ -1150,6 +1144,10 @@ class Config
     CustomOptional<bool> FGXeFGHighResMV { false };
     CustomOptional<bool> FGXeFGDebugView { false };
     CustomOptional<bool> FGXeFGForceBorderless { false };
+    // [XeFG] LowLatencyOutput, what lowers latency with XeFG (native/NativeLowLatencyRule.h XefgLatency): xell (default),
+    // reflex (NVIDIA, real nvapi) or antilag2 (AMD, fakenvapi). XeLL stays in place for XeFG either way, with low latency
+    // off when the other two are chosen. A choice the setup lacks reads as xell.
+    CustomOptional<native::lowlatency::XefgLatency> FGXeFGLowLatencyOutput { native::lowlatency::XefgLatency::XeLL };
 
     // DLSSG
     CustomOptional<int> FGDLSSGInterpolationCount { 1 }; // For Opti's own SL instance
@@ -1193,6 +1191,13 @@ class Config
 
     // Framerate
     CustomOptional<float> FramerateLimit { 0.0f };
+    // [Framerate] LowLatencyInput, the Framerate page's low latency "Input" (native/NativeLowLatencyRule.h): OptiScaler
+    // calls the Reflex API itself, since a game that makes no upscaler call makes no Reflex call either, and XeFG's XeLL
+    // needs the calls (native/NativeLowLatency.h). auto: the game's own Reflex when it makes the calls, else ours while
+    // an Optical F5Low mode, XeFG or FSR FG runs; game: only the game's; optiscaler: ours in any game without Reflex;
+    // off: no low latency, the game's Reflex is sent with it off. The old [DlssNr] NativeLowLatency is read when this
+    // key is missing (auto, true = optiscaler, false = game) and still written beside it.
+    CustomOptional<native::lowlatency::Input> FramerateLowLatencyInput { native::lowlatency::Input::Auto };
 
     // HDR
     CustomOptional<bool> ForceHDR { false };

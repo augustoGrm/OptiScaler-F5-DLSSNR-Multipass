@@ -1461,102 +1461,19 @@ static void RenderSceneCutToggle(Config* config)
                             status.silent);
 }
 
-// Optical F5Low's own Reflex calls (native/NativeLowLatency.h): the switch, the method in use and, where the driver
-// reports it, the measured latency. Never touches the fakenvapi settings; it only points to them.
-static void RenderLowLatencySection(Config* config)
+// Optical F5Low's own Reflex calls (native/NativeLowLatency.h): only the state here; the Input and Output choices, Boost
+// and the details are on the Framerate page. The status is the one that page shows (native::lowlatency::ReasonText).
+static void RenderLowLatencySection()
 {
-    if (!ImGui::TreeNodeEx("Low latency##nativelowlatency", ImGuiTreeNodeFlags_DefaultOpen))
-        return;
-
-    using native::lowlatency::CapOwner;
-    using native::lowlatency::Decision;
-    using native::lowlatency::Setting;
-
-    // Off / On / On + Boost. On is the ini's auto or true (any game without Reflex, not only Optical F5Low): the last
-    // one seen comes back after Off. Off keeps the Boost choice for the next On.
-    static const char* modeNames[] = { "Off", "On", "On + Boost" };
-    static Setting lastOn = Setting::Auto;
-    const auto setting = config->DlssNrNativeLowLatency.value_or_default();
-
-    if (setting != Setting::Off)
-        lastOn = setting;
-
-    int mode = setting == Setting::Off ? 0 : (config->DlssNrNativeLowLatencyBoost.value_or_default() ? 2 : 1);
-
-    if (ImGui::Combo("Lower the game's latency##nativelowlatency", &mode, modeNames, IM_ARRAYSIZE(modeNames)))
-    {
-        if (mode == 0)
-        {
-            config->DlssNrNativeLowLatency = Setting::Off;
-        }
-        else
-        {
-            if (setting == Setting::Off)
-                config->DlssNrNativeLowLatency = lastOn;
-
-            config->DlssNrNativeLowLatencyBoost = mode == 2;
-        }
-    }
-
-    HelpMarker("Makes the latency calls the game doesn't: Reflex on NVIDIA, Anti-Lag 2 / XeLL / LatencyFlex on other "
-               "cards. Steps aside if the game uses Reflex itself.\n"
-               "With XeFG it also runs without an Optical F5Low mode: XeFG always uses XeLL, and XeLL needs these "
-               "calls. A game's own Reflex then goes to XeLL, which stays on even if Reflex is off in the game's "
-               "menu (fakenvapi's Force Reflex: Force Disable turns it off).\n"
-               "On + Boost: the GPU keeps its clocks up. A little lower latency, a little more power. NVIDIA Reflex "
-               "only; the others ignore it.");
-
     const auto status = native::lowlatency::GetStatus();
 
-    // Run with no path yet: the first frame, before the first Reflex call went out
-    const char* reason = status.decision == Decision::Run
-                             ? (status.path[0] != '\0' ? status.path : "Starting")
-                             : native::lowlatency::DecisionText(status.decision, status.gameReflexFeedsXell,
-                                                                status.forceReflexDisabled);
+    ImGui::SeparatorText("Low latency");
+    ImGui::TextWrapped("Low latency: %s, %s", native::lowlatency::StatusLabel(status.decision),
+                       native::lowlatency::ReasonText(status));
+    HelpMarker("Keeps the game's render queue short. Which method and who makes the calls is set on the Framerate page.");
 
-    ImGui::TextWrapped("Status: [%s]: %s", native::lowlatency::StatusLabel(status.decision), reason);
-
-    if (status.decision == Decision::Run && status.hasLatency)
-    {
-        // Through fakenvapi there are no GPU times: the frame's simulation start to its present's end
-        if (status.latencyEstimated)
-            ImGui::Text("Simulation to present (estimated from frame markers): %.1f ms", status.latencyMs);
-        else
-            ImGui::Text("Measured latency: %.1f ms", status.latencyMs);
-    }
-
-    // On NVIDIA and AMD XeLL does nothing while XeFG generates no frames (paused, off, exclusive full screen, or
-    // fakenvapi's own XeLL with no XeFG)
-    if (status.decision == Decision::Run && status.xellIdle)
-        ImGui::TextDisabled("XeLL does nothing on this GPU while XeFG generates no frames.");
-
-    // Who keeps the frame cap while we run: one wait per frame (NativeLowLatencyRule.h PlanCap)
-    if (const float cap = config->FramerateLimit.value_or_default();
-        status.decision == Decision::Run && status.path[0] != '\0' && cap > 0.0f)
-    {
-        ImGui::TextDisabled("Frame cap %.0f fps: kept by %s", cap,
-                            status.capOwner == CapOwner::Limiter ? "OptiScaler's limiter" : status.path);
-    }
-
-    // XeFG cannot run without XeLL (Intel), so a card that has real Reflex gets XeLL with it: say what gives Reflex.
-    // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
-    static const auto gpu = IdentifyGpu::getPrimaryGpu();
-
-    if (gpu.vendorId == VendorId::Nvidia && !fakenvapi::isUsingAsMainNvapi() &&
-        State::Instance().activeFgOutput == FGOutput::XeFG)
-    {
-        // DLSS frame generation: RTX 40 (Ada) and later
-        const bool dlssFrameGeneration = gpu.nvidiaArchInfo.architecture_id >= NV_GPU_ARCHITECTURE_AD100;
-        ImGui::TextWrapped(dlssFrameGeneration ? "XeFG always uses XeLL. For NVIDIA Reflex, use DLSS FG or FSR FG."
-                                               : "XeFG always uses XeLL. For NVIDIA Reflex, use FSR FG.");
-    }
-    else if (fakenvapi::isUsingAsMainNvapi() || State::Instance().activeFgOutput == FGOutput::XeFG ||
-             status.decision == Decision::ForceReflexDisabled || status.decision == Decision::ForceXell)
-    {
-        ImGui::TextWrapped("How it lowers latency is set in the fakenvapi settings.");
-    }
-
-    ImGui::TreePop();
+    if (ImGui::SmallButton("Set on the Framerate page##f5lowlatency"))
+        MenuPages::RequestPage(MenuPages::Page::Framerate);
 }
 
 // Optical F5Low: NR for a game that makes no upscaler call of its own (the native modes). The mode selector sits at the
@@ -1574,7 +1491,7 @@ static void RenderF5LowPage(Config* config, const NrCommon& nr)
     bool finishedPicture = nr.finishedPicture;
     RenderNativeMode(config, nr.enabled, finishedPicture);
 
-    RenderLowLatencySection(config);
+    RenderLowLatencySection();
 
     // Detail reuse on Optical F5Low's motion: shown here because this is where its saving matters most (NR on the whole
     // finished picture). Only its state: the checkbox and its fine-tuning live on the NR Options page.

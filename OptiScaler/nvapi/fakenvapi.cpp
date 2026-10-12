@@ -21,8 +21,159 @@ void fakenvapi::init(bool onlyContext)
         return;
 }
 
+// The second context XeFG's Anti-Lag 2 output runs in (fakenvapi.h companion*): one for D3D, one for Vulkan, each its own
+// LowLatency with one tech. The mutex only guards making, switching and dropping the context: a call copies the pointer
+// under it and runs outside, because Sleep and the simulation-start marker block inside Anti-Lag 2's Update and the
+// render thread's markers must not wait for the game thread's sleep.
+namespace
+{
+struct Companion
+{
+    std::mutex mutex;
+    std::shared_ptr<LowLatency> context;
+    const void* device = nullptr;
+    LowLatencyMode tech = LowLatencyMode::None;
+};
+
+Companion g_companionD3D { {}, nullptr, nullptr, LowLatencyMode::AntiLag2 };
+Companion g_companionVk { {}, nullptr, nullptr, LowLatencyMode::AntiLagVk };
+
+// Set once a tech could not start: kept after the context is let go, or the Output would flip back and forth
+std::atomic<bool> g_companionFailed = false;
+
+// The context for `device`: made on the first call, its tech made again for a new device. `fn` runs outside the lock.
+template <typename Fn> NvAPI_Status WithCompanion(Companion& companion, const void* device, Fn&& fn)
+{
+    std::shared_ptr<LowLatency> context;
+
+    {
+        std::scoped_lock lock(companion.mutex);
+
+        if (companion.context == nullptr)
+        {
+            companion.context = std::make_shared<LowLatency>();
+            companion.context->use_only(companion.tech);
+            companion.device = device;
+        }
+        else if (companion.device != device)
+        {
+            companion.context->use_only(companion.tech);
+            companion.device = device;
+        }
+
+        context = companion.context;
+    }
+
+    const auto result = fn(*context);
+
+    if (context->init_failed())
+        g_companionFailed = true;
+
+    return result;
+}
+
+void DropCompanion(Companion& companion)
+{
+    std::shared_ptr<LowLatency> context;
+
+    {
+        std::scoped_lock lock(companion.mutex);
+
+        context = std::move(companion.context);
+        companion.device = nullptr;
+    }
+
+    // Let go outside the lock: the last reference waits for a call still inside its tech
+}
+} // namespace
+
+NvAPI_Status fakenvapi::companionSetSleepMode(IUnknown* device, NV_SET_SLEEP_MODE_PARAMS* params)
+{
+    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.SetSleepMode(device, params); });
+}
+
+NvAPI_Status fakenvapi::companionSleep(IUnknown* device)
+{
+    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.Sleep(device); });
+}
+
+NvAPI_Status fakenvapi::companionSetLatencyMarker(IUnknown* device, NV_LATENCY_MARKER_PARAMS* params)
+{
+    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.SetLatencyMarker(device, params); });
+}
+
+NvAPI_Status fakenvapi::companionSetAsyncFrameMarker(ID3D12CommandQueue* queue, NV_ASYNC_FRAME_MARKER_PARAMS* params)
+{
+    std::shared_ptr<LowLatency> context;
+
+    {
+        std::scoped_lock lock(g_companionD3D.mutex);
+        context = g_companionD3D.context;
+    }
+
+    // It cannot start its tech from a queue: only once a device call has
+    if (context == nullptr)
+        return NVAPI_ERROR;
+
+    return context->SetAsyncFrameMarker(queue, params);
+}
+
+NvAPI_Status fakenvapi::companionGetLatency(IUnknown* device, NV_LATENCY_RESULT_PARAMS* params)
+{
+    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.GetLatency(device, params); });
+}
+
+NvAPI_Status fakenvapi::companionSetSleepMode(HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* params)
+{
+    return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.SetSleepMode(vkDevice, params); });
+}
+
+NvAPI_Status fakenvapi::companionSetLatencyMarker(HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* params)
+{
+    return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.SetLatencyMarker(vkDevice, params); });
+}
+
+NvAPI_Status fakenvapi::companionGetLatency(HANDLE vkDevice, NV_VULKAN_LATENCY_RESULT_PARAMS* params)
+{
+    return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.GetLatency(vkDevice, params); });
+}
+
+void fakenvapi::companionDeviceGone(const void* device)
+{
+    for (Companion* companion : { &g_companionD3D, &g_companionVk })
+    {
+        std::shared_ptr<LowLatency> context;
+
+        {
+            std::scoped_lock lock(companion->mutex);
+
+            if (companion->context != nullptr && companion->device == device)
+            {
+                context = companion->context;
+                companion->device = nullptr;
+            }
+        }
+
+        // Its tech goes with the device (outside the lock: it waits for a call still inside); the next call with a new
+        // device makes it again
+        if (context != nullptr)
+            context->use_only(companion->tech);
+    }
+}
+
+bool fakenvapi::companionFailed() { return g_companionFailed.load(); }
+
+void fakenvapi::companionRelease()
+{
+    DropCompanion(g_companionD3D);
+    DropCompanion(g_companionVk);
+}
+
 void fakenvapi::deinit()
 {
+    DropCompanion(g_companionD3D);
+    DropCompanion(g_companionVk);
+
     LowLatencyCtx::get()->deinit_current_tech();
     LowLatencyCtx::shutdown();
 }

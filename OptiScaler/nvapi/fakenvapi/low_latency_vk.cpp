@@ -12,6 +12,25 @@ bool LowLatency::update_low_latency_tech(HANDLE vkDevice)
 {
     if (!currently_active_tech.load())
     {
+        // The second context (fakenvapi::companion*): Anti-Lag Vk next to XeFG's XeLL, no other tech and no second try
+        if (forced_low_latency_tech == LowLatencyMode::AntiLagVk)
+        {
+            if (forced_init_failed)
+                return false;
+
+            auto new_tech = std::make_shared<AntiLagVk>();
+            if (new_tech->init(nullptr))
+            {
+                LOG_INFO("LowLatency algo: AntiLag Vulkan (next to XeFG's XeLL)");
+                currently_active_tech.store(std::move(new_tech));
+                return true;
+            }
+
+            forced_init_failed = true;
+            LOG_WARN("AntiLag Vulkan could not start next to XeFG's XeLL, no low latency from it");
+            return false;
+        }
+
         if (!Config::Instance()->FN_ForceLatencyFlex.value_or_default())
         {
             auto new_tech = std::make_shared<AntiLagVk>();
@@ -31,6 +50,10 @@ bool LowLatency::update_low_latency_tech(HANDLE vkDevice)
             return true;
         }
     }
+
+    // The second context keeps its tech
+    if (forced_low_latency_tech == LowLatencyMode::AntiLagVk)
+        return true;
 
     static bool last_force_latencyflex = Config::Instance()->FN_ForceLatencyFlex.value_or_default();
     bool force_latencyflex = Config::Instance()->FN_ForceLatencyFlex.value_or_default();
@@ -109,8 +132,10 @@ void LowLatency::get_latency_result(NV_VULKAN_LATENCY_RESULT_PARAMS* pGetLatency
 void LowLatency::add_marker_to_report(NV_VULKAN_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams)
 {
     auto current_timestamp = get_timestamp() / 1000;
-    static auto last_sim_start = current_timestamp;
-    static auto _2nd_last_sim_start = current_timestamp;
+
+    if (last_sim_start == 0)
+        last_sim_start = second_last_sim_start = current_timestamp;
+
     auto current_report = &frame_reports[pSetLatencyMarkerParams->frameID % FRAME_REPORTS_BUFFER_SIZE];
 
     if (current_report->frameID != pSetLatencyMarkerParams->frameID)
@@ -119,7 +144,7 @@ void LowLatency::add_marker_to_report(NV_VULKAN_LATENCY_MARKER_PARAMS* pSetLaten
     }
 
     current_report->frameID = pSetLatencyMarkerParams->frameID;
-    current_report->gpuFrameTimeUs = (uint32_t) (last_sim_start - _2nd_last_sim_start);
+    current_report->gpuFrameTimeUs = (uint32_t) (last_sim_start - second_last_sim_start);
     current_report->gpuActiveRenderTimeUs = 100;
     current_report->driverStartTime = current_timestamp;
     current_report->driverEndTime = current_timestamp + 100;
@@ -130,7 +155,7 @@ void LowLatency::add_marker_to_report(NV_VULKAN_LATENCY_MARKER_PARAMS* pSetLaten
     switch (pSetLatencyMarkerParams->markerType)
     {
     case VULKAN_SIMULATION_START:
-        _2nd_last_sim_start = last_sim_start;
+        second_last_sim_start = last_sim_start;
         last_sim_start = get_timestamp() / 1000;
         current_report->simStartTime = last_sim_start;
         break;

@@ -57,14 +57,51 @@ struct Status
     bool latencyEstimated = false; // fakenvapi's report (no GPU times): latencyMs runs to the present's end instead
     CapOwner capOwner = CapOwner::NotOurs;
     bool xellIdle = false; // XeLL on an NVIDIA/AMD GPU with no XeFG generating frames: it does nothing
-    bool forXefgOnly = false; // runs for XeFG's XeLL alone (Auto, no Optical F5Low mode)
+    RunsFor runsFor = RunsFor::F5Low; // what it runs for: Optical F5Low, or frame generation alone (XeFG, FSR FG)
     // The game's own Reflex calls are sent to XeFG's XeLL (ReflexHooks::gameReflexFeedsXell): DecisionText says so
     bool gameReflexFeedsXell = false;
     bool forceReflexDisabled = false; // fakenvapi's Force Disable: XeLL gets the game's calls with low latency off
+    // With XeFG: what lowers latency (XefgSide). Reflex or Anti-Lag 2: XeLL only keeps XeFG running, so the game's calls do
+    // not "feed XeLL" (gameReflexFeedsXell is false then)
+    XefgLatency xefgSide = XefgLatency::XeLL;
+    // What lowers latency here whoever makes the calls (plain words, never empty): the menu's "Active: <input> -> <output>"
+    const char* output = "";
+    bool offKeptForFrameGeneration = false; // Input is Off, but DLSS FG needs Reflex: the game's Reflex stays on
 };
+
+// Frame generation that runs Reflex itself (DLSS FG, an external owner): it cannot work with low latency off. Any thread.
+bool FrameGenerationNeedsReflex();
+
+// The Framerate page's Input is Off and nothing needs the game's Reflex on: its sleep mode (D3D and Vulkan NVAPI,
+// VK_NV_low_latency2) goes out with low latency off, no Boost and no interval (hooks/Reflex_Hooks.cpp), and OptiScaler's
+// limiter keeps the frame cap. Any thread, cheap.
+bool GameLowLatencyBlocked();
+
+// With XeFG as the frame generation output: what lowers latency right now (NativeLowLatencyRule.h XefgLatency). XeLL
+// unless the player chose Reflex or Anti-Lag 2 ([XeFG] LowLatencyOutput) and the setup has it, and neither the Framerate
+// page's Input Off nor fakenvapi's Force Disable is on (native/XefgReflexRule.h EffectiveXefgLatency). Reflex or
+// Anti-Lag 2 means "split": XeLL stays in place for XeFG with its low latency off, and the other side gets the calls
+// (hooks/Reflex_Hooks.cpp). Any thread, cheap.
+XefgLatency XefgSide();
+
+// What the Output combo works from: the setup and the choice made
+OutputInputs CurrentOutputInputs();
+
+// Frames XeFG shows per frame the game renders: 1 plus the ones it generates, 1 while it generates none. Any thread.
+uint32_t XefgShownPerRendered();
 
 // The menu's line. Cheap; GetLatency is asked at most twice a second.
 Status GetStatus();
+
+// The one reason both pages show after "[<StatusLabel>]": the method in use while we run (empty path: the first frame,
+// before the first Reflex call went out), else why we do not
+inline const char* ReasonText(const Status& status)
+{
+    if (status.decision == Decision::Run)
+        return status.path[0] != '\0' ? status.path : "Starting";
+
+    return DecisionText(status.decision, status.gameReflexFeedsXell, status.forceReflexDisabled, status.xefgSide);
+}
 
 // We run (markers and Sleep go out). Any thread, two relaxed loads.
 bool Running();

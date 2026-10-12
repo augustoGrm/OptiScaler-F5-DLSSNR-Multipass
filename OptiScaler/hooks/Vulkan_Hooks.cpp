@@ -112,16 +112,48 @@ static native::xefgreflex::SleepMode Ll2SleepMode(const VkLatencySleepModeInfoNV
     return mode;
 }
 
-// XeLL gets the game's mode; the driver the same call with low latency off (null: the game switched it off)
+// The Framerate page's Input is Off (native::lowlatency::GameLowLatencyBlocked): the mode goes to the driver with low
+// latency off, no Boost and no interval; OptiScaler's limiter keeps the frame cap
+static VkLatencySleepModeInfoNV Ll2ForDriver(const VkLatencySleepModeInfoNV& info)
+{
+    VkLatencySleepModeInfoNV out = info;
+
+    if (native::lowlatency::GameLowLatencyBlocked())
+    {
+        const auto off = native::xefgreflex::SleepModeForOutput(Ll2SleepMode(&info), 0, false, false, true);
+        out.lowLatencyMode = off.lowLatency ? VK_TRUE : VK_FALSE;
+        out.lowLatencyBoost = off.boost ? VK_TRUE : VK_FALSE;
+        out.minimumIntervalUs = off.minimumIntervalUs;
+    }
+
+    return out;
+}
+
+// XeFG has Reflex as the low latency Output (native/XefgReflexRule.h): the driver does the work on these calls, XeLL only
+// keeps XeFG running. Anti-Lag 2 is AMD's and AMD has no VK_NV_low_latency2: these calls are XeLL's then, as before.
+static bool Ll2SplitToDriver()
+{
+    return native::lowlatency::XefgSide() == native::xefgreflex::XefgLatency::Reflex;
+}
+
+// XeLL gets the game's mode (with low latency off in the split); the driver the same call with low latency off, or in the
+// split the game's own (null: the game switched it off)
 static VkResult Ll2ForwardSleepMode(ID3D12Device* xellDevice, VkDevice device, VkSwapchainKHR swapchain,
                                     const VkLatencySleepModeInfoNV* info)
 {
     auto mode = Ll2SleepMode(info);
     ReflexHooks::noteLowLatency2SleepMode(info != nullptr ? &mode : nullptr);
-    ReflexHooks::xellSetSleepMode(xellDevice, mode);
+
+    // Anti-Lag 2 has no VK_NV_low_latency2 surface: XeLL keeps these calls and does the work then, not only the frame IDs
+    ReflexHooks::xellSetSleepMode(xellDevice, mode,
+                                  Ll2SplitToDriver() ? native::xefgreflex::XefgLatency::Reflex
+                                                     : native::xefgreflex::XefgLatency::XeLL);
 
     if (info == nullptr)
         return o_vkSetLatencySleepModeNV(device, swapchain, nullptr);
+
+    if (Ll2SplitToDriver())
+        return o_vkSetLatencySleepModeNV(device, swapchain, info);
 
     constexpr auto off = native::xefgreflex::kDriverSleepMode;
     VkLatencySleepModeInfoNV driver = *info;
@@ -149,13 +181,47 @@ static ID3D12Device* Ll2XellDevice(VkDevice device, VkSwapchainKHR swapchain)
         if (g_ll2HaveMode && swapchain != VK_NULL_HANDLE)
         {
             if (xellDevice != nullptr)
+            {
                 Ll2ForwardSleepMode(xellDevice, device, swapchain, &g_ll2Mode);
+            }
             else
-                o_vkSetLatencySleepModeNV(device, swapchain, &g_ll2Mode);
+            {
+                const auto forDriver = Ll2ForDriver(g_ll2Mode);
+                o_vkSetLatencySleepModeNV(device, swapchain, &forDriver);
+            }
         }
     }
 
     return xellDevice;
+}
+
+// The Input was switched to or from Off since the game set its mode: the game's last mode goes out again in the other
+// shape, on this call's device and swapchain (the game may not set it again for a long time)
+static void Ll2ApplyInputChange(VkDevice device, VkSwapchainKHR swapchain, ID3D12Device* xellDevice)
+{
+    // The Input's Off and the Output (the split) both change the shape the mode goes out in
+    static int applied = 0;
+    const int shape = (native::lowlatency::GameLowLatencyBlocked() ? 1 : 0) + (Ll2SplitToDriver() ? 2 : 0);
+
+    std::lock_guard lock(g_ll2Mutex);
+
+    if (shape == applied)
+        return;
+
+    applied = shape;
+
+    if (!g_ll2HaveMode || swapchain == VK_NULL_HANDLE)
+        return;
+
+    if (xellDevice != nullptr)
+    {
+        Ll2ForwardSleepMode(xellDevice, device, swapchain, &g_ll2Mode);
+    }
+    else
+    {
+        const auto forDriver = Ll2ForDriver(g_ll2Mode);
+        o_vkSetLatencySleepModeNV(device, swapchain, &forDriver);
+    }
 }
 
 static VkResult VKAPI_CALL hkvkSetLatencySleepModeNV(VkDevice device, VkSwapchainKHR swapchain,
@@ -180,6 +246,12 @@ static VkResult VKAPI_CALL hkvkSetLatencySleepModeNV(VkDevice device, VkSwapchai
     if (xellDevice != nullptr)
         return Ll2ForwardSleepMode(xellDevice, device, swapchain, pSleepModeInfo);
 
+    if (pSleepModeInfo != nullptr)
+    {
+        const auto forDriver = Ll2ForDriver(*pSleepModeInfo);
+        return o_vkSetLatencySleepModeNV(device, swapchain, &forDriver);
+    }
+
     return o_vkSetLatencySleepModeNV(device, swapchain, pSleepModeInfo);
 }
 
@@ -188,7 +260,11 @@ static VkResult VKAPI_CALL hkvkLatencySleepNV(VkDevice device, VkSwapchainKHR sw
 {
     ReflexHooks::noteGameVulkanLowLatency2(false);
 
-    if (auto* xellDevice = Ll2XellDevice(device, swapchain); xellDevice != nullptr && pSleepInfo != nullptr)
+    auto* xellDevice = Ll2XellDevice(device, swapchain);
+    Ll2ApplyInputChange(device, swapchain, xellDevice);
+
+    // In the split the driver sleeps (its mode is the game's, and it signals the game's semaphore itself)
+    if (xellDevice != nullptr && pSleepInfo != nullptr && !Ll2SplitToDriver())
     {
         ReflexHooks::xellSleep(xellDevice);
 
@@ -1005,8 +1081,14 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     // -- so XeFG's XeLL routing (ReflexHooks) reaches them; the Vulkan NVAPI belongs to a game with no bridge. Not under
     // dxvk unbridged: these are dxvk's presents, not the game's. Bridged (NativeDxvkVulkan), it is the same as a native
     // Vulkan game: the game's wrapped D3D11 present stands aside for dxvk (wrapped_swapchain.cpp), so nothing else sends them.
-    const auto lowLatencyTarget = native::lowlatency::PresentTarget(
-        true, bridged, presentDevice, bridged ? static_cast<IUnknown*>(VkPresentBridge::Device()) : nullptr);
+    // With XeFG's Output on Reflex or Anti-Lag 2 the latency is lowered on the game's VkDevice instead (the Vulkan
+    // surface: the driver's Reflex, or Anti-Lag Vk); XeLL on the bridge's device only keeps XeFG running
+    // (native/XefgReflexRule.h)
+    const bool splitOnVulkan = bridged && native::lowlatency::XefgSide() != native::xefgreflex::XefgLatency::XeLL;
+    const auto lowLatencyTarget =
+        native::lowlatency::PresentTarget(true, bridged, presentDevice,
+                                          bridged ? static_cast<IUnknown*>(VkPresentBridge::Device()) : nullptr,
+                                          splitOnVulkan);
     const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().usesDxvk || (bridged && VkPresentBridge::DxvkThroughVulkan())) &&
                             lowLatencyTarget.device != nullptr;
 

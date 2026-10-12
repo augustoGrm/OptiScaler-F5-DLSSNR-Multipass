@@ -21,6 +21,26 @@ bool LowLatency::update_low_latency_tech(IUnknown* pDevice)
 
     if (!currently_active_tech.load())
     {
+        // The second context (fakenvapi::companion*): Anti-Lag 2 next to XeFG's XeLL, no other tech and no second try
+        if (forced_low_latency_tech == LowLatencyMode::AntiLag2)
+        {
+            if (forced_init_failed)
+                return false;
+
+            auto new_tech_al2 = std::make_shared<AntiLag2>();
+            if (new_tech_al2->init(pDevice))
+            {
+                LOG_INFO("LowLatency algo: FSR Anti-Lag 2.0 (next to XeFG's XeLL)");
+                new_tech_al2->set_sleep_mode(&last_sleep_mode);
+                currently_active_tech.store(std::move(new_tech_al2));
+                return true;
+            }
+
+            forced_init_failed = true;
+            LOG_WARN("FSR Anti-Lag 2.0 could not start next to XeFG's XeLL, no low latency from it");
+            return false;
+        }
+
         if (forced_low_latency_tech == LowLatencyMode::XeLL)
         {
             auto new_tech_xell = std::make_shared<XeLL>();
@@ -175,8 +195,10 @@ void LowLatency::get_latency_result(NV_LATENCY_RESULT_PARAMS* pGetLatencyParams)
 void LowLatency::add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams)
 {
     auto current_timestamp = get_timestamp() / 1000;
-    static auto last_sim_start = current_timestamp;
-    static auto _2nd_last_sim_start = current_timestamp;
+
+    if (last_sim_start == 0)
+        last_sim_start = second_last_sim_start = current_timestamp;
+
     auto current_report = &frame_reports[pSetLatencyMarkerParams->frameID % FRAME_REPORTS_BUFFER_SIZE];
 
     if (current_report->frameID != pSetLatencyMarkerParams->frameID)
@@ -185,7 +207,7 @@ void LowLatency::add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarke
     }
 
     current_report->frameID = pSetLatencyMarkerParams->frameID;
-    current_report->gpuFrameTimeUs = (uint32_t) (last_sim_start - _2nd_last_sim_start);
+    current_report->gpuFrameTimeUs = (uint32_t) (last_sim_start - second_last_sim_start);
     current_report->gpuActiveRenderTimeUs = 100;
     current_report->driverStartTime = current_timestamp;
     current_report->driverEndTime = current_timestamp + 100;
@@ -196,7 +218,7 @@ void LowLatency::add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarke
     switch (pSetLatencyMarkerParams->markerType)
     {
     case SIMULATION_START:
-        _2nd_last_sim_start = last_sim_start;
+        second_last_sim_start = last_sim_start;
         last_sim_start = get_timestamp() / 1000;
         current_report->simStartTime = last_sim_start;
         break;

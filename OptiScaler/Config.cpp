@@ -264,6 +264,15 @@ bool Config::Reload(std::filesystem::path iniPath)
             FGXeFGHighResMV.set_from_config(readBool("XeFG", "HighResMV"));
             FGXeFGDebugView.set_from_config(readBool("XeFG", "DebugView"));
             FGXeFGForceBorderless.set_from_config(readBool("XeFG", "ForceBorderless"));
+
+            // A word we do not know leaves it unset (xell)
+            if (const auto output = readString("XeFG", "LowLatencyOutput", true); output.has_value())
+            {
+                auto latency = native::lowlatency::XefgLatency::XeLL;
+
+                if (native::lowlatency::XefgLatencyFromIniText(output->c_str(), &latency))
+                    FGXeFGLowLatencyOutput.set_from_config(latency);
+            }
         }
 
         {
@@ -293,6 +302,24 @@ bool Config::Reload(std::filesystem::path iniPath)
         // Framerate
         {
             FramerateLimit.set_from_config(readFloat("Framerate", "FramerateLimit"));
+
+            // The new key if it holds a word we know, else the one from before the Input choice (an ini that has
+            // neither stays unset: Auto, and nothing is held for the config)
+            // (readString reads "auto" as not there; an explicit auto must beat the old key, so the key's presence is
+            // asked of the ini itself)
+            const char* inputRaw = ini.GetValue("Framerate", "LowLatencyInput", nullptr);
+            const bool inputPresent = inputRaw != nullptr;
+            const auto legacy = readString("DlssNr", "NativeLowLatency", true);
+
+            if (inputPresent || legacy.has_value())
+            {
+                std::string inputText = inputRaw != nullptr ? inputRaw : "";
+                std::ranges::transform(inputText, inputText.begin(), [](unsigned char c) { return std::tolower(c); });
+
+                FramerateLowLatencyInput.set_from_config(native::lowlatency::InputFromIniValues(
+                    inputPresent, inputPresent ? inputText.c_str() : nullptr,
+                    legacy.has_value() ? legacy->c_str() : nullptr));
+            }
         }
 
         // FSR Common
@@ -500,15 +527,6 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrNativeInput.set_from_config(readBool("DlssNr", "NativeInput"));
             DlssNrNativeUpscaler.set_from_config(readBool("DlssNr", "NativeUpscaler"));
             DlssNrNativeFrameGenerationOnly.set_from_config(readBool("DlssNr", "NativeFrameGenerationOnly"));
-            if (auto lowLatency = readString("DlssNr", "NativeLowLatency", true); lowLatency.has_value())
-            {
-                if (lowLatency.value() == "auto")
-                    DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::Auto);
-                else if (lowLatency.value() == "true")
-                    DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::On);
-                else if (lowLatency.value() == "false")
-                    DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::Off);
-            }
             DlssNrNativeLowLatencyBoost.set_from_config(readBool("DlssNr", "NativeLowLatencyBoost"));
             DlssNrAutoExposureAdaptBrighterSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptBrighterSeconds"));
             DlssNrAutoExposureAdaptDarkerSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptDarkerSeconds"));
@@ -1312,6 +1330,12 @@ bool Config::SaveIni()
         ini.SetValue("XeFG", "DebugView", GetBoolValue(Instance()->FGXeFGDebugView.value_for_config()).c_str());
         ini.SetValue("XeFG", "ForceBorderless",
                      GetBoolValue(Instance()->FGXeFGForceBorderless.value_for_config()).c_str());
+
+        // Nothing held (never chosen): auto, which reads as xell, so the key is in the file for the player to find
+        if (const auto held = Instance()->FGXeFGLowLatencyOutput.value_for_config(); held.has_value())
+            ini.SetValue("XeFG", "LowLatencyOutput", native::lowlatency::XefgLatencyIniText(held.value()));
+        else
+            ini.SetValue("XeFG", "LowLatencyOutput", "auto");
     }
 
     {
@@ -1393,6 +1417,15 @@ bool Config::SaveIni()
     {
         ini.SetValue("Framerate", "FramerateLimit",
                      GetFloatValue(Instance()->FramerateLimit.value_for_config()).c_str());
+
+        // The new key, and the old [DlssNr] one beside it for a build from before the Input choice
+        auto input = native::lowlatency::Input::Auto;
+
+        if (auto held = Instance()->FramerateLowLatencyInput.value_for_config(); held.has_value())
+            input = held.value();
+
+        ini.SetValue("Framerate", "LowLatencyInput", native::lowlatency::InputIniText(input));
+        ini.SetValue("DlssNr", "NativeLowLatency", native::lowlatency::LegacySettingText(input));
     }
 
     // Output Scaling
@@ -1561,16 +1594,6 @@ bool Config::SaveIni()
                  GetBoolValue(Instance()->DlssNrNativeUpscaler.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeFrameGenerationOnly",
                  GetBoolValue(Instance()->DlssNrNativeFrameGenerationOnly.value_for_config()).c_str());
-    {
-        const char* lowLatency = "auto";
-
-        if (auto held = Instance()->DlssNrNativeLowLatency.value_for_config(); held.has_value())
-            lowLatency = held.value() == native::lowlatency::Setting::On    ? "true"
-                         : held.value() == native::lowlatency::Setting::Off ? "false"
-                                                                            : "auto";
-
-        ini.SetValue("DlssNr", "NativeLowLatency", lowLatency);
-    }
     ini.SetValue("DlssNr", "NativeLowLatencyBoost",
                  GetBoolValue(Instance()->DlssNrNativeLowLatencyBoost.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoExposureAdaptBrighterSeconds",

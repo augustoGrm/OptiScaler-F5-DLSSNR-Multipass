@@ -73,11 +73,15 @@ Most games tell NR about their cuts. In one that does not, the old scene fades o
 
 Off, the cuts are only counted below, which shows whether this game needs it. D3D12 games; not with Optical F5Low, which finds its own cuts. SceneCut=0 in OptiScaler.ini stops the counting too.
 
-## Lower the game's latency
+## Low latency (Framerate page)
 
-A game running Optical F5Low makes no call to lower its latency, so Optical F5Low makes them for it: NVIDIA Reflex on NVIDIA cards, and on other cards Anti-Lag 2, XeLL or LatencyFlex through fakenvapi. It keeps the GPU's queue short, which matters most when the GPU is the limit, as it is with NR and frame generation on.
+A game running Optical F5Low makes no call to lower its latency, so OptiScaler makes them for it: NVIDIA Reflex on NVIDIA cards, and on other cards Anti-Lag 2, XeLL or LatencyFlex through fakenvapi. It keeps the GPU's queue short, which matters most when the GPU is the limit, as it is with NR and frame generation on. The Optical F5Low page shows the state and links to the Framerate page, where it is set.
 
-It stands aside as soon as the game calls Reflex itself. Takes effect at once.
+Input is who makes the calls. Auto: the game's own Reflex when it makes the calls, otherwise OptiScaler's while an Optical F5Low mode, XeFG or FSR FG runs. Game: only the game's own Reflex. OptiScaler: OptiScaler's, in any game without Reflex. Off: no low latency at all; the game's own Reflex is sent with low latency off, no Boost and no frame cap of its own, and OptiScaler's limiter keeps the cap (not with DLSS FG, which needs Reflex).
+
+Output is what lowers latency: Auto uses what the setup has; XeLL (restart) and LatencyFlex force that method through fakenvapi. With XeFG the choices are XeLL (its own), or NVIDIA Reflex or Anti-Lag 2 beside it when the setup has them; XeLL stays in place for XeFG either way. Boost keeps the GPU's clocks up for NVIDIA Reflex.
+
+OptiScaler stands aside as soon as the game calls Reflex itself. Takes effect at once, except Force XeLL.
 
 ## Multipass presets
 
