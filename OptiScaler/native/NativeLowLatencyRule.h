@@ -7,8 +7,9 @@
 
 namespace native::lowlatency
 {
-// [DlssNr] NativeLowLatency. Auto: with an Optical F5Low mode running, or XeFG (its XeLL needs someone to feed it). On:
-// also without either, in any game that makes no Reflex call of its own. Off: never.
+// [DlssNr] NativeLowLatency. Auto: with an Optical F5Low mode running, XeFG (its XeLL needs someone to feed it), or FSR
+// frame generation generating frames (it adds latency, and a game without Reflex has nothing against it). On: also
+// without any of them, in any game that makes no Reflex call of its own. Off: never.
 enum class Setting : uint32_t
 {
     Auto,
@@ -21,6 +22,7 @@ struct Inputs
     Setting setting = Setting::Auto;
     bool f5lowRunning = false;              // an Optical F5Low mode is on and not standing aside for a game upscaler
     bool xefgRunning = false;               // XeFG is the frame generation output and has its swap chain context
+    bool fsrFgRunning = false;              // FSR FG is generating, on a D3D12 game or a D3D11 game through the D3D12 bridge
     bool gameCallsReflex = false;           // the game has made a Reflex call (SetSleepMode, Sleep or a marker)
     bool gameRunsXell = false;              // the game runs XeLL of its own (with low latency on, so it can limit fps)
     bool forceReflexDisabled = false;       // fakenvapi's Force Reflex is Force Disable
@@ -51,8 +53,9 @@ inline Decision Decide(const Inputs& in)
         return Decision::SettingOff;
 
     // XeFG cannot work without XeLL (Intel), and XeLL lowers nothing unless someone sleeps and marks frames: with no
-    // game Reflex to do it, we do
-    if (in.setting == Setting::Auto && !in.f5lowRunning && !in.xefgRunning)
+    // game Reflex to do it, we do. FSR FG holds a real frame back to generate the one before it: we take that back
+    // where the game does not.
+    if (in.setting == Setting::Auto && !in.f5lowRunning && !in.xefgRunning && !in.fsrFgRunning)
         return Decision::NoF5Low;
 
     if (in.gameCallsReflex)
@@ -78,6 +81,26 @@ inline Decision Decide(const Inputs& in)
         return Decision::DeviceUnavailable;
 
     return Decision::Run;
+}
+
+// What Auto runs us for, for the log and the menu: an Optical F5Low mode first, then the frame generation that needs us
+enum class RunsFor
+{
+    F5Low,
+    Xefg,
+    FsrFg
+};
+
+inline RunsFor RunReason(const Inputs& in)
+{
+    if (in.f5lowRunning)
+        return RunsFor::F5Low;
+
+    if (in.xefgRunning)
+        return RunsFor::Xefg;
+
+    // On with nothing running keeps the Optical F5Low name, as before
+    return in.fsrFgRunning ? RunsFor::FsrFg : RunsFor::F5Low;
 }
 
 // Which Reflex surface a call goes through: the D3D-flavoured NVAPI entry points (NvAPI_D3D_*, also what XeFG's routing
@@ -160,7 +183,7 @@ inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = fa
     case Decision::SettingOff:
         return "Switched off";
     case Decision::NoF5Low:
-        return "No Optical F5Low mode or XeFG is running";
+        return "No Optical F5Low mode, XeFG or FSR frame generation is running";
     case Decision::GameRunsReflex:
         if (!gameReflexFeedsXell)
             return "Use the game's own Reflex settings";

@@ -51,7 +51,7 @@ std::atomic<double> g_frameGenerationPresentAt = 0.0; // last PresentSource::Fra
 std::atomic<Decision> g_decision = Decision::NoF5Low;
 std::atomic<CapOwner> g_capOwner = CapOwner::NotOurs; // PlanCap's answer on the last present we ran on
 std::atomic<bool> g_xellIdle = false;                 // XellIdle on the last present we ran on
-std::atomic<bool> g_forXefgOnly = false;              // Auto runs us for XeFG's XeLL only, no Optical F5Low mode
+std::atomic<RunsFor> g_runsFor = RunsFor::F5Low;      // what Auto runs us for (RunReason): log and menu name it
 // XeLL and XeFG share one frame ID (framegen/xefg/XeFGFrameId.h): the ID of our frame in flight while XeFG runs on our
 // XeLL (0: not)
 std::atomic<uint32_t> g_xellFrameIdForFrameGeneration = 0;
@@ -272,6 +272,12 @@ Inputs GatherInputs(bool deviceAvailable)
     in.f5lowRunning = shown != DlssNrNativeMode::Shown::Off && !GameUpscalerCalledRecently();
     in.xefgRunning = state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr &&
                      state.currentFG->SwapchainContext() != nullptr;
+    // Only while it generates (paused or off, it adds no latency to take back). The Vulkan present bridge is left out:
+    // FSR FG there is untested with us.
+    in.fsrFgRunning = state.activeFgOutput == FGOutput::FSRFG && state.currentFG != nullptr &&
+                      state.currentFG->IsActive() && !state.currentFG->IsPaused() &&
+                      (state.swapchainInteropApi == SwapchainInteropApi::None ||
+                       state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12);
 
     in.gameCallsReflex = ReflexHooks::gameCalledReflex();
     in.gameRunsXell = XellHooks::canLimit();
@@ -287,8 +293,8 @@ Decision Evaluate(Api api, IUnknown* device)
 {
     const auto inputs = GatherInputs(true);
     auto decision = Decide(inputs);
-    // Run for XeFG alone (no Optical F5Low mode): the menu and log say so
-    g_forXefgOnly = !inputs.f5lowRunning && inputs.xefgRunning;
+    // Run for frame generation alone (no Optical F5Low mode): the menu and log say so
+    g_runsFor = RunReason(inputs);
 
     if (decision == Decision::Run && g_table == Table::Unknown)
     {
@@ -390,10 +396,18 @@ CapInputs FrameCapInputs(Api api)
     return in;
 }
 
-// Run for XeFG alone (no Optical F5Low mode), the log does not name Optical F5Low
+// Run for frame generation alone (no Optical F5Low mode), the log does not name Optical F5Low
 const char* LogName()
 {
-    return g_forXefgOnly.load() ? "Low latency (feeding XeFG's XeLL)" : "Optical F5Low low latency";
+    switch (g_runsFor.load())
+    {
+    case RunsFor::Xefg:
+        return "Low latency (feeding XeFG's XeLL)";
+    case RunsFor::FsrFg:
+        return "Low latency (for FSR frame generation)";
+    default:
+        return "Optical F5Low low latency";
+    }
 }
 
 std::string CapText(float capFps)
@@ -742,7 +756,7 @@ Status GetStatus()
         return status;
 
     status.capOwner = g_capOwner.load();
-    status.forXefgOnly = g_forXefgOnly.load();
+    status.runsFor = g_runsFor.load();
     status.xellIdle = g_xellIdle.load();
 
     const auto api = g_deviceApi.load();

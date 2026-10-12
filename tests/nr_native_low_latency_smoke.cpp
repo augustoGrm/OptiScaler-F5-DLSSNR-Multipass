@@ -63,6 +63,40 @@ int main()
         CHECK(Decide(x) == Decision::ForceXell);
     }
 
+    // FSR FG generating (D3D12, or D3D11 through the bridge), no Optical F5Low mode: Auto runs us; Off, the game's own
+    // Reflex and fakenvapi's Force Disable still win
+    {
+        Inputs f;
+        f.fsrFgRunning = true;
+        CHECK(Decide(f) == Decision::Run);
+        CHECK(RunReason(f) == RunsFor::FsrFg);
+        f.setting = Setting::Off;
+        CHECK(Decide(f) == Decision::SettingOff);
+        f.setting = Setting::Auto;
+        f.gameCallsReflex = true;
+        CHECK(Decide(f) == Decision::GameRunsReflex);
+        f.gameCallsReflex = false;
+        f.forceReflexDisabled = true;
+        CHECK(Decide(f) == Decision::ForceReflexDisabled);
+        f.forceReflexDisabled = false;
+
+        // FSR FG paused or off: Auto stops again
+        f.fsrFgRunning = false;
+        CHECK(Decide(f) == Decision::NoF5Low);
+
+        // What it runs for: an Optical F5Low mode first, then XeFG, then FSR FG; On with nothing keeps the F5Low name
+        Inputs r;
+        r.fsrFgRunning = true;
+        r.f5lowRunning = true;
+        CHECK(RunReason(r) == RunsFor::F5Low);
+        r.f5lowRunning = false;
+        r.xefgRunning = true;
+        CHECK(RunReason(r) == RunsFor::Xefg);
+        Inputs on;
+        on.setting = Setting::On;
+        CHECK(RunReason(on) == RunsFor::F5Low);
+    }
+
     // The game's own Reflex: ours never runs, in either setting
     for (auto setting : { Setting::Auto, Setting::On })
     {

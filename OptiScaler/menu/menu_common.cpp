@@ -5694,9 +5694,12 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
         }
         else
         {
-            // Optical F5Low's low latency, also run for XeFG alone (it feeds XeFG's XeLL when the game does not)
+            // Optical F5Low's low latency, also run for frame generation alone (it feeds XeFG's XeLL when the game
+            // does not, and takes back FSR FG's latency)
             const auto lowLatency = f5lowRunning ? native::lowlatency::GetStatus() : native::lowlatency::Status {};
-            const char* owner = lowLatency.forXefgOnly ? " (OptiScaler, for XeFG)" : " (Optical F5Low)";
+            const char* owner = lowLatency.runsFor == native::lowlatency::RunsFor::Xefg    ? " (OptiScaler, for XeFG)"
+                                : lowLatency.runsFor == native::lowlatency::RunsFor::FsrFg ? " (OptiScaler, for FSR FG)"
+                                                                                           : " (Optical F5Low)";
 
             if (f5lowRunning && native::lowlatency::OwnsFrameCap())
                 currentMethod = std::string(lowLatency.path) + owner;
@@ -5719,12 +5722,21 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
 
         ImGui::Text("Current method: %s", currentMethod.c_str());
 
-        // Run for XeFG alone, the low latency's switch is on a page an XeFG player may never open
-        if (f5lowRunning && !state.reflexLimitsFps && native::lowlatency::GetStatus().forXefgOnly)
+        // Run for frame generation alone, the low latency's switch is on a page a frame generation player may never
+        // open
+        if (const auto runsFor = native::lowlatency::GetStatus().runsFor;
+            f5lowRunning && !state.reflexLimitsFps && runsFor == native::lowlatency::RunsFor::Xefg)
         {
             ImGui::TextDisabled("OptiScaler feeds XeFG's XeLL itself (the game has no Reflex).");
             ShowHelpMarker("XeFG always uses XeLL, and XeLL lowers latency only when something sleeps and marks the "
                            "frames.\nSwitch: Neural Rendering > Optical F5Low > Low latency.");
+        }
+        else if (f5lowRunning && !state.reflexLimitsFps && runsFor == native::lowlatency::RunsFor::FsrFg)
+        {
+            ImGui::TextDisabled("OptiScaler lowers FSR FG's latency itself (the game has no Reflex).");
+            ShowHelpMarker("Frame generation holds a real frame back to make the one in between. The game has no "
+                           "Reflex, so OptiScaler makes the latency calls.\nSwitch: Neural Rendering > Optical F5Low > "
+                           "Low latency.");
         }
 
         if (fakenvapiMode == LowLatencyMode::AntiLag2)

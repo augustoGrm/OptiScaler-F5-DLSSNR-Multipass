@@ -57,7 +57,7 @@ struct Status
     bool latencyEstimated = false; // fakenvapi's report (no GPU times): latencyMs runs to the present's end instead
     CapOwner capOwner = CapOwner::NotOurs;
     bool xellIdle = false; // XeLL on an NVIDIA/AMD GPU with no XeFG generating frames: it does nothing
-    bool forXefgOnly = false; // runs for XeFG's XeLL alone (Auto, no Optical F5Low mode)
+    RunsFor runsFor = RunsFor::F5Low; // what it runs for: Optical F5Low, or frame generation alone (XeFG, FSR FG)
     // The game's own Reflex calls are sent to XeFG's XeLL (ReflexHooks::gameReflexFeedsXell): DecisionText says so
     bool gameReflexFeedsXell = false;
     bool forceReflexDisabled = false; // fakenvapi's Force Disable: XeLL gets the game's calls with low latency off

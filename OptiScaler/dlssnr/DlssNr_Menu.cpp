@@ -1501,7 +1501,7 @@ static void RenderLowLatencySection(Config* config)
     HelpMarker("Makes the latency calls the game doesn't: Reflex on NVIDIA, Anti-Lag 2 / XeLL / LatencyFlex on other "
                "cards. Steps aside if the game uses Reflex itself.\n"
                "With XeFG it also runs without an Optical F5Low mode: XeFG always uses XeLL, and XeLL needs these "
-               "calls. A game's own Reflex then goes to XeLL, which stays on even if Reflex is off in the game's "
+               "calls. It also runs while FSR FG generates frames. A game's own Reflex then goes to XeLL, which stays on even if Reflex is off in the game's "
                "menu (fakenvapi's Force Reflex: Force Disable turns it off).\n"
                "On + Boost: the GPU keeps its clocks up. A little lower latency, a little more power. NVIDIA Reflex "
                "only; the others ignore it.");
