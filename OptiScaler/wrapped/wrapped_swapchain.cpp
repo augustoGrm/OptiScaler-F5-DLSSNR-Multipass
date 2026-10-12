@@ -500,7 +500,12 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         if (willPresent && VkPresentBridge::DxvkThroughVulkan() && bridgeWindow != nullptr && bridgeWindow == hWnd)
         {
             lowLatencyScope = native::lowlatency::OnDxvkGamePresentBegin(
-                Config::Instance()->DlssNrNativeLowLatencyDxvkGameThread.value_or_default(), bridgeWindow);
+                Config::Instance()->DlssNrNativeLowLatencyDxvkGameThread.value_or_default(), bridgeWindow,
+                VkPresentBridge::OutputGeneration());
+        }
+        else if (willPresent && VkPresentBridge::DxvkThroughVulkan() && bridgeWindow == nullptr)
+        {
+            native::lowlatency::DxvkBridgeDown();
         }
 
         if (pPresentParameters == nullptr)

@@ -79,6 +79,10 @@ ID3D12Device* Device();
 // game on dxvk matches its wrapped swapchain's window against it to find the swapchain the bridge presents.
 HWND OutputWindow();
 
+// How many D3D12 outputs the bridge has made: it moves on each time one comes up, also in place on the same window (frame
+// generation switched off and on). Lock-free, any thread.
+uint32_t OutputGeneration();
+
 // The up output draws the menu (and so counts the overlay's frames) on the game's presents only: frame generation's
 // swapchain from the system DXGI (a dxvk game) presents its generated frames past OptiScaler's hooks. Lock-free.
 bool MenuOnGamePresents();

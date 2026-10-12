@@ -453,9 +453,14 @@ inline SleepSite SleepSiteFor(bool dxvkThroughVulkan, bool keyOn)
 //   - the Vulkan present runs the pair only for an entry that says VulkanPresent, so a frame is paired exactly once
 //     whatever happens to the site setting while it is in flight;
 //   - the Vulkan present hands XeFG the ID of the frame it presents (a game-site entry's), not the newest.
-// It is never cleared when the site changes (the frames in flight are still owed their pop); only when the bridge goes
-// away or comes back, and a defined resync when the two sides drift apart: a push past kSize drops the oldest entry, a
-// pop with nothing queued returns false (the caller then runs the pair at the Vulkan present, as before this existed).
+// It is never cleared when the site changes (the frames in flight are still owed their pop). Where the two sides drift
+// apart there is a defined way back:
+//   - a push past kSize drops the oldest entry, and a pop drops entries older than kStaleMs: dxvk presents a frame within
+//     a few frames of its push, so an older entry is for a Present that dxvk never presented (minimised, occluded), and
+//     the entries after it are the ones that line up with dxvk's next presents again;
+//   - a pop with nothing queued (or the entry dropped) pairs at the Vulkan present, as before this existed;
+//   - the bridge's output was made again (`generation`, VkPresentBridge::OutputGeneration): what is queued was pushed for
+//     frames presented unbridged, so it is dropped, with no frames owed.
 struct FrameLedger
 {
     struct Entry
@@ -463,20 +468,38 @@ struct FrameLedger
         uint32_t frameId = 0; // 0: nobody feeds XeLL for this frame
         SleepSite site = SleepSite::VulkanPresent;
         uint64_t seq = 0;
+        double at = 0.0; // ms, when it was pushed (0: not tracked)
     };
 
     static constexpr int kSize = 6; // dxvk holds 3 frames by default, plus the one being pushed, plus a spare
+    static constexpr double kStaleMs = 500.0; // 3 frames of dxvk's default latency are 100 ms even at 30 fps
 
     Entry entries[kSize] = {};
     int count = 0;
     int head = 0;
+    uint32_t generation = 0;
     uint64_t nextSeq = 1;
-    bool resync = false;   // a push dropped an entry, or a pop found none after pops had worked (TakeResync)
+    bool resync = false; // an entry was dropped or found missing after pops had worked, or the output was made again
     bool everPopped = false;
 
-    // The new entry's sequence number, for Undo
-    uint64_t Push(uint32_t frameId, SleepSite site)
+    // The bridge's output generation of the caller (never goes back): a newer one starts the ledger over
+    void Sync(uint32_t newGeneration)
     {
+        if (newGeneration <= generation)
+            return;
+
+        if (count > 0)
+            resync = true;
+
+        generation = newGeneration;
+        Clear();
+    }
+
+    // The new entry's sequence number, for Undo
+    uint64_t Push(uint32_t frameId, SleepSite site, uint32_t callerGeneration = 0, double nowMs = 0.0)
+    {
+        Sync(callerGeneration);
+
         if (count == kSize)
         {
             head = (head + 1) % kSize;
@@ -488,12 +511,23 @@ struct FrameLedger
         entry.frameId = frameId;
         entry.site = site;
         entry.seq = nextSeq++;
+        entry.at = nowMs;
         ++count;
         return entry.seq;
     }
 
-    bool Pop(Entry* out)
+    bool Pop(Entry* out, uint32_t callerGeneration = 0, double nowMs = 0.0)
     {
+        Sync(callerGeneration);
+
+        // Entries for Presents dxvk never presented: the frames after them are the ones dxvk presents next
+        while (count > 0 && nowMs > 0.0 && entries[head].at > 0.0 && nowMs - entries[head].at > kStaleMs)
+        {
+            head = (head + 1) % kSize;
+            --count;
+            resync = true;
+        }
+
         if (count == 0)
         {
             // Empty before the first pop is just the start (the game's presents may not have been counted yet)
@@ -543,6 +577,33 @@ struct FrameLedger
         return was;
     }
 };
+
+// The game's Present starts a frame paired at its site. The ID the entry carries is read with the site lock held, right
+// before the pair's Begin: the Vulkan site's End for an older frame (dxvk's thread, right after a switch) moves the frame
+// ID on, and an ID read before the lock could be one behind the markers the Begin sends. `takeLock` returns the held
+// lock, `readId` the ID the markers will carry, `push` makes the entry (returns its sequence number), `begin` is the pair's
+// Begin.
+template <class TakeLock, class ReadId, class Push, class Begin>
+auto BeginGameSiteFrame(TakeLock&& takeLock, ReadId&& readId, Push&& push, Begin&& begin)
+{
+    [[maybe_unused]] auto lock = takeLock();
+    const auto id = readId();
+    const auto seq = push(id);
+    begin();
+    return seq;
+}
+
+// The game's Present began the pair and its device is gone before the End (dxvk remade its swapchain inside the Present and
+// the bridge let go of the device): no call can go to the device, but the pair's state must not be left half way (PRESENT_END
+// owed, this frame's submit markers marked sent) and the frame ID moves on as the End would have moved it, or the next frame
+// reuses this one's.
+template <class Started, class Submitted, class FrameId>
+void AbandonPair(Started& presentStarted, Submitted& submitSent, FrameId& frameId)
+{
+    presentStarted = false;
+    submitSent = false;
+    ++frameId;
+}
 
 // Plain words for the menu when we do not run. Run has no text here: the path in use names it.
 // Where a present was seen. With OptiScaler's frame generation on a D3D12 game, the game presents to frame

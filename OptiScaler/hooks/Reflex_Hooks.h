@@ -80,6 +80,8 @@ class ReflexHooks
     // switches off what the other was left with, so a leftover cannot keep sleeping, limiting or answering the timings
     // (_sleepModeMutex)
     static void dropSideOnOtherApi(bool nowVulkan);
+    // setFPSLimit sends the side's sleep mode to its D3D and its Vulkan device in one call on purpose: no drop in between
+    inline static thread_local bool _keepBothSides = false;
     // The devices the side's last sleep mode went to (null: none), and the side that took it
     inline static IUnknown* _sideDev = nullptr;
     inline static HANDLE _sideVkDev = nullptr;

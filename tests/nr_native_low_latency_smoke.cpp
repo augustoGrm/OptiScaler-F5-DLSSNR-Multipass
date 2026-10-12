@@ -1373,6 +1373,93 @@ int main()
         CHECK(q.Pop(&e) && e.frameId == 9);
     }
 
+    // The game minimised: it presents 20 frames (S_OK) that dxvk never presents, and goes on three seconds later. The
+    // entries left over are too old to be for dxvk's next presents and are dropped, so the ledger is back in step and every
+    // frame dxvk presents after it has its own ID. (Without the age rule the up-to-kSize left over would stay in front for
+    // good.)
+    {
+        FrameLedger led;
+        uint32_t idSeen[40] = {};
+
+        for (int f = 0; f < 20; ++f)
+            led.Push(100 + f, SleepSite::GamePresent, 0, 1000.0 + f * 16.0);
+
+        for (int f = 20; f < 40; ++f)
+        {
+            const double now = 4000.0 + (f - 20) * 16.0;
+            led.Push(100 + f, SleepSite::GamePresent, 0, now);
+
+            if (f - 2 >= 20) // dxvk presents two frames behind the game
+            {
+                FrameLedger::Entry e;
+                idSeen[f - 2] = led.Pop(&e, 0, now) ? e.frameId : 0;
+            }
+        }
+
+        for (int p = 20; p < 38; ++p)
+            CHECK(idSeen[p] == 100u + p);
+
+        CHECK(led.TakeResync());
+    }
+
+    // Frame generation off and on again in place, on the same window: entries pushed for frames dxvk presented unbridged
+    // are left over. They are dropped when the output is made again (a newer generation), and the frames presented after
+    // it get their own IDs.
+    {
+        FrameLedger led;
+        uint32_t idSeen[40] = {};
+        const int lag = 2;
+
+        for (int f = 0; f < 30; ++f)
+        {
+            const uint32_t generation = f < 10 ? 1 : 2;
+            led.Push(100 + f, SleepSite::GamePresent, generation);
+
+            const int p = f - lag; // dxvk presents frame p
+
+            if (p >= 10) // frames before the output was made again are presented unbridged: no pop
+            {
+                FrameLedger::Entry e;
+                idSeen[p] = led.Pop(&e, 2) ? e.frameId : 0;
+            }
+        }
+
+        for (int p = 10; p < 28; ++p)
+            CHECK(idSeen[p] == 100u + p);
+
+        CHECK(led.TakeResync());
+    }
+
+    // An entry's ID is read with the site lock held: the other site's End moves the frame ID on while the game's Present
+    // waits for the lock, and the entry must carry the ID the markers do
+    {
+        FrameLedger led;
+        uint32_t frameId = 7;
+        uint32_t markerId = 0;
+        uint64_t seq = BeginGameSiteFrame(
+            [&]
+            {
+                frameId = 8; // dxvk's thread finished the Vulkan site's End for the older frame first
+                return 0;
+            },
+            [&] { return frameId; }, [&](uint32_t id) { return led.Push(id, SleepSite::GamePresent); },
+            [&] { markerId = frameId; });
+
+        FrameLedger::Entry e;
+        CHECK(seq != 0 && led.Pop(&e));
+        CHECK(e.frameId == markerId);
+        CHECK(e.frameId == 8);
+    }
+
+    // The pair's End never comes (the device went away between Begin and End): not left half way, the frame ID moves on
+    {
+        bool started = true;
+        bool submitted = true;
+        uint64_t frameId = 5;
+        AbandonPair(started, submitted, frameId);
+        CHECK(!started && !submitted && frameId == 6);
+    }
+
     // What the old design did (the Vulkan present reading the site the game's latest Present chose) is not enough: with the
     // site changing while frames are in flight, a frame is left unpaired or paired twice. Kept as a check of the check.
     {

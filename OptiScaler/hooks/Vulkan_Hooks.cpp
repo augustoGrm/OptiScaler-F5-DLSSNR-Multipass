@@ -1122,7 +1122,7 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     if (dxvkBridged)
     {
         pairHere = native::lowlatency::DxvkVulkanPresent(
-            presentDevice, static_cast<IUnknown*>(VkPresentBridge::Device()));
+            presentDevice, static_cast<IUnknown*>(VkPresentBridge::Device()), VkPresentBridge::OutputGeneration());
     }
 
     // Optical F5Low: the picture through NR before the menu is drawn over it. May replace the wait list.

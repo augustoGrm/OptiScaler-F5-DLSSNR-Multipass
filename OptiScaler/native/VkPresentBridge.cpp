@@ -86,6 +86,8 @@ std::atomic<int> g_outputsActive { 0 };
 std::atomic<ID3D12Device*> g_outputDevice { nullptr };
 // The up output's window (OutputWindow), without the mutex: the game's D3D11 Present asks on every present
 std::atomic<HWND> g_outputWindow { nullptr };
+// Counts the outputs made (OutputGeneration)
+std::atomic<uint32_t> g_outputGeneration { 0 };
 // The up output draws the menu on the game's presents only (MenuOnGamePresents)
 std::atomic<bool> g_menuOnGamePresents { false };
 std::unordered_map<VkSurfaceKHR, HWND> g_windows;
@@ -452,6 +454,7 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
         self->outputRule = native::VkOutputFailureRule {};
         ++g_outputsActive;
         g_outputDevice = self->device12;
+        ++g_outputGeneration;
         g_outputWindow = self->window;
         g_menuOnGamePresents = systemFactory;
         LOG_INFO("Vulkan bridge: D3D12 swapchain {:X} on window {:X} ({}x{}, format {}, {} buffers, {})",
@@ -776,6 +779,8 @@ bool OutputActive()
 ID3D12Device* Device() { return g_outputDevice.load(std::memory_order_acquire); }
 
 HWND OutputWindow() { return g_outputWindow.load(std::memory_order_acquire); }
+
+uint32_t OutputGeneration() { return g_outputGeneration.load(std::memory_order_acquire); }
 
 bool MenuOnGamePresents() { return g_menuOnGamePresents.load(std::memory_order_relaxed); }
 

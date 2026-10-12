@@ -360,12 +360,13 @@ NvAPI_Status ReflexHooks::sideGetLatencyVk(Side side, HANDLE vkDevice, NV_VULKAN
 }
 
 // A sleep mode now goes to one API (`nowVulkan`): the side's last one on the other API gets everything off and is
-// forgotten. Not recursive: the "off" itself is a sleep mode on the other API.
+// forgotten. Not recursive: the "off" itself is a sleep mode on the other API. Not inside setFPSLimit, which sends the
+// cap to both the D3D and the Vulkan device in one call (_keepBothSides): the second would turn the first off.
 void ReflexHooks::dropSideOnOtherApi(bool nowVulkan)
 {
     static thread_local bool dropping = false;
 
-    if (dropping)
+    if (dropping || _keepBothSides)
         return;
 
     std::scoped_lock lock(_sleepModeMutex);
@@ -1573,6 +1574,12 @@ void ReflexHooks::setFPSLimit(float fps)
         _minimumIntervalUs = static_cast<uint32_t>(std::round(1'000'000 / fps));
 
     std::scoped_lock lock(_sleepModeMutex);
+
+    struct KeepBothSides
+    {
+        KeepBothSides() { _keepBothSides = true; }
+        ~KeepBothSides() { _keepBothSides = false; }
+    } keepBothSides;
 
     const auto side = CurrentSide();
 

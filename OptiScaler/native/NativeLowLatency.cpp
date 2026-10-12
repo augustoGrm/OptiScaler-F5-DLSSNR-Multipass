@@ -737,7 +737,7 @@ DxvkSiteLock::~DxvkSiteLock()
         g_dxvkSiteMutex.unlock();
 }
 
-bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12)
+bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12, uint32_t generation)
 {
     NoteDxvkVulkanPresentThread();
 
@@ -752,7 +752,7 @@ bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12)
 
     {
         std::lock_guard lock(g_dxvkLedgerMutex);
-        popped = g_dxvkLedger.Pop(&entry);
+        popped = g_dxvkLedger.Pop(&entry, generation, Util::MillisecondsNow());
         resync = g_dxvkLedger.TakeResync();
     }
 
@@ -761,7 +761,7 @@ bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12)
     if (resync && !resyncLogged.exchange(true))
     {
         LOG_WARN("Low latency (dxvk): the game's presents and dxvk's Vulkan presents got out of step (a present without its "
-                 "pair); the frame list was trimmed and goes on from here");
+                 "pair, or the bridge made again); the frame list was trimmed and goes on from here");
     }
 
     // Nothing queued: the Vulkan present runs the pair, as it did before the game's Present could
@@ -769,7 +769,16 @@ bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12)
     return !popped || entry.site == SleepSite::VulkanPresent;
 }
 
-DxvkGameScope OnDxvkGamePresentBegin(bool keyOn, HWND window)
+void DxvkBridgeDown()
+{
+    // The game presents with no output up: what is queued is for frames that dxvk presents unbridged, with no pop
+    std::lock_guard lock(g_dxvkLedgerMutex);
+    g_dxvkLedger.Clear();
+    g_dxvkLedgerWindow = nullptr;
+    g_dxvkBridgeFrameId = 0;
+}
+
+DxvkGameScope OnDxvkGamePresentBegin(bool keyOn, HWND window, uint32_t generation)
 {
     NoteDxvkGamePresentThread();
 
@@ -799,23 +808,28 @@ DxvkGameScope OnDxvkGamePresentBegin(bool keyOn, HWND window)
                  gamePresent ? "the game's Present, on the game's thread" : "dxvk's Vulkan present, on dxvk's thread");
     }
 
-    {
-        // The ID this frame's markers carry (0 when nobody feeds XeLL): XeFG takes it when the bridge presents the frame
-        std::lock_guard lock(g_dxvkLedgerMutex);
-        scope.seq = g_dxvkLedger.Push(gamePresent ? g_xellFrameIdForFrameGeneration.load() : 0,
-                                      gamePresent ? SleepSite::GamePresent : SleepSite::VulkanPresent);
-        scope.pushed = true;
-    }
-
     if (!gamePresent)
+    {
+        std::lock_guard lock(g_dxvkLedgerMutex);
+        scope.seq = g_dxvkLedger.Push(0, SleepSite::VulkanPresent, generation, Util::MillisecondsNow());
+        scope.pushed = true;
         return scope;
+    }
 
     scope.began = true;
     scope.api = target.api;
     scope.device = const_cast<IUnknown*>(static_cast<const IUnknown*>(target.device));
+    scope.pushed = true;
 
-    DxvkSiteLock lock(true);
-    PresentBegin(scope.api, scope.device, PresentSource::SwapChain);
+    // The entry's ID is the one the markers carry (0 when nobody feeds XeLL): XeFG takes it when the bridge presents the
+    // frame. Read under the site lock (NativeLowLatencyRule.h BeginGameSiteFrame).
+    scope.seq = BeginGameSiteFrame([] { return DxvkSiteLock(true); }, [] { return g_xellFrameIdForFrameGeneration.load(); },
+                                   [&](uint32_t id)
+                                   {
+                                       std::lock_guard lock(g_dxvkLedgerMutex);
+                                       return g_dxvkLedger.Push(id, SleepSite::GamePresent, generation, Util::MillisecondsNow());
+                                   },
+                                   [&] { PresentBegin(scope.api, scope.device, PresentSource::SwapChain); });
     return scope;
 }
 
@@ -826,11 +840,19 @@ void OnDxvkGamePresentEnd(const DxvkGameScope& scope, HRESULT presentResult)
         // dxvk can remake its Vulkan swapchain inside this very Present, and the bridge then lets go of its D3D12 device
         // (OnDeviceReleased): ending the pair on it would store a device that is gone
         const auto devices = DxvkDevicesNow();
+        DxvkSiteLock lock(true);
 
         if (scope.device == devices.device12 || scope.device == devices.vk)
         {
-            DxvkSiteLock lock(true);
             PresentEnd(scope.api, scope.device, PresentSource::SwapChain);
+        }
+        else
+        {
+            // No call to the gone device, but the pair is not left half way and the frame ID moves on (AbandonPair)
+            AbandonPair(g_presentStarted, g_submitSent, g_frameId);
+
+            if (g_xellFrameIdForFrameGeneration.load() != 0)
+                g_xellFrameIdForFrameGeneration = static_cast<uint32_t>(g_frameId);
         }
     }
 

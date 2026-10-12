@@ -54,7 +54,10 @@ void NoteDxvkVulkanPresentThread();
 // publishes the devices the game's Present may use (the bridge's D3D12 device and the VkDevice, as one unit), takes the
 // frame's entry, and hands XeFG the frame's ID (FrameIdForFrameGeneration). Returns true when the Vulkan present runs the
 // pair for this frame (the entry says so, or none was queued).
-bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12);
+bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12, uint32_t generation);
+
+// The game's Present with no bridge output up: what the ledger holds is for frames dxvk presents unbridged
+void DxvkBridgeDown();
 
 // What the game's Present began, to end it the same way
 struct DxvkGameScope
@@ -68,9 +71,10 @@ struct DxvkGameScope
 
 // The wrapped D3D11 swap chain's Present under dxvk through the Vulkan bridge, for the swap chain on the bridge's window
 // (the caller checked both): before the real Present, and after it returns with its result. `keyOn`: the ini key.
-// `window`: the bridge's window, a different one than last time starts the ledger over. The API is chosen here, from the
+// `window`: the bridge's window, a different one than last time starts the ledger over; `generation`: the bridge output's
+// (VkPresentBridge::OutputGeneration), a newer one does the same. The API is chosen here, from the
 // Output now (PresentTarget), never from the last frame's.
-DxvkGameScope OnDxvkGamePresentBegin(bool keyOn, HWND window);
+DxvkGameScope OnDxvkGamePresentBegin(bool keyOn, HWND window, uint32_t generation);
 void OnDxvkGamePresentEnd(const DxvkGameScope& scope, HRESULT presentResult);
 
 // Held around each Begin/End call of either site while the bridge is up under dxvk. A frame is paired at one site, but
