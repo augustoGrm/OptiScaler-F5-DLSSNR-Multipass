@@ -1096,6 +1096,10 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().usesDxvk || (bridged && VkPresentBridge::DxvkThroughVulkan())) &&
                             lowLatencyTarget.device != nullptr;
 
+    // Under dxvk the game's thread and dxvk's present thread differ: say so once
+    if (bridged && VkPresentBridge::DxvkThroughVulkan())
+        native::lowlatency::NoteDxvkVulkanPresentThread();
+
     const auto lowLatencyBegin = [&]
     {
         if (lowLatencyTarget.api == native::lowlatency::Api::Vulkan)

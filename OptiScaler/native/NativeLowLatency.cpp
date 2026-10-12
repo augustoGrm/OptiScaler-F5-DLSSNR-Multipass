@@ -655,6 +655,44 @@ void OnPresentEndVulkan(VkDevice device)
     PresentEnd(Api::Vulkan, reinterpret_cast<IUnknown*>(device), PresentSource::SwapChain);
 }
 
+namespace
+{
+std::atomic<DWORD> g_dxvkGameThread = 0;   // the thread of the game's D3D11 Present under dxvk (Vulkan bridge)
+std::atomic<DWORD> g_dxvkVulkanThread = 0; // the thread of dxvk's vkQueuePresentKHR
+
+void LogDxvkThreads()
+{
+    const auto game = g_dxvkGameThread.load();
+    const auto vulkan = g_dxvkVulkanThread.load();
+
+    if (game == 0 || vulkan == 0)
+        return;
+
+    if (game == vulkan)
+        LOG_INFO("Low latency (dxvk): the game and dxvk present to Vulkan on the same thread ({})", game);
+    else
+        LOG_INFO("Low latency (dxvk): the game presents on thread {}, dxvk presents to Vulkan on thread {} (the Sleep "
+                 "at the Vulkan present runs on {})",
+                 game, vulkan, vulkan);
+}
+} // namespace
+
+void NoteDxvkGamePresentThread()
+{
+    const auto thread = GetCurrentThreadId();
+
+    if (g_dxvkGameThread.exchange(thread, std::memory_order_relaxed) != thread)
+        LogDxvkThreads();
+}
+
+void NoteDxvkVulkanPresentThread()
+{
+    const auto thread = GetCurrentThreadId();
+
+    if (g_dxvkVulkanThread.exchange(thread, std::memory_order_relaxed) != thread)
+        LogDxvkThreads();
+}
+
 void OnFirstSubmit(const void* queue)
 {
     if (!g_running.load(std::memory_order_relaxed) || g_submitSent.load(std::memory_order_relaxed))

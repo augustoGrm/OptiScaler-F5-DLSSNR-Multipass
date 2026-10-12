@@ -40,6 +40,12 @@ void OnPresentEnd(IUnknown* device, PresentSource source = PresentSource::SwapCh
 void OnPresentBeginVulkan(VkDevice device);
 void OnPresentEndVulkan(VkDevice device);
 
+// A D3D11 game on dxvk with the Vulkan present bridge presents twice a frame: the game's D3D11 Present on its own thread,
+// and dxvk's vkQueuePresentKHR on dxvk's. Each side notes its thread (cheap, a relaxed exchange; nothing is logged per
+// frame) and the one line saying whether the two are the same is logged when both are known, again if either changes.
+void NoteDxvkGamePresentThread();
+void NoteDxvkVulkanPresentThread();
+
 // The frame's first queue submit (D3D12) or first draw (D3D11): any thread, one relaxed load when we do not run.
 // `queue`: the D3D12 queue submitted to; only the game's queue counts. nullptr (D3D11) always counts.
 void OnFirstSubmit(const void* queue = nullptr);

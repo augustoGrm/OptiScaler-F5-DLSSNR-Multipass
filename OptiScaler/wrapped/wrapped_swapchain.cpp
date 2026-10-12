@@ -489,6 +489,9 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     // DXVK check, it's here because of upscaler time calculations
     if (IdentifyGpu::getPrimaryGpu().usesDxvk)
     {
+        if (willPresent && VkPresentBridge::DxvkThroughVulkan())
+            native::lowlatency::NoteDxvkGamePresentThread();
+
         if (pPresentParameters == nullptr)
             presentResult = pSwapChain->Present(SyncInterval, Flags);
         else
