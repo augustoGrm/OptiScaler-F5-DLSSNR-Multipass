@@ -404,6 +404,7 @@ CapInputs FrameCapInputs(Api api)
     // FGHooks::FGPresent's limiter waits before our OnPresentEnd there; the Vulkan bridge's D3D12 present (and its
     // limiter) comes after the game's present, our Sleep included. Only read together with fsrFgActive (FGPresent).
     in.limiterBeforeSleep = state.swapchainInteropApi != SwapchainInteropApi::VkwDx12;
+    in.d3d11Bridge = state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
     return in;
 }
 

@@ -1049,8 +1049,9 @@ int main()
             CHECK(PlanCap(cap).owner == CapOwner::NotOurs);
         }
 
-        // NVIDIA Reflex beside XeFG on a path whose limiter waits before our Sleep (D3D12, the D3D11 bridge): the limiter
-        // keeps the cap, as with FSR FG; the driver did not hold the interval it accepted (Assetto Corsa, D3D11 bridge)
+        // NVIDIA Reflex beside XeFG on the D3D11-to-D3D12 bridge: the limiter keeps the cap, the driver did not hold the
+        // interval it accepted (Assetto Corsa). On D3D12 (NBA 2K27) and the Vulkan bridge (RDR2) the driver holds it, with
+        // the cap divided by the frames XeFG shows per rendered one.
         {
             CapInputs cap;
             cap.running = true;
@@ -1058,12 +1059,27 @@ int main()
             cap.capFps = 60.0f;
             cap.xefgGenerating = true;
             cap.shownPerRendered = 2;
-            cap.limiterBeforeSleep = true;
+            cap.limiterBeforeSleep = true; // D3D12 and the D3D11 bridge alike: not what decides it
+            cap.d3d11Bridge = true;
             CHECK(PlanCap(cap).owner == CapOwner::Limiter && PlanCap(cap).minimumIntervalUs == 0);
-            // Anti-Lag 2 keeps it there: its limit is a CPU wait of its own
+            cap.d3d11Bridge = false;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 33333);
+            cap.limiterBeforeSleep = false; // the Vulkan bridge
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 33333);
+            // Anti-Lag 2 keeps its own cap everywhere
             cap.method = Method::FakenvapiWithXefg;
+            cap.d3d11Bridge = true;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 33333);
+            cap.d3d11Bridge = false;
             CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 33333);
         }
+
+        // The one rule both the plan for our calls and ReflexHooks::update (the game's own Reflex) take
+        CHECK(SplitLimiterKeepsCap(XefgLatency::Reflex, true));
+        CHECK(!SplitLimiterKeepsCap(XefgLatency::Reflex, false));
+        CHECK(!SplitLimiterKeepsCap(XefgLatency::AntiLag2, true));
+        CHECK(!SplitLimiterKeepsCap(XefgLatency::AntiLag2, false));
+        CHECK(!SplitLimiterKeepsCap(XefgLatency::XeLL, true));
 
         // XeLL as the output: as before
         CapInputs xellCap;

@@ -1199,12 +1199,17 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
     }
 
     // The split (XeFG with Reflex or Anti-Lag 2 as the Output): the other side holds the cap, not XeLL, with the game's own
-    // sleep mode, unless the game turned its Reflex off (fakenvapi might override that, as below). A bridged Vulkan game's
+    // sleep mode, unless OptiScaler's limiter keeps it where the driver was seen not to hold it (SplitLimiterKeepsCap, the
+    // same rule our own calls take), or the game turned its Reflex off (fakenvapi might override that, as below). A bridged Vulkan game's
     // is its NvAPI_Vulkan one: one on VK_NV_low_latency2 gets no cap from us (no swapchain to send it on) and one that only
     // marks frames has no mode of the other side's, so the limiter keeps it for both. The Vulkan present and the bridge's
     // D3D12 present both ask: the answer must be the same for both, or it flips every frame.
     const auto splitHoldsCap = [&]() -> bool
     {
+        if (native::lowlatency::SplitLimiterKeepsCap(CurrentSide(), State::Instance().swapchainInteropApi ==
+                                                                        SwapchainInteropApi::Dx11wDx12))
+            return false;
+
         if (bridgedXellDevice() != nullptr)
             return _lastVkSleepDev != nullptr && (fakenvapi::isUsingAsMainNvapi() || _lastVkSleepParams.bLowLatencyMode);
 

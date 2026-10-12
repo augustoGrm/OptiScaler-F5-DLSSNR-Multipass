@@ -572,6 +572,7 @@ struct CapInputs
     Method method = Method::RealReflex;
     bool fsrFgActive = false;        // FSR frame generation is generating frames
     bool limiterBeforeSleep = false; // the limiter's wait comes before our Sleep on this present path (FGPresent)
+    bool d3d11Bridge = false;        // a D3D11 game through the D3D11-to-D3D12 bridge (SwapchainInteropApi::Dx11wDx12)
     bool intelGpu = false;           // XeLL works on its own only on Intel GPUs
     bool xefgGenerating = false;     // XeFG is generating frames (not paused, not off, not in exclusive full screen)
     bool fakenvapiXell = false;      // Method::Fakenvapi has picked XeLL (Anti-Lag 2 missing: fakenvapi falls back)
@@ -595,6 +596,16 @@ inline bool XellIdle(const CapInputs& in)
         return !in.xefgGenerating;
 
     return in.method == Method::Fakenvapi && in.fakenvapiXell;
+}
+
+// XeFG with Reflex or Anti-Lag 2 as the output (the split): who keeps the frame cap. One rule for both our own calls
+// (PlanCap) and the game's own Reflex (ReflexHooks::update). NVIDIA Reflex accepted the interval but the shown fps did
+// not follow it on the D3D11-to-D3D12 bridge (Assetto Corsa), so OptiScaler's limiter keeps the cap there; on D3D12
+// (NBA 2K27, the game's Reflex) and the Vulkan bridge (RDR2) the driver holds it, with the cap divided by the frames XeFG
+// shows per rendered one. Anti-Lag 2 keeps its own cap everywhere.
+inline bool SplitLimiterKeepsCap(XefgLatency side, bool d3d11Bridge)
+{
+    return side == XefgLatency::Reflex && d3d11Bridge;
 }
 
 struct CapPlan
@@ -627,13 +638,12 @@ inline CapPlan PlanCap(const CapInputs& in)
         return { CapOwner::Limiter, 0 };
 
     // XeFG with Reflex or Anti-Lag 2 as the output: they pace the game's own frames, XeFG shows several per frame. XeLL
-    // never held the cap, so its being idle (XeFG paused) changes nothing. Chosen over OptiScaler's limiter because the
-    // sleep is where Reflex wants the wait; the limiter is the fallback to try if XeFG's 4x pacing runs off with it.
+    // never held the cap, so its being idle (XeFG paused) changes nothing. The sleep is where they want the wait, so they
+    // keep the cap, except where the driver was seen not to hold it (SplitLimiterKeepsCap).
     if (LatencySplitFromXell(in.method))
     {
-        // NVIDIA Reflex accepted the interval but did not hold it beside XeFG (Assetto Corsa, D3D11 bridge): where the
-        // limiter's wait comes before our Sleep it keeps the cap, as with FSR FG; Reflex still lowers latency
-        if (in.method == Method::RealReflexWithXefg && in.limiterBeforeSleep)
+        if (SplitLimiterKeepsCap(in.method == Method::RealReflexWithXefg ? XefgLatency::Reflex : XefgLatency::AntiLag2,
+                                 in.d3d11Bridge))
             return { CapOwner::Limiter, 0 };
 
         if (in.capFps <= 0.0f)
