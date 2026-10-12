@@ -413,7 +413,8 @@ const char* LogName()
     switch (g_runsFor.load())
     {
     case RunsFor::Xefg:
-        return "Low latency (feeding XeFG's XeLL)";
+        // In the split XeLL only stays for XeFG; Reflex or Anti-Lag 2 is fed
+        return XefgSide() == XefgLatency::XeLL ? "Low latency (feeding XeFG's XeLL)" : "Low latency (for XeFG)";
     case RunsFor::FsrFg:
         return "Low latency (for FSR frame generation)";
     default:

@@ -1103,9 +1103,13 @@ bool ReflexHooks::updateTimingData()
     // The game's Reflex device, else Optical F5Low's own Sleep device
     // A game that only marks frames for XeFG's XeLL sets no sleep device: its markers' device asks
     auto* markersDev = XefgOutput() && gameIsSendingMarkers() ? _lastDev[SIMULATION_START].load() : nullptr;
+    // In the split the XeFG branch of the Sleep hook stores no device (XeLL's or ours): the side's device has the report
+    auto* sideDev = XefgOutput() && Split() ? _sideDev : nullptr;
 
-    if (auto sleepDev =
-            _lastSleepDev != nullptr ? _lastSleepDev : (_ownSleepDev != nullptr ? _ownSleepDev : markersDev);
+    if (auto sleepDev = sideDev != nullptr ? sideDev
+                        : _lastSleepDev != nullptr
+                            ? _lastSleepDev
+                            : (_ownSleepDev != nullptr ? _ownSleepDev : markersDev);
         sleepDev && o_NvAPI_D3D_GetLatency)
     {
         // With XeFG, hkNvAPI_D3D_GetLatency answers from XeFG's XeLL through fakenvapi (the driver's report in the split)
