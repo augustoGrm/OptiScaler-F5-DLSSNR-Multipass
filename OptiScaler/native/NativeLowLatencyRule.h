@@ -631,6 +631,11 @@ inline CapPlan PlanCap(const CapInputs& in)
     // sleep is where Reflex wants the wait; the limiter is the fallback to try if XeFG's 4x pacing runs off with it.
     if (LatencySplitFromXell(in.method))
     {
+        // NVIDIA Reflex accepted the interval but did not hold it beside XeFG (Assetto Corsa, D3D11 bridge): where the
+        // limiter's wait comes before our Sleep it keeps the cap, as with FSR FG; Reflex still lowers latency
+        if (in.method == Method::RealReflexWithXefg && in.limiterBeforeSleep)
+            return { CapOwner::Limiter, 0 };
+
         if (in.capFps <= 0.0f)
             return { CapOwner::LowLatency, 0 };
 

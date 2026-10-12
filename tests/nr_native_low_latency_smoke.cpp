@@ -1049,6 +1049,22 @@ int main()
             CHECK(PlanCap(cap).owner == CapOwner::NotOurs);
         }
 
+        // NVIDIA Reflex beside XeFG on a path whose limiter waits before our Sleep (D3D12, the D3D11 bridge): the limiter
+        // keeps the cap, as with FSR FG; the driver did not hold the interval it accepted (Assetto Corsa, D3D11 bridge)
+        {
+            CapInputs cap;
+            cap.running = true;
+            cap.method = Method::RealReflexWithXefg;
+            cap.capFps = 60.0f;
+            cap.xefgGenerating = true;
+            cap.shownPerRendered = 2;
+            cap.limiterBeforeSleep = true;
+            CHECK(PlanCap(cap).owner == CapOwner::Limiter && PlanCap(cap).minimumIntervalUs == 0);
+            // Anti-Lag 2 keeps it there: its limit is a CPU wait of its own
+            cap.method = Method::FakenvapiWithXefg;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 33333);
+        }
+
         // XeLL as the output: as before
         CapInputs xellCap;
         xellCap.running = true;
