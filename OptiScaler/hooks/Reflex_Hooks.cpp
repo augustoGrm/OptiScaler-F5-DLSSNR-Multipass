@@ -315,10 +315,26 @@ NvAPI_Status ReflexHooks::sideSetSleepModeVk(Side side, HANDLE vkDevice, NV_VULK
     _sideVkDev = vkDevice;
     _sideOfVkDev = side;
 
-    if (side == Side::AntiLag2)
-        return fakenvapi::companionSetSleepMode(vkDevice, params);
+    const auto result = side == Side::AntiLag2 ? fakenvapi::companionSetSleepMode(vkDevice, params)
+                                               : o_NvAPI_Vulkan_SetSleepMode(vkDevice, params);
 
-    return o_NvAPI_Vulkan_SetSleepMode(vkDevice, params);
+    // As the D3D one: what the side was asked for, once per change, and what it answered
+    static NV_VULKAN_SET_SLEEP_MODE_PARAMS logged {};
+    static HANDLE loggedDev = nullptr;
+    if (loggedDev != vkDevice || logged.bLowLatencyMode != params->bLowLatencyMode ||
+        logged.bLowLatencyBoost != params->bLowLatencyBoost || logged.minimumIntervalUs != params->minimumIntervalUs)
+    {
+        logged = *params;
+        loggedDev = vkDevice;
+        LOG_INFO("XeFG low latency (Vulkan): {} sleep mode on {:X}: low latency {}, boost {}, interval {} us ({}): {}",
+                 side == Side::AntiLag2 ? "Anti-Lag Vk" : "NVIDIA Reflex", (uintptr_t) vkDevice,
+                 params->bLowLatencyMode != 0, params->bLowLatencyBoost != 0, params->minimumIntervalUs,
+                 params->minimumIntervalUs > 0 ? std::format("{:.1f} fps", 1e6 / params->minimumIntervalUs)
+                                               : std::string("no cap"),
+                 magic_enum::enum_name(result));
+    }
+
+    return result;
 }
 
 NvAPI_Status ReflexHooks::sideSetLatencyMarkerVk(Side side, HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* params)
@@ -1160,8 +1176,21 @@ void* ReflexHooks::getHookedReflex(unsigned int InterfaceId)
 
 bool ReflexHooks::updateTimingData()
 {
-    if (!_inited)
+    // Why the Reflex timings are empty, once per reason (the menu's timing graph and the FPS overlay's Reflex timings)
+    static const char* lastWhy = nullptr;
+    auto noData = [&](const char* why)
+    {
+        if (lastWhy != why)
+        {
+            lastWhy = why;
+            LOG_INFO("Reflex timings: no data, {}", why);
+        }
+
         return false;
+    };
+
+    if (!_inited)
+        return noData("the Reflex hooks are not up (NvAPI Reflex functions missing)");
 
     auto processFrameReport = [&](const auto& frameReport) -> bool
     {
@@ -1184,7 +1213,7 @@ bool ReflexHooks::updateTimingData()
         }
 
         if (end < start)
-            return false;
+            return noData("the driver's frame report is empty (no markers reached it on this device)");
 
         double rangeNs = static_cast<double>(end - start);
 
@@ -1229,17 +1258,29 @@ bool ReflexHooks::updateTimingData()
             return false;
         }
 
+        static IUnknown* loggedDev = nullptr;
+        if (loggedDev != sleepDev)
+        {
+            loggedDev = sleepDev;
+            LOG_INFO("Reflex timings: reading the D3D report of the {} device {:X}",
+                     sideDev != nullptr ? "split side" : _lastSleepDev != nullptr ? "game's" : "own", (size_t) sleepDev);
+        }
+
         // 64th element has the latest data
         return processFrameReport(results->frameReport[63]);
     }
 
-    if (_lastVkSleepDev && o_NvAPI_Vulkan_GetLatency)
+    // The split on the Vulkan bridge: Optical F5Low's Reflex runs on the side's VkDevice (a game with no Reflex of its
+    // own, dxvk for one, never sets _lastVkSleepDev), and its report is the one with the timings
+    auto* vkDev = XefgOutput() && Split() && _sideVkDev != nullptr ? _sideVkDev : _lastVkSleepDev;
+
+    if (vkDev && o_NvAPI_Vulkan_GetLatency)
     {
         // Not calling free on this but it's static so hopefully fine
         static NV_VULKAN_LATENCY_RESULT_PARAMS* results = new NV_VULKAN_LATENCY_RESULT_PARAMS();
         results->version = NV_VULKAN_LATENCY_RESULT_PARAMS_VER;
 
-        const auto result = hkNvAPI_Vulkan_GetLatency(_lastVkSleepDev, results);
+        const auto result = hkNvAPI_Vulkan_GetLatency(vkDev, results);
 
         // Bridged, hkNvAPI_Vulkan_GetLatency answered from XeFG's XeLL through fakenvapi (asked after the call: it
         // hands the game's Reflex over when the owner changed)
@@ -1255,7 +1296,9 @@ bool ReflexHooks::updateTimingData()
         return processFrameReport(results->frameReport[63]);
     }
 
-    return false;
+    return noData(vkDev == nullptr
+                      ? "no Reflex device: no game, side or own sleep device (and no Vulkan one)"
+                      : "no NvAPI_Vulkan_GetLatency");
 }
 
 // For updating information about Reflex hooks
