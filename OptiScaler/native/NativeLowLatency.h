@@ -69,6 +69,9 @@ struct Status
     bool offKeptForFrameGeneration = false; // Input is Off, but DLSS FG needs Reflex: the game's Reflex stays on
 };
 
+// Frame generation that runs Reflex itself (DLSS FG, an external owner): it cannot work with low latency off. Any thread.
+bool FrameGenerationNeedsReflex();
+
 // The Framerate page's Input is Off and nothing needs the game's Reflex on: its sleep mode (D3D and Vulkan NVAPI,
 // VK_NV_low_latency2) goes out with low latency off, no Boost and no interval (hooks/Reflex_Hooks.cpp), and OptiScaler's
 // limiter keeps the frame cap. Any thread, cheap.

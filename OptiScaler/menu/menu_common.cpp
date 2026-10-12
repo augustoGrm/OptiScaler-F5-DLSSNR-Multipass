@@ -5681,8 +5681,7 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
 
     const auto status = GetStatus();
     const auto input = config->FramerateLowLatencyInput.value_or_default();
-    const bool frameGenerationNeedsReflex =
-        state.externalFrameGeneration || state.activeFgOutput == FGOutput::DLSSG;
+    const bool frameGenerationNeedsReflex = FrameGenerationNeedsReflex();
     const bool forceXellActive = state.activeFgInput == FGInput::ForceXeLL;
     const OutputInputs outputInputs = CurrentOutputInputs();
     const bool outputLocked = OutputLocked(outputInputs);
@@ -5841,7 +5840,8 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         !fakenvapi::isLowLatencyActive() && state.reflexLimitsFps)
         output += " (inactive)";
 
-    const char* who = ActiveInputText(status.decision, ReflexHooks::gameCalledReflex());
+    const char* who = ActiveInputText(status.decision, ReflexHooks::gameCalledReflex(), XellHooks::canLimit(),
+                                      frameGenerationNeedsReflex);
 
     if (status.decision == Decision::LowLatencyOff)
         ImGui::TextUnformatted("Active: Off");

@@ -257,12 +257,6 @@ bool ForceReflexDisabled()
     return Config::Instance()->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable;
 }
 
-// Frame generation that runs Reflex itself (DLSS FG, an external owner): it cannot work with low latency off
-bool FrameGenerationNeedsReflex()
-{
-    return State::Instance().externalFrameGeneration || State::Instance().activeFgOutput == FGOutput::DLSSG;
-}
-
 Inputs GatherInputs(bool deviceAvailable)
 {
     auto config = Config::Instance();
@@ -800,6 +794,11 @@ void WaitForGameQueueIdle()
     }
 
     device->Release();
+}
+
+bool FrameGenerationNeedsReflex()
+{
+    return State::Instance().externalFrameGeneration || State::Instance().activeFgOutput == FGOutput::DLSSG;
 }
 
 bool GameLowLatencyBlocked()

@@ -469,8 +469,10 @@ inline const char* StatusLabel(Decision decision)
 }
 
 // The Framerate page's "Active: <input> -> <output>": who makes the latency calls right now. The game's Reflex counts
-// whenever the game makes calls, whatever we decided about ours.
-inline const char* ActiveInputText(Decision decision, bool gameCallsReflex)
+// whenever the game makes calls, whatever we decided about ours. Frame generation that runs Reflex itself (DLSS FG) makes
+// calls whatever the Input says, and so does a game's own XeLL; both are facts, not read off the order Decide checks in.
+inline const char* ActiveInputText(Decision decision, bool gameCallsReflex, bool gameRunsXell = false,
+                                   bool frameGenerationNeedsReflex = false)
 {
     switch (decision)
     {
@@ -481,8 +483,16 @@ inline const char* ActiveInputText(Decision decision, bool gameCallsReflex)
     case Decision::FrameGenerationOwnsReflex:
         return "Frame generation";
     default:
-        return gameCallsReflex ? "Game" : "None";
+        break;
     }
+
+    if (gameCallsReflex)
+        return "Game";
+
+    if (frameGenerationNeedsReflex)
+        return "Frame generation";
+
+    return gameRunsXell ? "Game" : "None";
 }
 
 // The reason when it does not run. Run has none here: the method in use names it. `gameReflexFeedsXell`: the game's own
@@ -496,7 +506,7 @@ inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = fa
     switch (decision)
     {
     case Decision::SettingOff:
-        return "Input is Game: OptiScaler makes no latency calls";
+        return "OptiScaler makes no latency calls: the Input is Game or Off";
     case Decision::LowLatencyOff:
         return "Input is Off: no low latency, the game's Reflex is sent with it off";
     case Decision::NoF5Low:

@@ -815,6 +815,20 @@ int main()
         // Nobody makes calls
         CHECK(std::strcmp(ActiveInputText(Decision::NoF5Low, false), "None") == 0);
         CHECK(std::strcmp(ActiveInputText(Decision::SettingOff, false), "None") == 0);
+
+        // The game runs XeLL of its own (no Reflex calls): that is who lowers latency, not nothing
+        CHECK(std::strcmp(ActiveInputText(Decision::GameRunsXell, false, true, false), "Game") == 0);
+        // DLSS FG runs Reflex whatever the Input says (Game, or Off kept for it)
+        CHECK(std::strcmp(ActiveInputText(Decision::SettingOff, false, false, true), "Frame generation") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::NoF5Low, false, false, true), "Frame generation") == 0);
+        // Input Off with nothing needing Reflex is still Off
+        CHECK(std::strcmp(ActiveInputText(Decision::LowLatencyOff, false, false, false), "Off") == 0);
+        // The game's own Reflex calls still count first
+        CHECK(std::strcmp(ActiveInputText(Decision::SettingOff, true, false, true), "Game") == 0);
+
+        // The reason for Input Game, or Off kept by DLSS FG, does not claim the Input is Game
+        CHECK(std::strstr(DecisionText(Decision::SettingOff), "Input is Game:") == nullptr);
+        CHECK(DecisionText(Decision::SettingOff)[0] != '\0');
     }
 
     // Framerate page: the Output choice
