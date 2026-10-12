@@ -820,6 +820,7 @@ int main()
     // Framerate page: the Output choice
     {
         OutputInputs real; // NVIDIA, real nvapi, no XeFG
+        real.nvidiaGpu = true;
         CHECK(OutputAvailability(Output::Auto, real).available);
         CHECK(OutputAvailability(Output::XeLL, real).available);
         CHECK(!OutputAvailability(Output::LatencyFlex, real).available);
@@ -905,6 +906,7 @@ int main()
 
         // Which entries a setup has
         OutputInputs nvidia; // real nvapi, XeFG, Reflex asked for
+        nvidia.nvidiaGpu = true;
         nvidia.xefgOutput = true;
         nvidia.xefgLatency = XefgLatency::Reflex;
         OutputInputs amd; // fakenvapi on an AMD card
@@ -932,6 +934,37 @@ int main()
         CHECK(!OutputAvailability(Output::Reflex, amd).available && OutputAvailability(Output::Reflex, amd).why[0] != '\0');
         CHECK(!OutputAvailability(Output::Reflex, intel).available && !OutputAvailability(Output::AntiLag2, intel).available);
         CHECK(!OutputAvailability(Output::Auto, nvidia).available && !OutputAvailability(Output::LatencyFlex, nvidia).available);
+
+        // Reflex is the driver's and needs an NVIDIA card: real nvapi on an AMD or Intel card (no fakenvapi) has none
+        for (const bool amdCard : { true, false })
+        {
+            OutputInputs other; // real nvapi file present, but the card is AMD or Intel
+            other.xefgOutput = true;
+            other.amdGpu = amdCard;
+            other.xefgLatency = XefgLatency::Reflex;
+            CHECK(!XefgLatencyAvailable(XefgLatency::Reflex, other));
+            CHECK(!OutputAvailability(Output::Reflex, other).available);
+            CHECK(OutputShown(other, false, false) == Output::XeLL);
+            CHECK(EffectiveXefgLatency(other, false, false) == XefgLatency::XeLL);
+            CHECK(!BoostAvailable(Input::Auto, other, false));
+            CHECK(OutputLocked(other)); // no Reflex, and no fakenvapi for Anti-Lag 2: XeLL is the one choice
+            other.xefgOutput = false; // without XeFG the same card still has no Reflex boost
+            CHECK(!BoostAvailable(Input::Auto, other, false));
+        }
+
+        // Anti-Lag 2 that failed to start (a second context fakenvapi could not make): not available, with its own reason
+        {
+            OutputInputs failed = amd;
+            failed.antiLag2Failed = true;
+            CHECK(!XefgLatencyAvailable(XefgLatency::AntiLag2, failed));
+            CHECK(!OutputAvailability(Output::AntiLag2, failed).available);
+            CHECK(std::strstr(OutputAvailability(Output::AntiLag2, failed).why, "could not start") != nullptr);
+            CHECK(OutputShown(failed, false, false) == Output::XeLL);
+            CHECK(EffectiveXefgLatency(failed, false, false) == XefgLatency::XeLL);
+            CHECK(OutputLocked(failed));
+            // ... the other reasons keep their own words
+            CHECK(std::strstr(OutputAvailability(Output::AntiLag2, nvidia).why, "could not start") == nullptr);
+        }
 
         // Without XeFG the two are not offered
         OutputInputs plain;
@@ -962,6 +995,9 @@ int main()
         nvidia.xefgLatency = XefgLatency::XeLL;
         CHECK(!BoostAvailable(Input::Auto, nvidia, false));
         nvidia.xefgLatency = XefgLatency::Reflex;
+        // Force Reflex set in the fakenvapi settings keeps XeLL (nothing sends Boost then), whatever the choice shows
+        CHECK(!BoostAvailable(Input::Auto, nvidia, false, true));
+        CHECK(BoostAvailable(Input::Auto, nvidia, false, false));
 
         // The side in force: the choice if the setup has it, XeLL for everything else. Input Off and Force Disable win.
         CHECK(EffectiveXefgLatency(nvidia, false, false) == XefgLatency::Reflex);

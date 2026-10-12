@@ -5799,7 +5799,8 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         }
 
         // Boost, NVIDIA Reflex only
-        const bool boostAvailable = BoostAvailable(input, outputInputs, forceXellActive);
+        const bool boostAvailable = BoostAvailable(input, outputInputs, forceXellActive,
+                                                   config->FN_ForceReflex.value_or_default() != ForceReflex::InGame);
         bool boost = config->DlssNrNativeLowLatencyBoost.value_or_default();
 
         ImGui::BeginDisabled(!boostAvailable);

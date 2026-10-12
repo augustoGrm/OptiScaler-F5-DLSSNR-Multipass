@@ -294,6 +294,8 @@ struct OutputInputs
     bool fakenvapiMain = false; // fakenvapi is the game's nvapi (not the driver's)
     bool xefgOutput = false;    // XeFG is the frame generation output
     bool amdGpu = false;        // an AMD card is the primary GPU (Anti-Lag 2 and Anti-Lag Vk are AMD's)
+    bool nvidiaGpu = false;     // an NVIDIA card is the primary GPU (Reflex is NVIDIA's)
+    bool antiLag2Failed = false; // fakenvapi's second Anti-Lag 2 context could not start (XeFG falls back to XeLL)
     XefgLatency xefgLatency = XefgLatency::XeLL; // [XeFG] LowLatencyOutput as chosen, whether the setup has it or not
 };
 
@@ -303,16 +305,16 @@ struct OutputChoice
     const char* why = ""; // the reason when it is not
 };
 
-// With XeFG: whether the setup has this way of lowering latency. Reflex is the driver's, so it needs the real nvapi;
-// Anti-Lag 2 is fakenvapi's on an AMD card.
+// With XeFG: whether the setup has this way of lowering latency. Reflex is the driver's, so it needs the real nvapi on an
+// NVIDIA card; Anti-Lag 2 is fakenvapi's on an AMD card, unless its second context failed to start.
 inline bool XefgLatencyAvailable(XefgLatency latency, const OutputInputs& in)
 {
     switch (latency)
     {
     case XefgLatency::Reflex:
-        return !in.fakenvapiMain;
+        return !in.fakenvapiMain && in.nvidiaGpu;
     case XefgLatency::AntiLag2:
-        return in.fakenvapiMain && in.amdGpu;
+        return in.fakenvapiMain && in.amdGpu && !in.antiLag2Failed;
     default:
         return true;
     }
@@ -338,9 +340,13 @@ inline OutputChoice OutputAvailability(Output output, const OutputInputs& in)
                        ? OutputChoice { true, "" }
                        : OutputChoice { false, "Needs an NVIDIA card with its own Reflex" };
         case Output::AntiLag2:
-            return XefgLatencyAvailable(XefgLatency::AntiLag2, in)
-                       ? OutputChoice { true, "" }
-                       : OutputChoice { false, "Needs an AMD card with fakenvapi as the game's nvapi" };
+            if (XefgLatencyAvailable(XefgLatency::AntiLag2, in))
+                return { true, "" };
+
+            if (in.fakenvapiMain && in.amdGpu && in.antiLag2Failed)
+                return { false, "Anti-Lag 2 could not start" };
+
+            return { false, "Needs an AMD card with fakenvapi as the game's nvapi" };
         default:
             return { false, "XeFG uses XeLL, Reflex or Anti-Lag 2" };
         }
@@ -376,11 +382,14 @@ inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLate
     return forceLatencyFlex ? Output::LatencyFlex : Output::Auto;
 }
 
-// Boost is NVIDIA Reflex's, and OptiScaler's calls carry it: real Reflex as the output (no fakenvapi, no Force XeLL; with
-// XeFG only when Reflex is what it is paired with) and OptiScaler allowed to make the calls
-inline bool BoostAvailable(Input input, const OutputInputs& in, bool forceXell)
+// Boost is NVIDIA Reflex's, and OptiScaler's calls carry it: real Reflex on an NVIDIA card as the output (no fakenvapi,
+// no Force XeLL; with XeFG only when Reflex is the side in force: the choice, and not fakenvapi's Force Reflex, which
+// keeps XeLL) and OptiScaler allowed to make the calls
+inline bool BoostAvailable(Input input, const OutputInputs& in, bool forceXell, bool forceReflexSet = false)
 {
-    const bool reflexOutput = in.xefgOutput ? OutputShown(in, false, false) == Output::Reflex : !in.fakenvapiMain;
+    const bool reflexOutput = in.xefgOutput ? (in.xefgLatency == XefgLatency::Reflex &&
+                                               XefgLatencyAvailable(XefgLatency::Reflex, in) && !forceReflexSet)
+                                            : (!in.fakenvapiMain && in.nvidiaGpu);
     return RuleForInput(input).setting != Setting::Off && reflexOutput && !forceXell;
 }
 

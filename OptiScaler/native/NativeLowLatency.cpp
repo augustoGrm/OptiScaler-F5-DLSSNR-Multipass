@@ -811,12 +811,13 @@ bool GameLowLatencyBlocked()
 OutputInputs CurrentOutputInputs()
 {
     // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
-    static const bool amdGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::AMD;
+    static const auto vendor = IdentifyGpu::getPrimaryGpu().vendorId;
 
     OutputInputs in;
     in.fakenvapiMain = fakenvapi::isUsingAsMainNvapi();
     in.xefgOutput = State::Instance().activeFgOutput == FGOutput::XeFG;
-    in.amdGpu = amdGpu;
+    in.amdGpu = vendor == VendorId::AMD;
+    in.nvidiaGpu = vendor == VendorId::Nvidia;
     in.xefgLatency = Config::Instance()->FGXeFGLowLatencyOutput.value_or_default();
     return in;
 }
