@@ -532,9 +532,36 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc)
     return result;
 }
 
+// ResizeBuffers(0, 0) means "the window's size". With the window still hidden or minimised (a game leaving exclusive full screen
+// before it sizes its window) that is 1x1, and the picture, XeFG and the upscaler all end up at 1x1 for good. Keep the size the
+// swapchain has until the window is real: the game resizes again when it is.
+static void KeepSizeWhileWindowTiny(IDXGISwapChain* swapChain, HWND window, UINT& width, UINT& height)
+{
+    if (width != 0 && height != 0)
+        return;
+
+    RECT client {};
+
+    if (window == nullptr || swapChain == nullptr || !GetClientRect(window, &client) ||
+        (client.right >= 16 && client.bottom >= 16))
+        return;
+
+    DXGI_SWAP_CHAIN_DESC current {};
+
+    if (FAILED(swapChain->GetDesc(&current)))
+        return;
+
+    LOG_WARN("ResizeBuffers 0x0 with a {}x{} window: keeping {}x{}", client.right, client.bottom,
+             current.BufferDesc.Width, current.BufferDesc.Height);
+    width = current.BufferDesc.Width;
+    height = current.BufferDesc.Height;
+}
+
 HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Width, UINT Height, DXGI_FORMAT NewFormat,
                                                      UINT SwapChainFlags)
 {
+    KeepSizeWhileWindowTiny(_fgSwapChain, _handle, Width, Height);
+
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers: count {}, size {}x{}, format {}, flags {:X}", BufferCount, Width, Height,
               (UINT) NewFormat, SwapChainFlags);
 
@@ -780,6 +807,8 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers1(UINT BufferCount, UINT Wid
                                                       UINT SwapChainFlags, const UINT* pCreationNodeMask,
                                                       IUnknown* const* ppPresentQueue)
 {
+    KeepSizeWhileWindowTiny(_fgSwapChain, _handle, Width, Height);
+
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers1: count {}, size {}x{}, format {}, flags {:X}", BufferCount, Width, Height,
               (UINT) Format, SwapChainFlags);
 
