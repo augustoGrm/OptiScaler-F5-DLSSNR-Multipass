@@ -595,6 +595,12 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_Sleep(IUnknown* pDev)
 
     if (State::Instance().activeFgOutput == FGOutput::XeFG)
     {
+        // Our own Sleep with XeFG: noted for the menu's Reflex timing graph only (updateTimingData), as below. With XeLL as
+        // the Output it is the one device whose report has the timings: a game with no Reflex of its own (dxvk on the
+        // Vulkan bridge) gives the graph nothing else, and it stayed empty.
+        if (_ownCall)
+            _ownSleepDev = pDev;
+
         // The split: XeLL never sleeps (its low latency is off), the other side does
         const auto side = CurrentSide();
         const auto route = RouteFor(side, Call::Sleep);
