@@ -46,6 +46,46 @@ void OnPresentEndVulkan(VkDevice device);
 void NoteDxvkGamePresentThread();
 void NoteDxvkVulkanPresentThread();
 
+// Where the pair runs for that game (NativeLowLatencyRule.h SleepSite). The Vulkan present decides nothing: the game's
+// Present latches the site once per frame ([DlssNr] NativeLowLatencyDxvkGameThread, and a target the Vulkan present has
+// published), and the Vulkan present follows the latch, so a frame never gets both sites or neither.
+//
+// hkvkQueuePresentKHR, every present of a dxvk game with the bridge up: publishes the target its own low latency would use
+// and returns true when the game's Present runs the pair (the Vulkan present then skips it). Notes the thread. Also hands
+// XeFG the ID of the oldest game present not yet presented to Vulkan (FrameIdForFrameGeneration).
+bool DxvkVulkanPresent(Api api, const void* device);
+
+// dxvk without the bridge up (or no target): nothing for the game's Present to run
+void DxvkVulkanPresentGone();
+
+// What the game's Present began, to end it the same way
+struct DxvkGameScope
+{
+    bool began = false;
+    Api api = Api::D3D;
+    IUnknown* device = nullptr; // a D3D device, or the VkDevice as a token (Api::Vulkan)
+};
+
+// The wrapped D3D11 swap chain's Present under dxvk through the Vulkan bridge (the caller checked that): before the real
+// Present, and after it returns. `keyOn`: the ini key. The pair is ended on the game's thread.
+DxvkGameScope OnDxvkGamePresentBegin(bool keyOn);
+void OnDxvkGamePresentEnd(const DxvkGameScope& scope);
+
+// Held around each Begin/End call of either site while the bridge is up under dxvk: the two sites share the pair's state
+// (the frame ID, the sleep mode), which only one thread touches in steady state. Switching the site mid-run is the one time
+// a Vulkan present's call and the game's can overlap; the lock makes that one frame safe. `take` false: no lock.
+class DxvkSiteLock
+{
+  public:
+    explicit DxvkSiteLock(bool take);
+    ~DxvkSiteLock();
+    DxvkSiteLock(const DxvkSiteLock&) = delete;
+    DxvkSiteLock& operator=(const DxvkSiteLock&) = delete;
+
+  private:
+    bool _held;
+};
+
 // The frame's first queue submit (D3D12) or first draw (D3D11): any thread, one relaxed load when we do not run.
 // `queue`: the D3D12 queue submitted to; only the game's queue counts. nullptr (D3D11) always counts.
 void OnFirstSubmit(const void* queue = nullptr);

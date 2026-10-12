@@ -1093,15 +1093,31 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
         native::lowlatency::PresentTarget(true, bridged, presentDevice,
                                           bridged ? static_cast<IUnknown*>(VkPresentBridge::Device()) : nullptr,
                                           splitOnVulkan);
-    const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().usesDxvk || (bridged && VkPresentBridge::DxvkThroughVulkan())) &&
-                            lowLatencyTarget.device != nullptr;
+    // dxvk with the bridge up: dxvk calls this from its own thread, not the game's, so a Sleep here only paces dxvk and the
+    // game runs ahead until dxvk's frame latency limit stops it. By default (NativeLowLatencyDxvkGameThread) the game's
+    // own D3D11 Present runs the pair instead (wrapped/wrapped_swapchain.cpp): this call publishes the target it uses and
+    // skips its own pair for the frames that Present has taken. The call that decides is the game's, once a frame, so a
+    // frame never gets both or neither.
+    // Both sites only call the NVAPI entry points that take the device (NvAPI_D3D_* on the bridge's D3D12 device,
+    // NvAPI_Vulkan_SetLatencyMarker / Sleep on the VkDevice) and vkWaitSemaphores on the VkDevice's sleep semaphore.
+    // None of them takes a swapchain, and the Vulkan specification lists no externally synchronised parameter for
+    // vkWaitSemaphores, so none has to stay on dxvk's thread. The VK_NV_low_latency2 calls that do take the swapchain
+    // (vkLatencySleepNV, vkSetLatencyMarkerNV, externally synchronised in that extension) are not part of our pair.
+    const bool dxvkBridged = bridged && VkPresentBridge::DxvkThroughVulkan();
+    bool pairAtGamePresent = false;
 
-    // Under dxvk the game's thread and dxvk's present thread differ: say so once
-    if (bridged && VkPresentBridge::DxvkThroughVulkan())
-        native::lowlatency::NoteDxvkVulkanPresentThread();
+    if (dxvkBridged && lowLatencyTarget.device != nullptr)
+        pairAtGamePresent = native::lowlatency::DxvkVulkanPresent(lowLatencyTarget.api, lowLatencyTarget.device);
+    else if (IdentifyGpu::getPrimaryGpu().usesDxvk)
+        native::lowlatency::DxvkVulkanPresentGone();
+
+    const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().usesDxvk || dxvkBridged) &&
+                            lowLatencyTarget.device != nullptr && !pairAtGamePresent;
 
     const auto lowLatencyBegin = [&]
     {
+        native::lowlatency::DxvkSiteLock siteLock(dxvkBridged);
+
         if (lowLatencyTarget.api == native::lowlatency::Api::Vulkan)
             native::lowlatency::OnPresentBeginVulkan(presentDevice);
         else
@@ -1110,6 +1126,8 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     };
     const auto lowLatencyEnd = [&]
     {
+        native::lowlatency::DxvkSiteLock siteLock(dxvkBridged);
+
         if (lowLatencyTarget.api == native::lowlatency::Api::Vulkan)
             native::lowlatency::OnPresentEndVulkan(presentDevice);
         else

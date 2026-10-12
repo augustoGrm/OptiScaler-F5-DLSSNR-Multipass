@@ -693,6 +693,112 @@ void NoteDxvkVulkanPresentThread()
         LogDxvkThreads();
 }
 
+namespace
+{
+// What the Vulkan present published: the target its own low latency would use (the bridge's D3D12 device, or the game's
+// VkDevice as a token), for the game's Present to run the pair on
+std::atomic<Api> g_dxvkTargetApi = Api::D3D;
+std::atomic<IUnknown*> g_dxvkTargetDevice = nullptr;
+
+// -1 not decided yet, 0 the Vulkan present runs the pair, 1 the game's Present does. Set by the game's Present, once per
+// frame; the Vulkan present only reads it.
+std::atomic<int> g_dxvkSite = -1;
+
+// One ID per game present not yet presented to Vulkan (NativeLowLatencyRule.h FrameIdQueue), and the ID of the frame the
+// Vulkan present in flight is presenting
+std::mutex g_dxvkIdMutex;
+FrameIdQueue g_dxvkIds;
+std::atomic<uint32_t> g_dxvkBridgeFrameId = 0;
+
+std::mutex g_dxvkSiteMutex;
+
+void ForgetDxvkFrameIds()
+{
+    std::lock_guard lock(g_dxvkIdMutex);
+    g_dxvkIds.Clear();
+    g_dxvkBridgeFrameId = 0;
+}
+} // namespace
+
+DxvkSiteLock::DxvkSiteLock(bool take) : _held(take)
+{
+    if (_held)
+        g_dxvkSiteMutex.lock();
+}
+
+DxvkSiteLock::~DxvkSiteLock()
+{
+    if (_held)
+        g_dxvkSiteMutex.unlock();
+}
+
+bool DxvkVulkanPresent(Api api, const void* device)
+{
+    NoteDxvkVulkanPresentThread();
+
+    g_dxvkTargetApi = api;
+    g_dxvkTargetDevice = reinterpret_cast<IUnknown*>(const_cast<void*>(device));
+
+    if (g_dxvkSite.load(std::memory_order_relaxed) != 1)
+        return false;
+
+    // The game's Present moved on to the next frame's ID long before dxvk got here: the frame presented now carries the
+    // ID its markers had, which the game's Present queued
+    std::lock_guard lock(g_dxvkIdMutex);
+    g_dxvkBridgeFrameId = g_dxvkIds.Pop();
+    return true;
+}
+
+void DxvkVulkanPresentGone()
+{
+    g_dxvkTargetDevice = nullptr;
+}
+
+DxvkGameScope OnDxvkGamePresentBegin(bool keyOn)
+{
+    NoteDxvkGamePresentThread();
+
+    DxvkGameScope scope;
+    const auto api = g_dxvkTargetApi.load();
+    const auto device = g_dxvkTargetDevice.load();
+    const bool gamePresent = SleepSiteFor(true, keyOn) == SleepSite::GamePresent && device != nullptr;
+
+    // A new site starts clean: IDs queued for the old one mean nothing to it
+    if (g_dxvkSite.exchange(gamePresent ? 1 : 0) != (gamePresent ? 1 : 0))
+    {
+        ForgetDxvkFrameIds();
+        LOG_INFO("Low latency (dxvk): the Reflex calls run at {}",
+                 gamePresent ? "the game's Present, on the game's thread" : "dxvk's Vulkan present, on dxvk's thread");
+    }
+
+    if (!gamePresent)
+        return scope;
+
+    {
+        // The ID the frame in flight's markers carry (0 when nobody feeds XeLL): XeFG takes it when the bridge presents
+        // this frame (FrameIdForFrameGeneration)
+        std::lock_guard lock(g_dxvkIdMutex);
+        g_dxvkIds.Push(g_xellFrameIdForFrameGeneration.load());
+    }
+
+    scope.began = true;
+    scope.api = api;
+    scope.device = device;
+
+    DxvkSiteLock lock(true);
+    PresentBegin(api, device, PresentSource::SwapChain);
+    return scope;
+}
+
+void OnDxvkGamePresentEnd(const DxvkGameScope& scope)
+{
+    if (!scope.began)
+        return;
+
+    DxvkSiteLock lock(true);
+    PresentEnd(scope.api, scope.device, PresentSource::SwapChain);
+}
+
 void OnFirstSubmit(const void* queue)
 {
     if (!g_running.load(std::memory_order_relaxed) || g_submitSent.load(std::memory_order_relaxed))
@@ -733,6 +839,10 @@ void OnDeviceReleased(IUnknown* device)
     expected = device;
     g_sleepModeDevice.compare_exchange_strong(expected, nullptr);
 
+    // dxvk: the game's Present must not run the pair on it either
+    expected = device;
+    g_dxvkTargetDevice.compare_exchange_strong(expected, nullptr);
+
     ReflexHooks::forgetSleepDevice(device);
 }
 
@@ -747,6 +857,9 @@ void OnDeviceReleasedVulkan(VkDevice device)
 
     expected = token;
     g_sleepModeDevice.compare_exchange_strong(expected, nullptr);
+
+    expected = token;
+    g_dxvkTargetDevice.compare_exchange_strong(expected, nullptr);
 
     ReflexHooks::forgetSleepDeviceVulkan(device);
 
@@ -774,6 +887,15 @@ bool Running()
 
 uint32_t FrameIdForFrameGeneration()
 {
+    // dxvk with the pair at the game's Present: the bridge present on dxvk's thread presents a frame the game's thread has
+    // long moved past, and takes the ID that frame's markers carried. The game's own thread (XeFG tags the frame's
+    // resources while it renders) and everyone else are in the newest frame, as before.
+    if (g_dxvkSite.load(std::memory_order_relaxed) == 1 && GetCurrentThreadId() == g_dxvkVulkanThread.load())
+    {
+        if (const auto bridge = g_dxvkBridgeFrameId.load(); bridge != 0 && Running())
+            return bridge;
+    }
+
     if (const auto ours = g_xellFrameIdForFrameGeneration.load(); ours != 0 && Running())
         return ours;
 

@@ -489,13 +489,24 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     // DXVK check, it's here because of upscaler time calculations
     if (IdentifyGpu::getPrimaryGpu().usesDxvk)
     {
+        // dxvk with the Vulkan bridge: Optical F5Low's low latency (Reflex markers and the Sleep) runs here, on the game's
+        // thread, as it does for a plain D3D11 game (Dx11wDx12SC::Present). The Vulkan present (hkvkQueuePresentKHR) runs on
+        // dxvk's thread and stands aside while this does (native/NativeLowLatency.h DxvkGameScope). Same willPresent rule as
+        // the non-dxvk path below: a DXGI_PRESENT_TEST is not a frame.
+        native::lowlatency::DxvkGameScope lowLatencyScope;
+
         if (willPresent && VkPresentBridge::DxvkThroughVulkan())
-            native::lowlatency::NoteDxvkGamePresentThread();
+        {
+            lowLatencyScope = native::lowlatency::OnDxvkGamePresentBegin(
+                Config::Instance()->DlssNrNativeLowLatencyDxvkGameThread.value_or_default());
+        }
 
         if (pPresentParameters == nullptr)
             presentResult = pSwapChain->Present(SyncInterval, Flags);
         else
             presentResult = ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
+
+        native::lowlatency::OnDxvkGamePresentEnd(lowLatencyScope);
 
         if (presentResult == S_OK)
         {
