@@ -859,6 +859,9 @@ int main()
         CHECK(OutputShown(real, false, false) == Output::Auto);
         CHECK(OutputShown(real, true, false) == Output::XeLL);
         CHECK(OutputShown(fake, false, true) == Output::LatencyFlex);
+        // LatencyFlex forced in the ini on the real nvapi (fakenvapi is not the nvapi): that entry is not offered, so Auto
+        // shows, not a greyed LatencyFlex
+        CHECK(OutputShown(real, false, true) == Output::Auto);
         CHECK(OutputShown(fake, true, true) == Output::XeLL);
 
         // Boost: only with real Reflex as the output, and only while OptiScaler makes the calls

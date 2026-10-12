@@ -79,7 +79,7 @@ A game running Optical F5Low makes no call to lower its latency, so OptiScaler m
 
 Input is who makes the calls. Auto: the game's own Reflex when it makes the calls, otherwise OptiScaler's while an Optical F5Low mode, XeFG or FSR FG runs. Game: only the game's own Reflex. OptiScaler: OptiScaler's, in any game without Reflex. Off: no low latency at all; the game's own Reflex is sent with low latency off, no Boost and no frame cap of its own, and OptiScaler's limiter keeps the cap (not with DLSS FG, which needs Reflex).
 
-Output is what lowers latency: Auto uses what the setup has; XeLL (restart) and LatencyFlex force that method through fakenvapi. XeFG always uses XeLL. Boost keeps the GPU's clocks up for NVIDIA Reflex.
+Output is what lowers latency: Auto uses what the setup has; XeLL (restart) and LatencyFlex force that method through fakenvapi. With XeFG the choices are XeLL (its own), or NVIDIA Reflex or Anti-Lag 2 beside it when the setup has them; XeLL stays in place for XeFG either way. Boost keeps the GPU's clocks up for NVIDIA Reflex.
 
 OptiScaler stands aside as soon as the game calls Reflex itself. Takes effect at once, except Force XeLL.
 

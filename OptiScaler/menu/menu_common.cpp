@@ -2500,8 +2500,9 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                     // is its own, so it is only shown next to the markers' ID
                     if (fg != nullptr && state.activeFgOutput == FGOutput::XeFG && fg->IsActive())
                     {
-                        ImGui::Text("XeFG ID: %u (%s), marker ID: %llu", state.xefgPresentId,
-                                    state.xefgPresentIdFollowsMarkers ? "follows the markers" : "own numbering",
+                        ImGui::Text("XeFG ID: %u (%s), marker ID: %llu", state.xefgPresentId.load(std::memory_order_relaxed),
+                                    state.xefgPresentIdFollowsMarkers.load(std::memory_order_relaxed) ? "follows the markers"
+                                                                                                                      : "own numbering",
                                     markerId);
                     }
                     else
@@ -5766,7 +5767,12 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         if (inputOff)
             ShowTooltip("Nothing to lower while the Input is Off.");
         else if (outputLocked)
-            ShowTooltip("XeFG uses XeLL here. Reflex needs an NVIDIA card, Anti-Lag 2 an AMD card.");
+        {
+            ShowTooltip(outputInputs.antiLag2Failed
+                            ? "XeFG uses XeLL here: Anti-Lag 2 could not start."
+                            : "XeFG uses XeLL here. Reflex needs an NVIDIA card on its own nvapi (not fakenvapi), "
+                              "Anti-Lag 2 an AMD card with fakenvapi as the nvapi.");
+        }
 
         if (xefgOutput)
         {
@@ -6010,8 +6016,8 @@ void MenuCommon::RenderFakenvapiSettings(RenderMenuContext& ctx)
     // What lowers latency (Force XeLL, Force LatencyFlex) is the Output on the low latency section; what stays here is
     // how fakenvapi does it.
     // Using state.reflexLimitsFps as a detection for Reflex being used on Nvidia
-    const bool showFakenvapi =
-        fakenvapi::isUsingAsMainNvapi() || (state.activeFgOutput == FGOutput::XeFG && state.reflexLimitsFps);
+    // With XeFG as the output the section is always up: Force Reflex is what the low latency page's notes send the player to
+    const bool showFakenvapi = fakenvapi::isUsingAsMainNvapi() || state.activeFgOutput == FGOutput::XeFG;
 
     if (!showFakenvapi)
         return;

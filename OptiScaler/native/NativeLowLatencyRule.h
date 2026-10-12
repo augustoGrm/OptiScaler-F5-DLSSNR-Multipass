@@ -379,7 +379,8 @@ inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLate
     if (forceXell)
         return Output::XeLL;
 
-    return forceLatencyFlex ? Output::LatencyFlex : Output::Auto;
+    // Forced in the ini on a setup that does not offer it (real nvapi): Auto shows, not a greyed entry
+    return forceLatencyFlex && in.fakenvapiMain ? Output::LatencyFlex : Output::Auto;
 }
 
 // Boost is NVIDIA Reflex's, and OptiScaler's calls carry it: real Reflex on an NVIDIA card as the output (no fakenvapi,
