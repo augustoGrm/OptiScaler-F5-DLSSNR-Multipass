@@ -252,6 +252,9 @@ class State
     bool rtssReflexInjection = false;
     bool fakenvapiReloadLowLatency = false;
     UINT64 reflexFrameId = 0;
+    // XeFG's last Present Id and whether it was the frame markers' ID (the FPS overlay's Reflex timings show both)
+    uint32_t xefgPresentId = 0;
+    bool xefgPresentIdFollowsMarkers = false;
     UINT64 frameCount = 0;
     // Vulkan presents (the vkQueuePresentKHR hook, installed with the overlay). frameCount counts DXGI presents only.
     std::atomic<UINT64> vulkanPresentCount { 0 };

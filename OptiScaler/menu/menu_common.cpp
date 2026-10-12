@@ -2486,12 +2486,29 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
 
                     const auto& rangeInNs = timingData[TimingType::TimeRange].value().length;
 
-                    UINT64 localFrameCount = 0;
+                    // The frame markers' ID of the frame being rendered (ours, else the game's render submit or
+                    // simulation start): State::reflexFrameId moves with every marker and with the latency report
+                    uint64_t markerId = native::lowlatency::FrameIdForFrameGeneration();
 
-                    if (fg != nullptr)
-                        localFrameCount = fg->FrameCount();
+                    if (markerId == 0)
+                        markerId = ReflexHooks::lastMarkerFrameId(RENDERSUBMIT_START);
 
-                    ImGui::Text("FGId: %llu, RfxId: %llu", localFrameCount, state.reflexFrameId);
+                    if (markerId == 0)
+                        markerId = ReflexHooks::lastMarkerFrameId(SIMULATION_START);
+
+                    // XeFG's Present Id is the ID it matches against the markers; another frame generation's counter
+                    // is its own, so it is only shown next to the markers' ID
+                    if (fg != nullptr && state.activeFgOutput == FGOutput::XeFG && fg->IsActive())
+                    {
+                        ImGui::Text("XeFG ID: %u (%s), marker ID: %llu", state.xefgPresentId,
+                                    state.xefgPresentIdFollowsMarkers ? "follows the markers" : "own numbering",
+                                    markerId);
+                    }
+                    else
+                    {
+                        ImGui::Text("FG frame: %llu, marker ID: %llu", fg != nullptr ? fg->FrameCount() : 0ull,
+                                    markerId);
+                    }
                     // fakenvapi (XeFG's XeLL, Anti-Lag 2, LatencyFlex) has only the markers' times: its driver, queue
                     // and GPU entries are made up, so they are not drawn
                     const bool estimated = ReflexHooks::timingEstimated();
