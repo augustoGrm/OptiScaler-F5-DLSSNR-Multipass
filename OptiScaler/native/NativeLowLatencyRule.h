@@ -429,6 +429,64 @@ inline Target PresentTarget(bool vulkanGame, bool bridged, const void* gameDevic
     return { Api::Vulkan, gameDevice };
 }
 
+// Where the Reflex pair (PresentBegin before the present, PresentEnd with the Sleep after it) runs for a D3D11 game on dxvk
+// with the Vulkan present bridge. dxvk presents to Vulkan from its own thread, so the Sleep at the Vulkan present paces
+// dxvk's thread and the game's thread runs ahead until dxvk's frame latency limit stops it. At the game's own D3D11
+// Present the Sleep holds the game's thread, as it does in a plain D3D11 game.
+enum class SleepSite
+{
+    VulkanPresent, // hkvkQueuePresentKHR, as for a native Vulkan game
+    GamePresent    // the wrapped D3D11 swap chain's Present, on the game's thread
+};
+
+// [DlssNr] NativeLowLatencyDxvkGameThread (`keyOn`) only counts for dxvk through the Vulkan bridge; everything else keeps
+// the site it has always had.
+inline SleepSite SleepSiteFor(bool dxvkThroughVulkan, bool keyOn)
+{
+    return dxvkThroughVulkan && keyOn ? SleepSite::GamePresent : SleepSite::VulkanPresent;
+}
+
+// The XeLL frame IDs of the game's presents that dxvk has not presented to Vulkan yet, oldest first. With the pair at the
+// game's Present the ID moves on there, ahead of dxvk's thread, so XeFG (which tags a frame when the bridge presents it)
+// takes the ID the frame's markers carried from here, one per Vulkan present, instead of the newest. 0 is "no ID".
+struct FrameIdQueue
+{
+    static constexpr int kSize = 8; // dxvk holds 3 frames by default; more means the two sides have drifted apart
+
+    uint32_t ids[kSize] = {};
+    int count = 0;
+    int head = 0;
+
+    void Push(uint32_t id)
+    {
+        if (count == kSize)
+        {
+            head = (head + 1) % kSize;
+            --count;
+        }
+
+        ids[(head + count) % kSize] = id;
+        ++count;
+    }
+
+    uint32_t Pop()
+    {
+        if (count == 0)
+            return 0;
+
+        const uint32_t id = ids[head];
+        head = (head + 1) % kSize;
+        --count;
+        return id;
+    }
+
+    void Clear()
+    {
+        count = 0;
+        head = 0;
+    }
+};
+
 // Plain words for the menu when we do not run. Run has no text here: the path in use names it.
 // Where a present was seen. With OptiScaler's frame generation on a D3D12 game, the game presents to frame
 // generation's swap chain (FGHooks::FGPresent) and frame generation then presents every shown frame, real and

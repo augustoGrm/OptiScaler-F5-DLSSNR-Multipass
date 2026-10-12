@@ -1202,6 +1202,36 @@ int main()
         CHECK(CapPerRenderedFrame(0.0f, 4) == 0.0f);
     }
 
+    // dxvk through the Vulkan bridge: the pair runs at the game's Present only with the key on; every other game keeps the
+    // Vulkan (or its own D3D) site whatever the key says
+    CHECK(SleepSiteFor(true, true) == SleepSite::GamePresent);
+    CHECK(SleepSiteFor(true, false) == SleepSite::VulkanPresent);
+    CHECK(SleepSiteFor(false, true) == SleepSite::VulkanPresent);
+    CHECK(SleepSiteFor(false, false) == SleepSite::VulkanPresent);
+
+    // The IDs of game presents dxvk has not presented yet: first in, first out; an empty queue and a full one are safe
+    {
+        FrameIdQueue q;
+        CHECK(q.Pop() == 0);
+        q.Push(5);
+        q.Push(6);
+        CHECK(q.Pop() == 5);
+        q.Push(7);
+        CHECK(q.Pop() == 6);
+        CHECK(q.Pop() == 7);
+        CHECK(q.Pop() == 0);
+
+        for (uint32_t id = 1; id <= 10; ++id) // 10 into 8: the two oldest are dropped
+            q.Push(id);
+
+        CHECK(q.count == FrameIdQueue::kSize);
+        CHECK(q.Pop() == 3);
+        q.Clear();
+        CHECK(q.Pop() == 0);
+        q.Push(9);
+        CHECK(q.Pop() == 9);
+    }
+
     printf(fails == 0 ? "nr_native_low_latency_smoke: PASS\n" : "nr_native_low_latency_smoke: %d FAIL\n", fails);
     return fails == 0 ? 0 : 1;
 }
