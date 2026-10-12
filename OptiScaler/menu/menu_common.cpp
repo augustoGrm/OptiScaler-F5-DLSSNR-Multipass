@@ -5660,14 +5660,14 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
 
     SeparatorWithHelpMarker("Low latency", "Keeps the game's render queue short, so what you do shows up sooner.\n"
                                            "Reflex on NVIDIA; Anti-Lag 2, XeLL or LatencyFlex through fakenvapi "
-                                           "elsewhere; XeLL with XeFG.");
+                                           "elsewhere; with XeFG: XeLL, or Reflex or Anti-Lag 2 beside it.");
 
     const auto status = GetStatus();
     const auto input = config->FramerateLowLatencyInput.value_or_default();
     const bool frameGenerationNeedsReflex =
         state.externalFrameGeneration || state.activeFgOutput == FGOutput::DLSSG;
     const bool forceXellActive = state.activeFgInput == FGInput::ForceXeLL;
-    const OutputInputs outputInputs { fakenvapi::isUsingAsMainNvapi(), state.activeFgOutput == FGOutput::XeFG };
+    const OutputInputs outputInputs = CurrentOutputInputs();
     const bool outputLocked = OutputLocked(outputInputs);
     const bool inputOff = input == Input::Off;
 
@@ -5704,17 +5704,36 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         const Output shownBefore = shown;
 
         const std::string autoLabel = std::string("Auto (") + status.output + ")";
+        const bool xefgOutput = outputInputs.xefgOutput;
 
+        // With XeFG the choices are the ones that pair with it (XeLL it always needs, Reflex or Anti-Lag 2 beside it);
+        // without it Auto and the forced ones
         // clang-format off
-        std::vector<MenuOption<Output>> outputOptions = {
-            { Output::Auto, autoLabel,
-                "What the setup has: NVIDIA Reflex, or Anti-Lag 2 / XeLL through fakenvapi." },
-            { Output::XeLL, "XeLL",
-                "Force XeLL. Works without frame generation on non-Intel cards.\n"
-                "Takes the frame generation slot (disables FG). Needs a restart." },
-            { Output::LatencyFlex, "LatencyFlex",
-                "Force LatencyFlex instead of Anti-Lag 2 or XeLL." },
-        };
+        std::vector<MenuOption<Output>> outputOptions;
+
+        if (xefgOutput)
+        {
+            outputOptions = {
+                { Output::XeLL, "XeLL",
+                    "XeFG's own XeLL lowers latency." },
+                { Output::Reflex, "NVIDIA Reflex",
+                    "Reflex lowers latency, as with FSR FG. XeLL stays in place for XeFG only, with its low latency off." },
+                { Output::AntiLag2, "Anti-Lag 2",
+                    "Anti-Lag 2 lowers latency. XeLL stays in place for XeFG only, with its low latency off." },
+            };
+        }
+        else
+        {
+            outputOptions = {
+                { Output::Auto, autoLabel,
+                    "What the setup has: NVIDIA Reflex, or Anti-Lag 2 / XeLL through fakenvapi." },
+                { Output::XeLL, "XeLL",
+                    "Force XeLL. Works without frame generation on non-Intel cards.\n"
+                    "Takes the frame generation slot (disables FG). Needs a restart." },
+                { Output::LatencyFlex, "LatencyFlex",
+                    "Force LatencyFlex instead of Anti-Lag 2 or XeLL." },
+            };
+        }
         // clang-format on
 
         for (auto& option : outputOptions)
@@ -5723,7 +5742,7 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
             option.set_disabled(!choice.available, choice.why);
         }
 
-        // Nothing to lower while the Input is Off; XeFG fixes the output to XeLL
+        // Nothing to lower while the Input is Off; with XeFG on a setup that has only XeLL there is nothing to choose
         ImGui::BeginDisabled(outputLocked || inputOff);
         PopulateCombo("Output##lowlatencyoutput", shown, outputOptions);
         ImGui::EndDisabled();
@@ -5731,16 +5750,35 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         if (inputOff)
             ShowTooltip("Nothing to lower while the Input is Off.");
         else if (outputLocked)
-            ShowTooltip("XeFG always uses XeLL.");
+            ShowTooltip("XeFG uses XeLL here. Reflex needs an NVIDIA card, Anti-Lag 2 an AMD card.");
 
-        ShowHelpMarker("What lowers latency. Auto uses what the setup has. XeLL and LatencyFlex force that method "
-                       "(fakenvapi's Force XeLL and Force LatencyFlex).\n"
-                       "Entries that do not fit this setup say why when hovered.");
+        if (xefgOutput)
+        {
+            ShowHelpMarker("What lowers latency while XeFG generates frames. XeFG always keeps an XeLL; Reflex or "
+                           "Anti-Lag 2 do the work instead when you pick them.\n"
+                           "Entries that do not fit this setup say why when hovered.");
+        }
+        else
+        {
+            ShowHelpMarker("What lowers latency. Auto uses what the setup has. XeLL and LatencyFlex force that method "
+                           "(fakenvapi's Force XeLL and Force LatencyFlex).\n"
+                           "Entries that do not fit this setup say why when hovered.");
+        }
 
         if (!outputLocked && !inputOff && shown != shownBefore)
         {
-            config->ForceXeLL = shown == Output::XeLL;
-            config->FN_ForceLatencyFlex = shown == Output::LatencyFlex;
+            if (xefgOutput)
+            {
+                config->FGXeFGLowLatencyOutput = shown == Output::Reflex
+                                                     ? XefgLatency::Reflex
+                                                     : (shown == Output::AntiLag2 ? XefgLatency::AntiLag2
+                                                                                  : XefgLatency::XeLL);
+            }
+            else
+            {
+                config->ForceXeLL = shown == Output::XeLL;
+                config->FN_ForceLatencyFlex = shown == Output::LatencyFlex;
+            }
         }
 
         // Boost, NVIDIA Reflex only
@@ -5797,8 +5835,9 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
     // Run for frame generation alone, the player may never have opened a page that says why
     if (status.decision == Decision::Run && status.runsFor == RunsFor::Xefg)
     {
-        ShowHelpMarker("The game has no Reflex, so OptiScaler makes the calls. XeFG always uses XeLL, and XeLL lowers "
-                       "latency only when something sleeps and marks the frames.");
+        ShowHelpMarker("The game has no Reflex, so OptiScaler makes the calls. XeFG always keeps an XeLL, which "
+                       "lowers latency only when something sleeps and marks the frames; with Reflex or Anti-Lag 2 as "
+                       "the Output they do that instead.");
     }
     else if (status.decision == Decision::Run && status.runsFor == RunsFor::FsrFg)
     {
@@ -5810,6 +5849,19 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
 
     if (status.offKeptForFrameGeneration)
         ImGui::TextDisabled("DLSS FG needs Reflex: the game's Reflex stays on.");
+
+    // XeFG with Reflex or Anti-Lag 2: say what XeLL is doing, or it looks like a second method running
+    if (status.xefgSide != XefgLatency::XeLL)
+        ImGui::TextDisabled("XeLL stays in place for XeFG only. Its low latency is off.");
+
+    // Asked for, but this setup or fakenvapi's Force Reflex keeps it with XeLL (the Input being Off says so on its own)
+    if (outputInputs.xefgOutput && !inputOff && outputInputs.xefgLatency != XefgLatency::XeLL &&
+        status.xefgSide == XefgLatency::XeLL)
+    {
+        ImGui::TextDisabled(config->FN_ForceReflex.value_or_default() != ForceReflex::InGame
+                                ? "The chosen output is not used: Force Reflex is set in the fakenvapi settings."
+                                : "The chosen output is not used: this setup does not have it.");
+    }
 
     if (status.decision == Decision::Run && status.hasLatency)
     {

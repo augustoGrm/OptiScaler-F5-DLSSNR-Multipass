@@ -475,7 +475,10 @@ inline const char* ActiveInputText(Decision decision, bool gameCallsReflex)
 // The reason when it does not run. Run has none here: the method in use names it. `gameReflexFeedsXell`: the game's own
 // Reflex calls are sent to XeFG's XeLL (native/XefgReflexRule.h), so its Reflex settings are not the thing to change;
 // `forceReflexDisabled`: fakenvapi's Force Disable, which XeLL then gets them with (low latency off).
-inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = false, bool forceReflexDisabled = false)
+// `xefgSide`: with XeFG, what lowers latency (XefgLatency): Reflex or Anti-Lag 2 take the game's Reflex calls, XeLL only
+// keeps XeFG running (native/XefgReflexRule.h)
+inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = false, bool forceReflexDisabled = false,
+                                XefgLatency xefgSide = XefgLatency::XeLL)
 {
     switch (decision)
     {
@@ -486,6 +489,12 @@ inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = fa
     case Decision::NoF5Low:
         return "No Optical F5Low mode, XeFG or FSR frame generation is running";
     case Decision::GameRunsReflex:
+        if (xefgSide == XefgLatency::Reflex)
+            return "The game's own Reflex lowers latency; XeLL only keeps XeFG running";
+
+        if (xefgSide == XefgLatency::AntiLag2)
+            return "The game's Reflex calls go to Anti-Lag 2; XeLL only keeps XeFG running";
+
         if (!gameReflexFeedsXell)
             return "Use the game's own Reflex settings";
 
@@ -702,12 +711,13 @@ struct SleepModeCall
     uint32_t minimumIntervalUs = 0;
     bool boost = false;
     uint32_t xellGeneration = 0; // fakenvapi::forcedModeGeneration while XeFG's XeLL is the method, else 0
+    uint32_t side = 0;           // XefgLatency in force with XeFG (XeLL, Reflex or Anti-Lag 2), else 0
 };
 
 inline bool SameSleepMode(const SleepModeCall& a, const SleepModeCall& b)
 {
     return a.api == b.api && a.device == b.device && a.minimumIntervalUs == b.minimumIntervalUs &&
-           a.boost == b.boost && a.xellGeneration == b.xellGeneration;
+           a.boost == b.boost && a.xellGeneration == b.xellGeneration && a.side == b.side;
 }
 
 // Our SetSleepMode goes out once, then again whenever what it carries changes: a new device, the cap, Boost, or a new

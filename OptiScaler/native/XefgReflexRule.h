@@ -95,10 +95,11 @@ inline constexpr SleepMode kDriverSleepMode {};
 using lowlatency::XefgLatency;
 
 // The side that lowers latency right now. XeLL is today's behaviour and the answer whenever the setup lacks the choice,
-// XeFG is not the output, the Framerate page's Input is Off (nothing to lower) or fakenvapi's Force Disable is set.
-inline XefgLatency EffectiveXefgLatency(const lowlatency::OutputInputs& in, bool blockLowLatency, bool forceDisabled)
+// XeFG is not the output, the Framerate page's Input is Off (nothing to lower) or fakenvapi's Force Reflex is set (Force
+// Disable wants everything off; Force Enable would make XeLL sleep next to the other side).
+inline XefgLatency EffectiveXefgLatency(const lowlatency::OutputInputs& in, bool blockLowLatency, bool forceReflexSet)
 {
-    if (!in.xefgOutput || blockLowLatency || forceDisabled || !lowlatency::XefgLatencyAvailable(in.xefgLatency, in))
+    if (!in.xefgOutput || blockLowLatency || forceReflexSet || !lowlatency::XefgLatencyAvailable(in.xefgLatency, in))
         return XefgLatency::XeLL;
 
     return in.xefgLatency;

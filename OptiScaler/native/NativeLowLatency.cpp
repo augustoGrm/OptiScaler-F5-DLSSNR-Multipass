@@ -372,11 +372,13 @@ const void* GameQueue()
 }
 
 // XeFG's XeLL routing hangs off the D3D entry points (ReflexHooks): a Vulkan game gets it through the bridge's D3D12
-// device, but not through the Vulkan ones
+// device, but not through the Vulkan ones. With Reflex or Anti-Lag 2 as XeFG's Output (XefgSide) XeLL still carries the
+// frame IDs, and a bridged Vulkan game's calls go to its VkDevice (PresentTarget): the Vulkan ones count then too.
 Method CurrentMethod(Api api)
 {
-    if (State::Instance().activeFgOutput == FGOutput::XeFG && api == Api::D3D)
-        return Method::XellWithXefg;
+    if (State::Instance().activeFgOutput == FGOutput::XeFG &&
+        (api == Api::D3D || ReflexHooks::bridgedXellDevice() != nullptr))
+        return MethodWithXefg(XefgSide());
 
     return fakenvapi::isUsingAsMainNvapi() ? Method::Fakenvapi : Method::RealReflex;
 }
@@ -393,6 +395,7 @@ CapInputs FrameCapInputs(Api api)
     in.method = CurrentMethod(api);
     in.fsrFgActive = state.activeFgOutput == FGOutput::FSRFG && fgGenerating;
     in.xefgGenerating = XefgGenerating();
+    in.shownPerRendered = XefgShownPerRendered();
     in.fakenvapiXell = in.method == Method::Fakenvapi && fakenvapi::getCurrentMode() == LowLatencyMode::XeLL;
 
     // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
@@ -425,7 +428,16 @@ std::string CapText(float capFps)
 
 const char* PathText(Api api)
 {
-    const bool viaFakenvapi = CurrentMethod(api) != Method::RealReflex;
+    const auto method = CurrentMethod(api);
+
+    // XeFG's XeLL is not the method in the split: it only keeps XeFG running
+    if (method == Method::RealReflexWithXefg)
+        return "NVIDIA Reflex";
+
+    if (method == Method::FakenvapiWithXefg)
+        return "Anti-Lag 2 (through fakenvapi)";
+
+    const bool viaFakenvapi = method != Method::RealReflex;
 
     if (!viaFakenvapi)
         return "NVIDIA Reflex";
@@ -449,7 +461,21 @@ const char* PathText(Api api)
 // our own calls reach; XeFG, Force XeLL and a game's own XeLL come first because they decide it.
 const char* OutputText(Api api)
 {
-    if (State::Instance().activeFgOutput == FGOutput::XeFG || State::Instance().activeFgInput == FGInput::ForceXeLL)
+    // With XeFG and Reflex or Anti-Lag 2 as its Output: they lower latency, XeLL stays for XeFG
+    if (State::Instance().activeFgOutput == FGOutput::XeFG)
+    {
+        switch (XefgSide())
+        {
+        case XefgLatency::Reflex:
+            return "NVIDIA Reflex (XeLL stays for XeFG)";
+        case XefgLatency::AntiLag2:
+            return "Anti-Lag 2 (XeLL stays for XeFG)";
+        default:
+            return "XeLL";
+        }
+    }
+
+    if (State::Instance().activeFgInput == FGInput::ForceXeLL)
         return "XeLL";
 
     if (XellHooks::canLimit())
@@ -493,7 +519,11 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     if (decision != Decision::Run)
     {
         const auto reason = [decision]()
-        { return DecisionText(decision, ReflexHooks::gameReflexFeedsXell(), ForceReflexDisabled()); };
+        {
+            const auto side = XefgSide();
+            return DecisionText(decision, ReflexHooks::gameReflexFeedsXell() && side == XefgLatency::XeLL,
+                                ForceReflexDisabled(), side);
+        };
 
         // Once whenever it changes (a running one logs its stop below)
         if (decision != previousDecision && !g_running.load(std::memory_order_relaxed))
@@ -533,9 +563,13 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     call.device = device;
     call.minimumIntervalUs = cap.minimumIntervalUs;
     // Only NVIDIA's Reflex has Boost; sent to XeLL it would only be a needless sleep mode change
-    call.boost = method == Method::RealReflex && Config::Instance()->DlssNrNativeLowLatencyBoost.value_or_default();
-    // XeFG makes a new XeLL context (and sets its sleep mode, with no limit) when its swap chain is made again
-    call.xellGeneration = method == Method::XellWithXefg ? fakenvapi::forcedModeGeneration() : 0;
+    call.boost = (method == Method::RealReflex || method == Method::RealReflexWithXefg) &&
+                 Config::Instance()->DlssNrNativeLowLatencyBoost.value_or_default();
+    // XeFG makes a new XeLL context (and sets its sleep mode, with no limit) when its swap chain is made again; in the
+    // split that one has to be told low latency off again
+    call.xellGeneration = CarriesXefgFrameIds(method) ? fakenvapi::forcedModeGeneration() : 0;
+    // A changed Output sends the mode again, to the new side
+    call.side = CarriesXefgFrameIds(method) ? (uint32_t) XefgSide() : 0;
 
     const auto now = Util::MillisecondsNow();
 
@@ -595,7 +629,7 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
 
     // XeFG takes this ID for the frame it tags next (FrameIdForFrameGeneration)
     ++g_frameId;
-    g_xellFrameIdForFrameGeneration = method == Method::XellWithXefg ? (uint32_t) g_frameId : 0;
+    g_xellFrameIdForFrameGeneration = CarriesXefgFrameIds(method) ? (uint32_t) g_frameId : 0;
     g_submitSent = false;
     g_running = true;
     Marker(api, device, SIMULATION_START);
@@ -787,7 +821,9 @@ OutputInputs CurrentOutputInputs()
 
 XefgLatency XefgSide()
 {
-    return xefgreflex::EffectiveXefgLatency(CurrentOutputInputs(), GameLowLatencyBlocked(), ForceReflexDisabled());
+    // fakenvapi's Force Reflex, either way: it overrides what XeLL does, so it stays the one that lowers latency
+    const bool forceReflexSet = Config::Instance()->FN_ForceReflex.value_or_default() != ForceReflex::InGame;
+    return xefgreflex::EffectiveXefgLatency(CurrentOutputInputs(), GameLowLatencyBlocked(), forceReflexSet);
 }
 
 uint32_t XefgShownPerRendered()
@@ -802,7 +838,9 @@ Status GetStatus()
 {
     Status status;
     status.decision = g_decision.load();
-    status.gameReflexFeedsXell = ReflexHooks::gameReflexFeedsXell();
+    status.xefgSide = XefgSide();
+    // In the split XeLL only keeps XeFG running: the game's Reflex lowers latency on the other side
+    status.gameReflexFeedsXell = ReflexHooks::gameReflexFeedsXell() && status.xefgSide == XefgLatency::XeLL;
     status.forceReflexDisabled = ForceReflexDisabled();
     status.output = OutputText(g_deviceApi.load());
     status.offKeptForFrameGeneration =
@@ -829,7 +867,8 @@ Status GetStatus()
         g_hasLatency = false;
 
         // fakenvapi's report has the markers' times only; its GPU end is the last marker's plus 0.1 ms
-        const bool estimated = CurrentMethod(api) != Method::RealReflex;
+        const auto latencyMethod = CurrentMethod(api);
+        const bool estimated = latencyMethod != Method::RealReflex && latencyMethod != Method::RealReflexWithXefg;
         const auto ReadLatency = [](const auto& report, bool estimated)
         {
             const uint64_t end = estimated ? report.presentEndTime : report.gpuRenderEndTime;

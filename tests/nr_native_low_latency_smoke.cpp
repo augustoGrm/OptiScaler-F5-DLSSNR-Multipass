@@ -1074,6 +1074,36 @@ int main()
             CHECK(t.api == Api::D3D && t.device == &d3dDevice);
         }
 
+        // The status reason when the game's Reflex runs: names who lowers latency in the split, as before otherwise
+        CHECK(std::strstr(DecisionText(Decision::GameRunsReflex, true, false, XefgLatency::Reflex), "own Reflex lowers") !=
+              nullptr);
+        CHECK(std::strstr(DecisionText(Decision::GameRunsReflex, true, false, XefgLatency::AntiLag2), "Anti-Lag 2") !=
+              nullptr);
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, true, false, XefgLatency::XeLL),
+                          "The game's Reflex feeds XeFG's XeLL") == 0);
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, false, false, XefgLatency::XeLL),
+                          "Use the game's own Reflex settings") == 0);
+        CHECK(std::strcmp(DecisionText(Decision::SettingOff, true, false, XefgLatency::Reflex),
+                          DecisionText(Decision::SettingOff)) == 0);
+
+        // Our SetSleepMode goes out again when XeFG's Output changes (the other side has to be told, the old one let go)
+        {
+            SleepModeCall last;
+            last.api = Api::D3D;
+            int device = 0;
+            last.device = &device;
+            last.minimumIntervalUs = 16667;
+            last.xellGeneration = 3;
+            last.side = (uint32_t) XefgLatency::XeLL;
+
+            auto now = last;
+            CHECK(!NeedsSleepModeResend(&last, false, now, false));
+            now.side = (uint32_t) XefgLatency::Reflex;
+            CHECK(NeedsSleepModeResend(&last, false, now, false));
+            now.side = (uint32_t) XefgLatency::AntiLag2;
+            CHECK(NeedsSleepModeResend(&last, false, now, false));
+        }
+
         // The game's own Reflex cap: per rendered frame
         CHECK(CapPerRenderedFrame(120.0f, 2) == 60.0f);
         CHECK(CapPerRenderedFrame(120.0f, 4) == 30.0f);

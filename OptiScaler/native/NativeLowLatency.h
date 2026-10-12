@@ -61,6 +61,9 @@ struct Status
     // The game's own Reflex calls are sent to XeFG's XeLL (ReflexHooks::gameReflexFeedsXell): DecisionText says so
     bool gameReflexFeedsXell = false;
     bool forceReflexDisabled = false; // fakenvapi's Force Disable: XeLL gets the game's calls with low latency off
+    // With XeFG: what lowers latency (XefgSide). Reflex or Anti-Lag 2: XeLL only keeps XeFG running, so the game's calls do
+    // not "feed XeLL" (gameReflexFeedsXell is false then)
+    XefgLatency xefgSide = XefgLatency::XeLL;
     // What lowers latency here whoever makes the calls (plain words, never empty): the menu's "Active: <input> -> <output>"
     const char* output = "";
     bool offKeptForFrameGeneration = false; // Input is Off, but DLSS FG needs Reflex: the game's Reflex stays on
@@ -94,7 +97,7 @@ inline const char* ReasonText(const Status& status)
     if (status.decision == Decision::Run)
         return status.path[0] != '\0' ? status.path : "Starting";
 
-    return DecisionText(status.decision, status.gameReflexFeedsXell, status.forceReflexDisabled);
+    return DecisionText(status.decision, status.gameReflexFeedsXell, status.forceReflexDisabled, status.xefgSide);
 }
 
 // We run (markers and Sleep go out). Any thread, two relaxed loads.

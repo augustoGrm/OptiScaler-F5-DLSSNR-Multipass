@@ -1262,7 +1262,15 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
     const bool xellRemade = side != Side::XeLL && xellGeneration != lastXellGeneration;
 
     if (sideChanged)
+    {
         releaseSide(lastSide);
+
+        if (side == Side::XeLL)
+            LOG_INFO("XeFG low latency: XeLL lowers latency");
+        else
+            LOG_INFO("XeFG low latency: {} lowers latency, XeLL stays for XeFG with low latency off",
+                     side == Side::Reflex ? "NVIDIA Reflex" : "Anti-Lag 2");
+    }
 
     lastSide = side;
     lastXellGeneration = xellGeneration;
