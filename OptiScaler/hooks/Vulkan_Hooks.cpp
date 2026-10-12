@@ -3,6 +3,7 @@
 #include "Vulkan_Hooks.h"
 
 #include <Util.h>
+#include <native/DriverInitGate.h>
 #include <Config.h>
 #include <SysUtils.h>
 
@@ -547,6 +548,9 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
                                  const VkAllocationCallbacks* pAllocator, VkDevice* pDevice)
 {
     LOG_FUNC();
+
+    // Not at the same moment as DLSS-NR's feature create: the driver can freeze the two against each other
+    native::DriverInitScope driverInit;
 
     VkDeviceCreateInfo localCreteInfo {};
     memcpy(&localCreteInfo, pCreateInfo, sizeof(VkDeviceCreateInfo));
