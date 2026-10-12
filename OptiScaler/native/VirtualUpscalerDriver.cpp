@@ -409,11 +409,11 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     key.hdr = frame.space == ColorSpace::ScRgb; // PQ is a perceptual encoding, as sRGB is: passed as it comes
     key.backend = (int) WantedBackend();
 
-    // No usable size yet (a swapchain still being made or resized): wait for the next frame, build nothing.
-    if (key.width == 0 || key.height == 0)
+    // No usable size yet (a swapchain still being made or resized; the FSR backend throws below a few pixels): wait for the next frame, build nothing.
+    if (key.width < 16 || key.height < 16)
     {
         if (_zeroSizeFrames++ == 0)
-            LOG_WARN("Virtual upscaler: the picture is {}x{}, waiting for a real size", key.width, key.height);
+            LOG_WARN("Virtual upscaler: the picture is {}x{}, too small, waiting for a real size", key.width, key.height);
 
         return false;
     }
