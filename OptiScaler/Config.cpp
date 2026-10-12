@@ -293,6 +293,17 @@ bool Config::Reload(std::filesystem::path iniPath)
         // Framerate
         {
             FramerateLimit.set_from_config(readFloat("Framerate", "FramerateLimit"));
+
+            // The new key if it holds a word we know, else the one from before the Input choice (an ini that has
+            // neither stays unset: Auto, and nothing is held for the config)
+            const auto input = readString("Framerate", "LowLatencyInput", true);
+            const auto legacy = readString("DlssNr", "NativeLowLatency", true);
+
+            if (input.has_value() || legacy.has_value())
+            {
+                FramerateLowLatencyInput.set_from_config(native::lowlatency::InputFromIniValues(
+                    input.has_value() ? input->c_str() : nullptr, legacy.has_value() ? legacy->c_str() : nullptr));
+            }
         }
 
         // FSR Common
@@ -500,15 +511,6 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrNativeInput.set_from_config(readBool("DlssNr", "NativeInput"));
             DlssNrNativeUpscaler.set_from_config(readBool("DlssNr", "NativeUpscaler"));
             DlssNrNativeFrameGenerationOnly.set_from_config(readBool("DlssNr", "NativeFrameGenerationOnly"));
-            if (auto lowLatency = readString("DlssNr", "NativeLowLatency", true); lowLatency.has_value())
-            {
-                if (lowLatency.value() == "auto")
-                    DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::Auto);
-                else if (lowLatency.value() == "true")
-                    DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::On);
-                else if (lowLatency.value() == "false")
-                    DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::Off);
-            }
             DlssNrNativeLowLatencyBoost.set_from_config(readBool("DlssNr", "NativeLowLatencyBoost"));
             DlssNrAutoExposureAdaptBrighterSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptBrighterSeconds"));
             DlssNrAutoExposureAdaptDarkerSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptDarkerSeconds"));
@@ -1393,6 +1395,15 @@ bool Config::SaveIni()
     {
         ini.SetValue("Framerate", "FramerateLimit",
                      GetFloatValue(Instance()->FramerateLimit.value_for_config()).c_str());
+
+        // The new key, and the old [DlssNr] one beside it for a build from before the Input choice
+        auto input = native::lowlatency::Input::Auto;
+
+        if (auto held = Instance()->FramerateLowLatencyInput.value_for_config(); held.has_value())
+            input = held.value();
+
+        ini.SetValue("Framerate", "LowLatencyInput", native::lowlatency::InputIniText(input));
+        ini.SetValue("DlssNr", "NativeLowLatency", native::lowlatency::LegacySettingText(input));
     }
 
     // Output Scaling
@@ -1561,16 +1572,6 @@ bool Config::SaveIni()
                  GetBoolValue(Instance()->DlssNrNativeUpscaler.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeFrameGenerationOnly",
                  GetBoolValue(Instance()->DlssNrNativeFrameGenerationOnly.value_for_config()).c_str());
-    {
-        const char* lowLatency = "auto";
-
-        if (auto held = Instance()->DlssNrNativeLowLatency.value_for_config(); held.has_value())
-            lowLatency = held.value() == native::lowlatency::Setting::On    ? "true"
-                         : held.value() == native::lowlatency::Setting::Off ? "false"
-                                                                            : "auto";
-
-        ini.SetValue("DlssNr", "NativeLowLatency", lowLatency);
-    }
     ini.SetValue("DlssNr", "NativeLowLatencyBoost",
                  GetBoolValue(Instance()->DlssNrNativeLowLatencyBoost.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoExposureAdaptBrighterSeconds",
