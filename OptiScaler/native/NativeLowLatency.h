@@ -46,34 +46,38 @@ void OnPresentEndVulkan(VkDevice device);
 void NoteDxvkGamePresentThread();
 void NoteDxvkVulkanPresentThread();
 
-// Where the pair runs for that game (NativeLowLatencyRule.h SleepSite). The Vulkan present decides nothing: the game's
-// Present latches the site once per frame ([DlssNr] NativeLowLatencyDxvkGameThread, and a target the Vulkan present has
-// published), and the Vulkan present follows the latch, so a frame never gets both sites or neither.
+// Where the pair runs for that game (NativeLowLatencyRule.h SleepSite). The game's Present decides, once per frame, and
+// writes the decision into the frame's FrameLedger entry; dxvk's Vulkan present for that frame follows its own entry. So a
+// frame is paired exactly once at one site, also across a change of the setting or of XeFG's Output.
 //
-// hkvkQueuePresentKHR, every present of a dxvk game with the bridge up: publishes the target its own low latency would use
-// and returns true when the game's Present runs the pair (the Vulkan present then skips it). Notes the thread. Also hands
-// XeFG the ID of the oldest game present not yet presented to Vulkan (FrameIdForFrameGeneration).
-bool DxvkVulkanPresent(Api api, const void* device);
-
-// dxvk without the bridge up (or no target): nothing for the game's Present to run
-void DxvkVulkanPresentGone();
+// hkvkQueuePresentKHR, every present of the bridged swapchain under dxvk, before anything else is done with the frame:
+// publishes the devices the game's Present may use (the bridge's D3D12 device and the VkDevice, as one unit), takes the
+// frame's entry, and hands XeFG the frame's ID (FrameIdForFrameGeneration). Returns true when the Vulkan present runs the
+// pair for this frame (the entry says so, or none was queued).
+bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12);
 
 // What the game's Present began, to end it the same way
 struct DxvkGameScope
 {
-    bool began = false;
+    bool began = false;    // the pair's Begin ran here
+    bool pushed = false;   // a ledger entry was pushed
+    uint64_t seq = 0;      // the entry's
     Api api = Api::D3D;
     IUnknown* device = nullptr; // a D3D device, or the VkDevice as a token (Api::Vulkan)
 };
 
-// The wrapped D3D11 swap chain's Present under dxvk through the Vulkan bridge (the caller checked that): before the real
-// Present, and after it returns. `keyOn`: the ini key. The pair is ended on the game's thread.
-DxvkGameScope OnDxvkGamePresentBegin(bool keyOn);
-void OnDxvkGamePresentEnd(const DxvkGameScope& scope);
+// The wrapped D3D11 swap chain's Present under dxvk through the Vulkan bridge, for the swap chain on the bridge's window
+// (the caller checked both): before the real Present, and after it returns with its result. `keyOn`: the ini key.
+// `window`: the bridge's window, a different one than last time starts the ledger over. The API is chosen here, from the
+// Output now (PresentTarget), never from the last frame's.
+DxvkGameScope OnDxvkGamePresentBegin(bool keyOn, HWND window);
+void OnDxvkGamePresentEnd(const DxvkGameScope& scope, HRESULT presentResult);
 
-// Held around each Begin/End call of either site while the bridge is up under dxvk: the two sites share the pair's state
-// (the frame ID, the sleep mode), which only one thread touches in steady state. Switching the site mid-run is the one time
-// a Vulkan present's call and the game's can overlap; the lock makes that one frame safe. `take` false: no lock.
+// Held around each Begin/End call of either site while the bridge is up under dxvk. A frame is paired at one site, but
+// the pair's state (the frame ID, the sleep mode) is written for one thread, and two frames can overlap right after the
+// site changed: dxvk's thread still in the Vulkan site's pair of an older frame while the game's thread starts the next
+// one. The lock serialises those; in steady state only one side calls, so it costs nothing, and at a change the other
+// side may wait out one Sleep once. `take` false: no lock.
 class DxvkSiteLock
 {
   public:

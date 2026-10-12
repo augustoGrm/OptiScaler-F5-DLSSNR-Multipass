@@ -446,44 +446,101 @@ inline SleepSite SleepSiteFor(bool dxvkThroughVulkan, bool keyOn)
     return dxvkThroughVulkan && keyOn ? SleepSite::GamePresent : SleepSite::VulkanPresent;
 }
 
-// The XeLL frame IDs of the game's presents that dxvk has not presented to Vulkan yet, oldest first. With the pair at the
-// game's Present the ID moves on there, ahead of dxvk's thread, so XeFG (which tags a frame when the bridge presents it)
-// takes the ID the frame's markers carried from here, one per Vulkan present, instead of the newest. 0 is "no ID".
-struct FrameIdQueue
+// One entry per presented frame of a dxvk game with the Vulkan bridge: the game's D3D11 Present pushes the frame's entry
+// (the XeLL frame ID its markers carry, and where the Reflex pair runs for it), and dxvk's vkQueuePresentKHR for that frame
+// pops it, first in first out. dxvk presents a few frames behind the game and on another thread, so each side has to
+// follow the frame's own entry, not whatever the game is doing now:
+//   - the Vulkan present runs the pair only for an entry that says VulkanPresent, so a frame is paired exactly once
+//     whatever happens to the site setting while it is in flight;
+//   - the Vulkan present hands XeFG the ID of the frame it presents (a game-site entry's), not the newest.
+// It is never cleared when the site changes (the frames in flight are still owed their pop); only when the bridge goes
+// away or comes back, and a defined resync when the two sides drift apart: a push past kSize drops the oldest entry, a
+// pop with nothing queued returns false (the caller then runs the pair at the Vulkan present, as before this existed).
+struct FrameLedger
 {
-    static constexpr int kSize = 8; // dxvk holds 3 frames by default; more means the two sides have drifted apart
+    struct Entry
+    {
+        uint32_t frameId = 0; // 0: nobody feeds XeLL for this frame
+        SleepSite site = SleepSite::VulkanPresent;
+        uint64_t seq = 0;
+    };
 
-    uint32_t ids[kSize] = {};
+    static constexpr int kSize = 6; // dxvk holds 3 frames by default, plus the one being pushed, plus a spare
+
+    Entry entries[kSize] = {};
     int count = 0;
     int head = 0;
+    uint64_t nextSeq = 1;
+    bool resync = false;   // a push dropped an entry, or a pop found none after pops had worked (TakeResync)
+    bool everPopped = false;
 
-    void Push(uint32_t id)
+    // The new entry's sequence number, for Undo
+    uint64_t Push(uint32_t frameId, SleepSite site)
     {
         if (count == kSize)
         {
             head = (head + 1) % kSize;
             --count;
+            resync = true;
         }
 
-        ids[(head + count) % kSize] = id;
+        Entry& entry = entries[(head + count) % kSize];
+        entry.frameId = frameId;
+        entry.site = site;
+        entry.seq = nextSeq++;
         ++count;
+        return entry.seq;
     }
 
-    uint32_t Pop()
+    bool Pop(Entry* out)
     {
         if (count == 0)
-            return 0;
+        {
+            // Empty before the first pop is just the start (the game's presents may not have been counted yet)
+            if (everPopped)
+                resync = true;
 
-        const uint32_t id = ids[head];
+            return false;
+        }
+
+        *out = entries[head];
         head = (head + 1) % kSize;
         --count;
-        return id;
+        everPopped = true;
+        return true;
+    }
+
+    // The game's Present did not go through (occluded, failed): dxvk will not present that frame. False when dxvk already
+    // popped it.
+    bool Undo(uint64_t seq)
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            if (entries[(head + i) % kSize].seq != seq)
+                continue;
+
+            for (int j = i; j + 1 < count; ++j)
+                entries[(head + j) % kSize] = entries[(head + j + 1) % kSize];
+
+            --count;
+            return true;
+        }
+
+        return false;
     }
 
     void Clear()
     {
         count = 0;
         head = 0;
+        everPopped = false;
+    }
+
+    bool TakeResync()
+    {
+        const bool was = resync;
+        resync = false;
+        return was;
     }
 };
 

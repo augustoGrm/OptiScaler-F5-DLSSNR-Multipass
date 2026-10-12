@@ -671,9 +671,8 @@ void LogDxvkThreads()
     if (game == vulkan)
         LOG_INFO("Low latency (dxvk): the game and dxvk present to Vulkan on the same thread ({})", game);
     else
-        LOG_INFO("Low latency (dxvk): the game presents on thread {}, dxvk presents to Vulkan on thread {} (the Sleep "
-                 "at the Vulkan present runs on {})",
-                 game, vulkan, vulkan);
+        LOG_INFO("Low latency (dxvk): the game presents on thread {}, dxvk presents to Vulkan on thread {}", game,
+                 vulkan);
 }
 } // namespace
 
@@ -695,28 +694,34 @@ void NoteDxvkVulkanPresentThread()
 
 namespace
 {
-// What the Vulkan present published: the target its own low latency would use (the bridge's D3D12 device, or the game's
-// VkDevice as a token), for the game's Present to run the pair on
-std::atomic<Api> g_dxvkTargetApi = Api::D3D;
-std::atomic<IUnknown*> g_dxvkTargetDevice = nullptr;
+// The devices the Vulkan present published, as ONE unit: the bridge's D3D12 device and the game's VkDevice (as a token).
+// Which one the game's Present uses is chosen at the game's Present from the Output of that moment, so a change of
+// XeFG's Output never uses the last frame's choice, and no call goes to the wrong API's device.
+struct DxvkDevices
+{
+    IUnknown* device12 = nullptr;
+    IUnknown* vk = nullptr;
+};
 
-// -1 not decided yet, 0 the Vulkan present runs the pair, 1 the game's Present does. Set by the game's Present, once per
-// frame; the Vulkan present only reads it.
-std::atomic<int> g_dxvkSite = -1;
+std::mutex g_dxvkDevicesMutex;
+DxvkDevices g_dxvkDevices;
 
-// One ID per game present not yet presented to Vulkan (NativeLowLatencyRule.h FrameIdQueue), and the ID of the frame the
-// Vulkan present in flight is presenting
-std::mutex g_dxvkIdMutex;
-FrameIdQueue g_dxvkIds;
+std::mutex g_dxvkLedgerMutex;
+FrameLedger g_dxvkLedger;
+HWND g_dxvkLedgerWindow = nullptr;
+
+// The XeLL frame ID of the frame the Vulkan present in flight is presenting, when the game's Present paired it (else 0)
 std::atomic<uint32_t> g_dxvkBridgeFrameId = 0;
+
+// -1 not decided yet, 0 the Vulkan present runs the pair, 1 the game's Present does: only to log a change
+std::atomic<int> g_dxvkSite = -1;
 
 std::mutex g_dxvkSiteMutex;
 
-void ForgetDxvkFrameIds()
+DxvkDevices DxvkDevicesNow()
 {
-    std::lock_guard lock(g_dxvkIdMutex);
-    g_dxvkIds.Clear();
-    g_dxvkBridgeFrameId = 0;
+    std::lock_guard lock(g_dxvkDevicesMutex);
+    return g_dxvkDevices;
 }
 } // namespace
 
@@ -732,71 +737,109 @@ DxvkSiteLock::~DxvkSiteLock()
         g_dxvkSiteMutex.unlock();
 }
 
-bool DxvkVulkanPresent(Api api, const void* device)
+bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12)
 {
     NoteDxvkVulkanPresentThread();
 
-    g_dxvkTargetApi = api;
-    g_dxvkTargetDevice = reinterpret_cast<IUnknown*>(const_cast<void*>(device));
+    {
+        std::lock_guard lock(g_dxvkDevicesMutex);
+        g_dxvkDevices = { device12, reinterpret_cast<IUnknown*>(vkDevice) };
+    }
 
-    if (g_dxvkSite.load(std::memory_order_relaxed) != 1)
-        return false;
+    FrameLedger::Entry entry;
+    bool popped = false;
+    bool resync = false;
 
-    // The game's Present moved on to the next frame's ID long before dxvk got here: the frame presented now carries the
-    // ID its markers had, which the game's Present queued
-    std::lock_guard lock(g_dxvkIdMutex);
-    g_dxvkBridgeFrameId = g_dxvkIds.Pop();
-    return true;
+    {
+        std::lock_guard lock(g_dxvkLedgerMutex);
+        popped = g_dxvkLedger.Pop(&entry);
+        resync = g_dxvkLedger.TakeResync();
+    }
+
+    static std::atomic<bool> resyncLogged = false;
+
+    if (resync && !resyncLogged.exchange(true))
+    {
+        LOG_WARN("Low latency (dxvk): the game's presents and dxvk's Vulkan presents got out of step (a present without its "
+                 "pair); the frame list was trimmed and goes on from here");
+    }
+
+    // Nothing queued: the Vulkan present runs the pair, as it did before the game's Present could
+    g_dxvkBridgeFrameId = popped && entry.site == SleepSite::GamePresent ? entry.frameId : 0;
+    return !popped || entry.site == SleepSite::VulkanPresent;
 }
 
-void DxvkVulkanPresentGone()
-{
-    g_dxvkTargetDevice = nullptr;
-}
-
-DxvkGameScope OnDxvkGamePresentBegin(bool keyOn)
+DxvkGameScope OnDxvkGamePresentBegin(bool keyOn, HWND window)
 {
     NoteDxvkGamePresentThread();
 
     DxvkGameScope scope;
-    const auto api = g_dxvkTargetApi.load();
-    const auto device = g_dxvkTargetDevice.load();
-    const bool gamePresent = SleepSiteFor(true, keyOn) == SleepSite::GamePresent && device != nullptr;
 
-    // A new site starts clean: IDs queued for the old one mean nothing to it
+    {
+        // The bridge went away or came back (another window): what is queued belongs to the old one
+        std::lock_guard lock(g_dxvkLedgerMutex);
+
+        if (g_dxvkLedgerWindow != window)
+        {
+            g_dxvkLedger.Clear();
+            g_dxvkLedgerWindow = window;
+            g_dxvkBridgeFrameId = 0;
+        }
+    }
+
+    // The API from the Output now, the same rule as the Vulkan present's (PresentTarget)
+    const auto devices = DxvkDevicesNow();
+    const bool splitOnVulkan = XefgSide() != XefgLatency::XeLL;
+    const auto target = PresentTarget(true, true, devices.vk, devices.device12, splitOnVulkan);
+    const bool gamePresent = SleepSiteFor(true, keyOn) == SleepSite::GamePresent && target.device != nullptr;
+
     if (g_dxvkSite.exchange(gamePresent ? 1 : 0) != (gamePresent ? 1 : 0))
     {
-        ForgetDxvkFrameIds();
         LOG_INFO("Low latency (dxvk): the Reflex calls run at {}",
                  gamePresent ? "the game's Present, on the game's thread" : "dxvk's Vulkan present, on dxvk's thread");
+    }
+
+    {
+        // The ID this frame's markers carry (0 when nobody feeds XeLL): XeFG takes it when the bridge presents the frame
+        std::lock_guard lock(g_dxvkLedgerMutex);
+        scope.seq = g_dxvkLedger.Push(gamePresent ? g_xellFrameIdForFrameGeneration.load() : 0,
+                                      gamePresent ? SleepSite::GamePresent : SleepSite::VulkanPresent);
+        scope.pushed = true;
     }
 
     if (!gamePresent)
         return scope;
 
-    {
-        // The ID the frame in flight's markers carry (0 when nobody feeds XeLL): XeFG takes it when the bridge presents
-        // this frame (FrameIdForFrameGeneration)
-        std::lock_guard lock(g_dxvkIdMutex);
-        g_dxvkIds.Push(g_xellFrameIdForFrameGeneration.load());
-    }
-
     scope.began = true;
-    scope.api = api;
-    scope.device = device;
+    scope.api = target.api;
+    scope.device = const_cast<IUnknown*>(static_cast<const IUnknown*>(target.device));
 
     DxvkSiteLock lock(true);
-    PresentBegin(api, device, PresentSource::SwapChain);
+    PresentBegin(scope.api, scope.device, PresentSource::SwapChain);
     return scope;
 }
 
-void OnDxvkGamePresentEnd(const DxvkGameScope& scope)
+void OnDxvkGamePresentEnd(const DxvkGameScope& scope, HRESULT presentResult)
 {
-    if (!scope.began)
-        return;
+    if (scope.began)
+    {
+        // dxvk can remake its Vulkan swapchain inside this very Present, and the bridge then lets go of its D3D12 device
+        // (OnDeviceReleased): ending the pair on it would store a device that is gone
+        const auto devices = DxvkDevicesNow();
 
-    DxvkSiteLock lock(true);
-    PresentEnd(scope.api, scope.device, PresentSource::SwapChain);
+        if (scope.device == devices.device12 || scope.device == devices.vk)
+        {
+            DxvkSiteLock lock(true);
+            PresentEnd(scope.api, scope.device, PresentSource::SwapChain);
+        }
+    }
+
+    // Occluded or failed: dxvk presents nothing for this frame
+    if (scope.pushed && presentResult != S_OK)
+    {
+        std::lock_guard lock(g_dxvkLedgerMutex);
+        g_dxvkLedger.Undo(scope.seq);
+    }
 }
 
 void OnFirstSubmit(const void* queue)
@@ -840,8 +883,12 @@ void OnDeviceReleased(IUnknown* device)
     g_sleepModeDevice.compare_exchange_strong(expected, nullptr);
 
     // dxvk: the game's Present must not run the pair on it either
-    expected = device;
-    g_dxvkTargetDevice.compare_exchange_strong(expected, nullptr);
+    {
+        std::lock_guard lock(g_dxvkDevicesMutex);
+
+        if (g_dxvkDevices.device12 == device)
+            g_dxvkDevices.device12 = nullptr;
+    }
 
     ReflexHooks::forgetSleepDevice(device);
 }
@@ -858,8 +905,12 @@ void OnDeviceReleasedVulkan(VkDevice device)
     expected = token;
     g_sleepModeDevice.compare_exchange_strong(expected, nullptr);
 
-    expected = token;
-    g_dxvkTargetDevice.compare_exchange_strong(expected, nullptr);
+    {
+        std::lock_guard lock(g_dxvkDevicesMutex);
+
+        if (g_dxvkDevices.vk == token)
+            g_dxvkDevices.vk = nullptr;
+    }
 
     ReflexHooks::forgetSleepDeviceVulkan(device);
 
@@ -888,11 +939,14 @@ bool Running()
 uint32_t FrameIdForFrameGeneration()
 {
     // dxvk with the pair at the game's Present: the bridge present on dxvk's thread presents a frame the game's thread has
-    // long moved past, and takes the ID that frame's markers carried. The game's own thread (XeFG tags the frame's
-    // resources while it renders) and everyone else are in the newest frame, as before.
-    if (g_dxvkSite.load(std::memory_order_relaxed) == 1 && GetCurrentThreadId() == g_dxvkVulkanThread.load())
+    // long moved past, and takes the ID that frame's markers carried (its ledger entry, taken before the frame is touched).
+    // The game's own thread (XeFG tags the frame's resources while it renders) and everyone else are in the newest frame,
+    // as before; so is everyone when dxvk presents on the game's own thread.
+    if (const auto bridge = g_dxvkBridgeFrameId.load(); bridge != 0)
     {
-        if (const auto bridge = g_dxvkBridgeFrameId.load(); bridge != 0 && Running())
+        const auto thread = GetCurrentThreadId();
+
+        if (thread == g_dxvkVulkanThread.load() && thread != g_dxvkGameThread.load() && Running())
             return bridge;
     }
 
