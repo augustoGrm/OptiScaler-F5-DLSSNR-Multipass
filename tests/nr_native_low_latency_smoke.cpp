@@ -716,6 +716,152 @@ int main()
         CHECK(Decide(x) == Decision::GameRunsReflex);
     }
 
+    // Framerate page: the Input choice (Auto / Game / OptiScaler / Off) and what each means
+    {
+        // Mapping to the setting our own low latency uses, and whether the game's Reflex is sent low latency off
+        CHECK(RuleForInput(Input::Auto).setting == Setting::Auto && !RuleForInput(Input::Auto).blockGameLowLatency);
+        CHECK(RuleForInput(Input::Game).setting == Setting::Off && !RuleForInput(Input::Game).blockGameLowLatency);
+        CHECK(RuleForInput(Input::OptiScaler).setting == Setting::On &&
+              !RuleForInput(Input::OptiScaler).blockGameLowLatency);
+        CHECK(RuleForInput(Input::Off).setting == Setting::Off && RuleForInput(Input::Off).blockGameLowLatency);
+
+        // Off sends the game's Reflex low latency off, unless DLSS frame generation needs Reflex
+        CHECK(BlocksGameLowLatency(Input::Off, false));
+        CHECK(!BlocksGameLowLatency(Input::Off, true));
+        CHECK(!BlocksGameLowLatency(Input::Game, false));
+        CHECK(!BlocksGameLowLatency(Input::Auto, false));
+        CHECK(!BlocksGameLowLatency(Input::OptiScaler, false));
+
+        // Ini words: the new key, and the old [DlssNr] NativeLowLatency one
+        for (auto input : { Input::Auto, Input::Game, Input::OptiScaler, Input::Off })
+        {
+            Input back = Input::Auto;
+            CHECK(InputFromIniText(InputIniText(input), &back) && back == input);
+        }
+
+        Input parsed = Input::Auto;
+        CHECK(!InputFromIniText("", &parsed));
+        CHECK(!InputFromIniText(nullptr, &parsed));
+        CHECK(!InputFromIniText("true", &parsed));
+        CHECK(!InputFromIniText("banana", &parsed));
+
+        CHECK(InputFromLegacyText("auto", &parsed) && parsed == Input::Auto);
+        CHECK(InputFromLegacyText("true", &parsed) && parsed == Input::OptiScaler);
+        CHECK(InputFromLegacyText("false", &parsed) && parsed == Input::Game);
+        CHECK(!InputFromLegacyText("game", &parsed));
+        CHECK(!InputFromLegacyText(nullptr, &parsed));
+
+        // The old key an older DLL reads: Off and Game both write false (neither makes calls of ours)
+        CHECK(std::strcmp(LegacySettingText(Input::Auto), "auto") == 0);
+        CHECK(std::strcmp(LegacySettingText(Input::OptiScaler), "true") == 0);
+        CHECK(std::strcmp(LegacySettingText(Input::Game), "false") == 0);
+        CHECK(std::strcmp(LegacySettingText(Input::Off), "false") == 0);
+
+        // New key wins; a bad new key falls back to the old one; neither: Auto
+        CHECK(InputFromIniValues("off", "true") == Input::Off);
+        CHECK(InputFromIniValues("game", nullptr) == Input::Game);
+        CHECK(InputFromIniValues(nullptr, "true") == Input::OptiScaler);
+        CHECK(InputFromIniValues(nullptr, "false") == Input::Game);
+        CHECK(InputFromIniValues("banana", "false") == Input::Game);
+        CHECK(InputFromIniValues(nullptr, nullptr) == Input::Auto);
+        CHECK(InputFromIniValues("", "") == Input::Auto);
+
+        // Decide: Game stands us down with its own answer, Off with its own, both before anything else
+        Inputs g;
+        g.f5lowRunning = true;
+        g.setting = RuleForInput(Input::Game).setting;
+        g.blockGameLowLatency = RuleForInput(Input::Game).blockGameLowLatency;
+        CHECK(Decide(g) == Decision::SettingOff);
+
+        Inputs o;
+        o.f5lowRunning = true;
+        o.gameCallsReflex = true;
+        o.setting = RuleForInput(Input::Off).setting;
+        o.blockGameLowLatency = RuleForInput(Input::Off).blockGameLowLatency;
+        CHECK(Decide(o) == Decision::LowLatencyOff);
+
+        // Off kept back by DLSS frame generation: no block, the plain switched-off answer
+        o.blockGameLowLatency = BlocksGameLowLatency(Input::Off, true);
+        CHECK(Decide(o) == Decision::SettingOff);
+
+        CHECK(std::strcmp(StatusLabel(Decision::LowLatencyOff), "Off") == 0);
+        CHECK(DecisionText(Decision::LowLatencyOff)[0] != '\0');
+        CHECK(std::strcmp(DecisionText(Decision::LowLatencyOff), DecisionText(Decision::SettingOff)) != 0);
+
+        // OptiScaler runs in any game without Reflex; Auto needs something to run for
+        Inputs w;
+        w.setting = RuleForInput(Input::OptiScaler).setting;
+        CHECK(Decide(w) == Decision::Run);
+        w.setting = RuleForInput(Input::Auto).setting;
+        CHECK(Decide(w) == Decision::NoF5Low);
+    }
+
+    // Framerate page: the Output choice
+    {
+        OutputInputs real; // NVIDIA, real nvapi, no XeFG
+        CHECK(OutputAvailability(Output::Auto, real).available);
+        CHECK(OutputAvailability(Output::XeLL, real).available);
+        CHECK(!OutputAvailability(Output::LatencyFlex, real).available);
+        CHECK(OutputAvailability(Output::LatencyFlex, real).why[0] != '\0');
+
+        OutputInputs fake;
+        fake.fakenvapiMain = true;
+        CHECK(OutputAvailability(Output::LatencyFlex, fake).available);
+
+        // XeFG always uses XeLL: Auto and LatencyFlex are out, XeLL is the locked answer
+        OutputInputs xefg;
+        xefg.fakenvapiMain = true;
+        xefg.xefgOutput = true;
+        CHECK(!OutputAvailability(Output::LatencyFlex, xefg).available);
+        CHECK(!OutputAvailability(Output::Auto, xefg).available);
+        CHECK(OutputAvailability(Output::XeLL, xefg).available);
+        CHECK(OutputLocked(xefg));
+        CHECK(!OutputLocked(real));
+        CHECK(OutputShown(xefg, false, false) == Output::XeLL);
+
+        // What the combo shows from the two fakenvapi flags
+        CHECK(OutputShown(real, false, false) == Output::Auto);
+        CHECK(OutputShown(real, true, false) == Output::XeLL);
+        CHECK(OutputShown(fake, false, true) == Output::LatencyFlex);
+        CHECK(OutputShown(fake, true, true) == Output::XeLL);
+
+        // Boost: only with real Reflex as the output, and only while OptiScaler makes the calls
+        CHECK(BoostAvailable(Input::Auto, real, false));
+        CHECK(BoostAvailable(Input::OptiScaler, real, false));
+        CHECK(!BoostAvailable(Input::Game, real, false));
+        CHECK(!BoostAvailable(Input::Off, real, false));
+        CHECK(!BoostAvailable(Input::Auto, fake, false));
+        CHECK(!BoostAvailable(Input::Auto, xefg, false));
+        CHECK(!BoostAvailable(Input::Auto, real, true)); // Force XeLL
+    }
+
+    // Off: the game's sleep mode goes out with low latency off, no boost, no interval (OptiScaler's limiter keeps the cap)
+    {
+        using namespace native::xefgreflex;
+
+        SleepMode game;
+        game.lowLatency = true;
+        game.boost = true;
+        game.minimumIntervalUs = 8333;
+        game.useMarkersToOptimize = true;
+
+        for (const bool xefgOutput : { false, true })
+        {
+            const auto off = SleepModeForOutput(game, 16666, xefgOutput, false, true);
+            CHECK(!off.lowLatency && !off.boost && off.minimumIntervalUs == 0);
+            CHECK(off.useMarkersToOptimize); // not ours to change
+        }
+
+        // Not blocked: as before (cap in, XeFG keeps low latency on)
+        const auto plain = SleepModeForOutput(game, 16666, false, false, false);
+        CHECK(plain.lowLatency && plain.boost && plain.minimumIntervalUs == 16666);
+        const auto xefgOn = SleepModeForOutput(game, 0, true, false, false);
+        CHECK(xefgOn.lowLatency && xefgOn.minimumIntervalUs == 8333);
+
+        // Off and Force Disable together: still off
+        CHECK(!SleepModeForOutput(game, 0, true, true, true).lowLatency);
+    }
+
     printf(fails == 0 ? "nr_native_low_latency_smoke: PASS\n" : "nr_native_low_latency_smoke: %d FAIL\n", fails);
     return fails == 0 ? 0 : 1;
 }

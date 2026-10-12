@@ -56,9 +56,20 @@ struct SleepMode
 // says: XeFG always uses XeLL, fakenvapi's XeLL skips every sleep and marker while the mode it was given is off, and
 // its frame cap waits in those sleeps (Reflex off in RDR2's menu left both doing nothing). Only the user turns it off,
 // with fakenvapi's Force Disable. Not written for XeLL alone: whichever low latency XeFG is paired with gets the same.
-inline SleepMode SleepModeForOutput(const SleepMode& game, uint32_t capIntervalUs, bool xefgOutput, bool forceDisabled)
+// `blockLowLatency` (the Framerate page's Input: Off, any output): low latency off, no Boost, no interval whatever the
+// game or the cap says; OptiScaler's limiter keeps the cap (XellHoldsCap and ReflexHooks::update do not hand it over).
+inline SleepMode SleepModeForOutput(const SleepMode& game, uint32_t capIntervalUs, bool xefgOutput, bool forceDisabled,
+                                    bool blockLowLatency = false)
 {
     SleepMode out = game;
+
+    if (blockLowLatency)
+    {
+        out.lowLatency = false;
+        out.boost = false;
+        out.minimumIntervalUs = 0;
+        return out;
+    }
 
     if (capIntervalUs != 0)
         out.minimumIntervalUs = capIntervalUs;

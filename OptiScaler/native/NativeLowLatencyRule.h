@@ -17,9 +17,135 @@ enum class Setting : uint32_t
     Off
 };
 
+// [Framerate] LowLatencyInput, the Framerate page's "Input": who makes the latency calls. Auto: the game's own Reflex
+// when it makes the calls, else OptiScaler's where Setting::Auto runs us. Game: only the game's own Reflex, OptiScaler
+// makes none. OptiScaler: Setting::On. Off: no low latency at all: none of ours, and the game's own Reflex is sent with
+// low latency off (BlocksGameLowLatency).
+enum class Input : uint32_t
+{
+    Auto,
+    Game,
+    OptiScaler,
+    Off
+};
+
+struct InputRule
+{
+    Setting setting = Setting::Auto;   // what Decide runs from
+    bool blockGameLowLatency = false;  // the game's Reflex gets low latency off (before the DLSS FG exception)
+};
+
+inline InputRule RuleForInput(Input input)
+{
+    switch (input)
+    {
+    case Input::Game:
+        return { Setting::Off, false };
+    case Input::OptiScaler:
+        return { Setting::On, false };
+    case Input::Off:
+        return { Setting::Off, true };
+    default:
+        return { Setting::Auto, false };
+    }
+}
+
+// DLSS frame generation cannot run without Reflex low latency on: Off leaves the game's Reflex alone then
+inline bool BlocksGameLowLatency(Input input, bool frameGenerationNeedsReflex)
+{
+    return RuleForInput(input).blockGameLowLatency && !frameGenerationNeedsReflex;
+}
+
+// Equal text; null is nothing
+inline bool SameWord(const char* text, const char* word)
+{
+    if (text == nullptr)
+        return false;
+
+    while (*text != '\0' && *text == *word)
+        ++text, ++word;
+
+    return *text == '\0' && *word == '\0';
+}
+
+inline const char* InputIniText(Input input)
+{
+    switch (input)
+    {
+    case Input::Game:
+        return "game";
+    case Input::OptiScaler:
+        return "optiscaler";
+    case Input::Off:
+        return "off";
+    default:
+        return "auto";
+    }
+}
+
+// `text` is lower case (Config::readString lowers it). False for anything else, `out` is then left alone.
+inline bool InputFromIniText(const char* text, Input* out)
+{
+    constexpr Input all[] = { Input::Auto, Input::Game, Input::OptiScaler, Input::Off };
+
+    for (const Input input : all)
+    {
+        if (SameWord(text, InputIniText(input)))
+        {
+            *out = input;
+            return true;
+        }
+    }
+
+    return false;
+}
+
+// The key from before the Framerate page's Input ([DlssNr] NativeLowLatency): auto, true (OptiScaler) or false (Game)
+inline bool InputFromLegacyText(const char* text, Input* out)
+{
+    if (SameWord(text, "auto"))
+        *out = Input::Auto;
+    else if (SameWord(text, "true"))
+        *out = Input::OptiScaler;
+    else if (SameWord(text, "false"))
+        *out = Input::Game;
+    else
+        return false;
+
+    return true;
+}
+
+// What the old key is written as, so an older build reading a newer ini still does what the player chose: it has no
+// Off, so Off and Game both read as false (it makes no calls of its own either way)
+inline const char* LegacySettingText(Input input)
+{
+    switch (input)
+    {
+    case Input::OptiScaler:
+        return "true";
+    case Input::Game:
+    case Input::Off:
+        return "false";
+    default:
+        return "auto";
+    }
+}
+
+// The new key if it holds a word we know, else the old one, else Auto. Both may be null (not in the ini).
+inline Input InputFromIniValues(const char* inputText, const char* legacyText)
+{
+    Input input = Input::Auto;
+
+    if (InputFromIniText(inputText, &input) || InputFromLegacyText(legacyText, &input))
+        return input;
+
+    return Input::Auto;
+}
+
 struct Inputs
 {
     Setting setting = Setting::Auto;
+    bool blockGameLowLatency = false;       // Input Off, and DLSS frame generation does not need the game's Reflex
     bool f5lowRunning = false;              // an Optical F5Low mode is on and not standing aside for a game upscaler
     bool xefgRunning = false;               // XeFG is the frame generation output and has its swap chain context
     bool fsrFgRunning = false;              // FSR FG is generating, on a D3D12 game or a D3D11 game through the D3D12 bridge
@@ -36,6 +162,7 @@ enum class Decision
 {
     Run,
     SettingOff,
+    LowLatencyOff,
     NoF5Low,
     GameRunsReflex,
     GameRunsXell,
@@ -50,7 +177,7 @@ enum class Decision
 inline Decision Decide(const Inputs& in)
 {
     if (in.setting == Setting::Off)
-        return Decision::SettingOff;
+        return in.blockGameLowLatency ? Decision::LowLatencyOff : Decision::SettingOff;
 
     // XeFG cannot work without XeLL (Intel), and XeLL lowers nothing unless someone sleeps and marks frames: with no
     // game Reflex to do it, we do. FSR FG holds a real frame back to generate the one before it: we take that back
@@ -101,6 +228,66 @@ inline RunsFor RunReason(const Inputs& in)
 
     // On with nothing running keeps the Optical F5Low name, as before
     return in.fsrFgRunning ? RunsFor::FsrFg : RunsFor::F5Low;
+}
+
+// The Framerate page's "Output": what lowers latency. Auto leaves it to the setup (NVIDIA Reflex on real nvapi, Anti-Lag 2
+// or XeLL through fakenvapi, XeLL with XeFG); XeLL is fakenvapi's Force XeLL (a restart, it takes the frame generation
+// slot); LatencyFlex is fakenvapi's Force LatencyFlex. Nothing here is a new method.
+enum class Output
+{
+    Auto,
+    XeLL,
+    LatencyFlex
+};
+
+struct OutputInputs
+{
+    bool fakenvapiMain = false; // fakenvapi is the game's nvapi (not the driver's)
+    bool xefgOutput = false;    // XeFG is the frame generation output
+};
+
+struct OutputChoice
+{
+    bool available = true;
+    const char* why = ""; // the reason when it is not
+};
+
+// XeFG always uses XeLL: the output is XeLL and cannot be changed
+inline bool OutputLocked(const OutputInputs& in)
+{
+    return in.xefgOutput;
+}
+
+inline OutputChoice OutputAvailability(Output output, const OutputInputs& in)
+{
+    if (in.xefgOutput)
+    {
+        if (output == Output::XeLL)
+            return { true, "" };
+
+        return { false, "XeFG always uses XeLL" };
+    }
+
+    if (output == Output::LatencyFlex && !in.fakenvapiMain)
+        return { false, "Needs fakenvapi as the game's nvapi" };
+
+    return { true, "" };
+}
+
+// What the combo shows: from the two fakenvapi flags it writes (XeLL wins when both are set, as it takes the slot)
+inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLatencyFlex)
+{
+    if (in.xefgOutput || forceXell)
+        return Output::XeLL;
+
+    return forceLatencyFlex ? Output::LatencyFlex : Output::Auto;
+}
+
+// Boost is NVIDIA Reflex's, and OptiScaler's calls carry it: real Reflex as the output (no fakenvapi, no XeFG, no Force
+// XeLL) and OptiScaler allowed to make the calls
+inline bool BoostAvailable(Input input, const OutputInputs& in, bool forceXell)
+{
+    return RuleForInput(input).setting != Setting::Off && !in.fakenvapiMain && !in.xefgOutput && !forceXell;
 }
 
 // Which Reflex surface a call goes through: the D3D-flavoured NVAPI entry points (NvAPI_D3D_*, also what XeFG's routing
@@ -181,7 +368,9 @@ inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = fa
     switch (decision)
     {
     case Decision::SettingOff:
-        return "Switched off";
+        return "Input is Game: OptiScaler makes no latency calls";
+    case Decision::LowLatencyOff:
+        return "Input is Off: no low latency, the game's Reflex is sent with it off";
     case Decision::NoF5Low:
         return "No Optical F5Low mode, XeFG or FSR frame generation is running";
     case Decision::GameRunsReflex:
