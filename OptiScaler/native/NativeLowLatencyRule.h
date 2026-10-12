@@ -360,6 +360,23 @@ inline const char* StatusLabel(Decision decision)
     }
 }
 
+// The Framerate page's "Active: <input> -> <output>": who makes the latency calls right now. The game's Reflex counts
+// whenever the game makes calls, whatever we decided about ours.
+inline const char* ActiveInputText(Decision decision, bool gameCallsReflex)
+{
+    switch (decision)
+    {
+    case Decision::Run:
+        return "OptiScaler";
+    case Decision::LowLatencyOff:
+        return "Off";
+    case Decision::FrameGenerationOwnsReflex:
+        return "Frame generation";
+    default:
+        return gameCallsReflex ? "Game" : "None";
+    }
+}
+
 // The reason when it does not run. Run has none here: the method in use names it. `gameReflexFeedsXell`: the game's own
 // Reflex calls are sent to XeFG's XeLL (native/XefgReflexRule.h), so its Reflex settings are not the thing to change;
 // `forceReflexDisabled`: fakenvapi's Force Disable, which XeLL then gets them with (low latency off).

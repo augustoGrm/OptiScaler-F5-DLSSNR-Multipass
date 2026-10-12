@@ -796,6 +796,22 @@ int main()
         CHECK(Decide(w) == Decision::NoF5Low);
     }
 
+    // Framerate page: "Active: <input> -> <output>" names who makes the calls, from the same Decision the code uses
+    {
+        CHECK(std::strcmp(ActiveInputText(Decision::Run, false), "OptiScaler") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::LowLatencyOff, true), "Off") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::FrameGenerationOwnsReflex, true), "Frame generation") == 0);
+
+        // The game's Reflex is what runs when it makes calls, whatever the decision says about us
+        CHECK(std::strcmp(ActiveInputText(Decision::GameRunsReflex, true), "Game") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::NoF5Low, true), "Game") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::SettingOff, true), "Game") == 0);
+
+        // Nobody makes calls
+        CHECK(std::strcmp(ActiveInputText(Decision::NoF5Low, false), "None") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::SettingOff, false), "None") == 0);
+    }
+
     // Framerate page: the Output choice
     {
         OutputInputs real; // NVIDIA, real nvapi, no XeFG

@@ -5648,6 +5648,208 @@ void MenuCommon::RenderFsrCommonSettings(RenderMenuContext& ctx)
     }
 }
 
+// Low latency: "Input" (who makes the latency calls) and "Output" (what lowers latency), side by side as on the frame
+// generation selection, and one status for both. The rules are in native/NativeLowLatencyRule.h; the text of the status
+// comes from native::lowlatency::GetStatus, the same Decision the code runs on.
+void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
+{
+    using namespace native::lowlatency;
+
+    auto& state = ctx.state;
+    auto config = ctx.config;
+
+    SeparatorWithHelpMarker("Low latency", "Keeps the game's render queue short, so what you do shows up sooner.\n"
+                                           "Reflex on NVIDIA; Anti-Lag 2, XeLL or LatencyFlex through fakenvapi "
+                                           "elsewhere; XeLL with XeFG.");
+
+    const auto status = GetStatus();
+    const auto input = config->FramerateLowLatencyInput.value_or_default();
+    const bool frameGenerationNeedsReflex =
+        state.externalFrameGeneration || state.activeFgOutput == FGOutput::DLSSG;
+    const bool forceXellActive = state.activeFgInput == FGInput::ForceXeLL;
+    const OutputInputs outputInputs { fakenvapi::isUsingAsMainNvapi(), state.activeFgOutput == FGOutput::XeFG };
+    const bool outputLocked = OutputLocked(outputInputs);
+    const bool inputOff = input == Input::Off;
+
+    if (ImGui::BeginTable("lowLatencySelection", 2, ImGuiTableFlags_SizingStretchSame))
+    {
+        ImGui::TableNextColumn();
+
+        // clang-format off
+        std::vector<MenuOption<Input>> inputOptions = {
+            { Input::Auto, "Auto",
+                "The game's own Reflex when it makes the calls.\n"
+                "Otherwise OptiScaler's, while an Optical F5Low mode, XeFG or FSR FG runs." },
+            { Input::Game, "Game",
+                "Only the game's own Reflex. OptiScaler makes no latency calls." },
+            { Input::OptiScaler, "OptiScaler",
+                "OptiScaler's calls in any game without Reflex.\n"
+                "It steps aside when the game starts using Reflex." },
+            { Input::Off, "Off",
+                "No low latency. OptiScaler makes no calls and the game's Reflex is sent with low latency off.\n"
+                "OptiScaler's limiter keeps the frame cap." },
+        };
+        // clang-format on
+        inputOptions[(size_t) Input::Off].set_disabled(frameGenerationNeedsReflex, "DLSS FG needs the game's Reflex");
+
+        PopulateCombo("Input##lowlatencyinput", config->FramerateLowLatencyInput, inputOptions);
+        ShowHelpMarker("Who makes the latency calls (Reflex, or what stands in for it).\n"
+                       "Leave it on Auto unless a game misbehaves: Game or Off if OptiScaler's calls get in the way, "
+                       "OptiScaler to start them in a game without Reflex.");
+
+        ImGui::TableNextColumn();
+
+        Output shown = OutputShown(outputInputs, config->ForceXeLL.value_or_default(),
+                                   config->FN_ForceLatencyFlex.value_or_default());
+        const Output shownBefore = shown;
+
+        const std::string autoLabel = std::string("Auto (") + status.output + ")";
+
+        // clang-format off
+        std::vector<MenuOption<Output>> outputOptions = {
+            { Output::Auto, autoLabel,
+                "What the setup has: NVIDIA Reflex, or Anti-Lag 2 / XeLL through fakenvapi." },
+            { Output::XeLL, "XeLL",
+                "Force XeLL. Works without frame generation on non-Intel cards.\n"
+                "Takes the frame generation slot (disables FG). Needs a restart." },
+            { Output::LatencyFlex, "LatencyFlex",
+                "Force LatencyFlex instead of Anti-Lag 2 or XeLL." },
+        };
+        // clang-format on
+
+        for (auto& option : outputOptions)
+        {
+            const auto choice = OutputAvailability(option.value, outputInputs);
+            option.set_disabled(!choice.available, choice.why);
+        }
+
+        // Nothing to lower while the Input is Off; XeFG fixes the output to XeLL
+        ImGui::BeginDisabled(outputLocked || inputOff);
+        PopulateCombo("Output##lowlatencyoutput", shown, outputOptions);
+        ImGui::EndDisabled();
+
+        if (inputOff)
+            ShowTooltip("Nothing to lower while the Input is Off.");
+        else if (outputLocked)
+            ShowTooltip("XeFG always uses XeLL.");
+
+        ShowHelpMarker("What lowers latency. Auto uses what the setup has. XeLL and LatencyFlex force that method "
+                       "(fakenvapi's Force XeLL and Force LatencyFlex).\n"
+                       "Entries that do not fit this setup say why when hovered.");
+
+        if (!outputLocked && !inputOff && shown != shownBefore)
+        {
+            config->ForceXeLL = shown == Output::XeLL;
+            config->FN_ForceLatencyFlex = shown == Output::LatencyFlex;
+        }
+
+        // Boost, NVIDIA Reflex only
+        const bool boostAvailable = BoostAvailable(input, outputInputs, forceXellActive);
+        bool boost = config->DlssNrNativeLowLatencyBoost.value_or_default();
+
+        ImGui::BeginDisabled(!boostAvailable);
+        if (ImGui::Checkbox("Boost##lowlatencyboost", &boost))
+            config->DlssNrNativeLowLatencyBoost = boost;
+        ImGui::EndDisabled();
+
+        std::string boostTip = "The GPU keeps its clocks up between frames: a little lower latency, a little more power.\n"
+                               "NVIDIA Reflex only, in OptiScaler's calls.";
+
+        if (!boostAvailable)
+        {
+            boostTip += RuleForInput(input).setting == Setting::Off
+                            ? "\nNot available: the Input is Game or Off, so OptiScaler makes no calls."
+                            : "\nNot available: the output is not NVIDIA Reflex.";
+        }
+
+        ShowHelpMarker(boostTip.c_str());
+
+        ImGui::EndTable();
+    }
+
+    // Force XeLL takes effect at the next start, as it did in the fakenvapi section
+    if (config->ForceXeLL.value_or_default() != forceXellActive)
+    {
+        ImGui::Spacing();
+        ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.f, 0.0f, 1.f)), "Save INI and restart to apply the changes");
+        ImGui::Spacing();
+    }
+
+    // One status for both: who makes the calls and what they reach, then the reason
+    std::string output = status.output;
+
+    if (state.rtssReflexInjection)
+        output += " (RTSS)";
+
+    if ((fakenvapi::isUsingAsMainNvapi() || fakenvapi::getCurrentMode() == LowLatencyMode::XeLL) &&
+        !fakenvapi::isLowLatencyActive() && state.reflexLimitsFps)
+        output += " (inactive)";
+
+    const char* who = ActiveInputText(status.decision, ReflexHooks::gameCalledReflex());
+
+    if (status.decision == Decision::LowLatencyOff)
+        ImGui::TextUnformatted("Active: Off");
+    else if (std::strcmp(who, "None") == 0)
+        ImGui::TextUnformatted("Active: nothing makes latency calls");
+    else
+        ImGui::Text("Active: %s -> %s", who, output.c_str());
+
+    // Run for frame generation alone, the player may never have opened a page that says why
+    if (status.decision == Decision::Run && status.runsFor == RunsFor::Xefg)
+    {
+        ShowHelpMarker("The game has no Reflex, so OptiScaler makes the calls. XeFG always uses XeLL, and XeLL lowers "
+                       "latency only when something sleeps and marks the frames.");
+    }
+    else if (status.decision == Decision::Run && status.runsFor == RunsFor::FsrFg)
+    {
+        ShowHelpMarker("The game has no Reflex, so OptiScaler makes the calls. Frame generation holds a real frame "
+                       "back to make the one in between; these calls take that latency back.");
+    }
+
+    ImGui::TextWrapped("Status: [%s]: %s", StatusLabel(status.decision), ReasonText(status));
+
+    if (status.offKeptForFrameGeneration)
+        ImGui::TextDisabled("DLSS FG needs Reflex: the game's Reflex stays on.");
+
+    if (status.decision == Decision::Run && status.hasLatency)
+    {
+        // Through fakenvapi there are no GPU times: the frame's simulation start to its present's end
+        if (status.latencyEstimated)
+            ImGui::Text("Simulation to present (estimated from frame markers): %.1f ms", status.latencyMs);
+        else
+            ImGui::Text("Measured latency: %.1f ms", status.latencyMs);
+    }
+
+    // On NVIDIA and AMD XeLL does nothing while XeFG generates no frames (paused, off, exclusive full screen, or
+    // fakenvapi's own XeLL with no XeFG)
+    if (status.decision == Decision::Run && status.xellIdle)
+        ImGui::TextDisabled("XeLL does nothing on this GPU while XeFG generates no frames.");
+
+    // Who keeps the frame cap: one wait per frame (NativeLowLatencyRule.h PlanCap)
+    if (const float cap = config->FramerateLimit.value_or_default(); cap > 0.0f)
+    {
+        std::string keeper = "OptiScaler's limiter";
+
+        if (status.decision == Decision::Run && status.path[0] != '\0')
+        {
+            if (status.capOwner != CapOwner::Limiter)
+                keeper = status.path;
+        }
+        else if (state.reflexLimitsFps)
+        {
+            keeper = status.output;
+        }
+        else if (XellHooks::canLimit())
+        {
+            keeper = "the game's XeLL";
+        }
+
+        ImGui::TextDisabled("Frame cap %.0f fps: kept by %s", cap, keeper.c_str());
+    }
+
+    ImGui::Spacing();
+}
+
 void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
@@ -5664,83 +5866,12 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
         SeparatorWithHelpMarker(
             "Framerate", "Uses Reflex when possible\nOn AMD/Intel cards, you can use Fakenvapi to substitute Reflex");
 
-        static std::string currentMethod {};
-        LowLatencyMode fakenvapiMode = {};
-        if (state.reflexLimitsFps)
-        {
-            fakenvapiMode = fakenvapi::getCurrentMode();
-
-            if (fakenvapiMode == LowLatencyMode::AntiLag2)
-                currentMethod = "FSR Anti-Lag 2.0";
-            else if (fakenvapiMode == LowLatencyMode::LatencyFlex)
-                currentMethod = "LatencyFlex";
-            else if (fakenvapiMode == LowLatencyMode::XeLL)
-                currentMethod = "XeLL";
-            else if (fakenvapiMode == LowLatencyMode::AntiLagVk)
-                currentMethod = "Vulkan AntiLag";
-            else if (fakenvapiMode == LowLatencyMode::None)
-            {
-                if (fakenvapi::isUsingAsMainNvapi())
-                    currentMethod = "None";
-                else
-                    currentMethod = "Reflex";
-            }
-
-            if (state.rtssReflexInjection && fakenvapiMode == LowLatencyMode::AntiLag2 &&
-                config->FGOutput.value_or_default() == FGOutput::FSRFG)
-                ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
-                                   "Using RTSS Reflex injection with FSR Anti-Lag 2.0 and FSR FG "
-                                   "might cause issues");
-        }
-        else
-        {
-            // Optical F5Low's low latency, also run for frame generation alone (it feeds XeFG's XeLL when the game
-            // does not, and takes back FSR FG's latency)
-            const auto lowLatency = f5lowRunning ? native::lowlatency::GetStatus() : native::lowlatency::Status {};
-            const char* owner = lowLatency.runsFor == native::lowlatency::RunsFor::Xefg    ? " (OptiScaler, for XeFG)"
-                                : lowLatency.runsFor == native::lowlatency::RunsFor::FsrFg ? " (OptiScaler, for FSR FG)"
-                                                                                           : " (Optical F5Low)";
-
-            if (f5lowRunning && native::lowlatency::OwnsFrameCap())
-                currentMethod = std::string(lowLatency.path) + owner;
-            else if (f5lowRunning)
-                currentMethod = std::string("OptiScaler's limiter") + owner;
-            else if (XellHooks::canLimit())
-                currentMethod = "Game's XeLL";
-            else
-                currentMethod = "OptiScaler's limiter";
-        }
-
-        if (state.rtssReflexInjection)
-            currentMethod.append(" (RTSS)");
-
-        const bool fakenvapiInactive = (fakenvapi::isUsingAsMainNvapi() || fakenvapiMode == LowLatencyMode::XeLL) &&
-                                       !fakenvapi::isLowLatencyActive() && state.reflexLimitsFps;
-
-        if (fakenvapiInactive)
-            currentMethod.append(" (inactive)");
-
-        ImGui::Text("Current method: %s", currentMethod.c_str());
-
-        // Run for frame generation alone, the low latency's switch is on a page a frame generation player may never
-        // open
-        if (const auto runsFor = native::lowlatency::GetStatus().runsFor;
-            f5lowRunning && !state.reflexLimitsFps && runsFor == native::lowlatency::RunsFor::Xefg)
-        {
-            ImGui::TextDisabled("OptiScaler feeds XeFG's XeLL itself (the game has no Reflex).");
-            ShowHelpMarker("XeFG always uses XeLL, and XeLL lowers latency only when something sleeps and marks the "
-                           "frames.\nSwitch: Neural Rendering > Optical F5Low > Low latency.");
-        }
-        else if (f5lowRunning && !state.reflexLimitsFps && runsFor == native::lowlatency::RunsFor::FsrFg)
-        {
-            ImGui::TextDisabled("OptiScaler lowers FSR FG's latency itself (the game has no Reflex).");
-            ShowHelpMarker("Frame generation holds a real frame back to make the one in between. The game has no "
-                           "Reflex, so OptiScaler makes the latency calls.\nSwitch: Neural Rendering > Optical F5Low > "
-                           "Low latency.");
-        }
-
-        if (fakenvapiMode == LowLatencyMode::AntiLag2)
-            ShowHelpMarker("FSR Anti-Lag 2.0 is the new name for AntiLag 2\nDon't ask me why");
+        if (state.rtssReflexInjection && state.reflexLimitsFps &&
+            fakenvapi::getCurrentMode() == LowLatencyMode::AntiLag2 &&
+            config->FGOutput.value_or_default() == FGOutput::FSRFG)
+            ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
+                               "Using RTSS Reflex injection with FSR Anti-Lag 2.0 and FSR FG "
+                               "might cause issues");
 
         if (state.reflexShowWarning)
         {
@@ -5806,73 +5937,41 @@ void MenuCommon::RenderFakenvapiSettings(RenderMenuContext& ctx)
     auto& state = ctx.state;
     auto config = ctx.config;
 
+    // What lowers latency (Force XeLL, Force LatencyFlex) is the Output on the low latency section; what stays here is
+    // how fakenvapi does it.
+    // Using state.reflexLimitsFps as a detection for Reflex being used on Nvidia
+    const bool showFakenvapi =
+        fakenvapi::isUsingAsMainNvapi() || (state.activeFgOutput == FGOutput::XeFG && state.reflexLimitsFps);
+
+    if (!showFakenvapi)
+        return;
+
     // FAKENVAPI ---------------------------
     ImGui::SeparatorText("fakenvapi");
 
-    // Using state.reflexLimitsFps as a detection for Reflex being used on Nvidia
-    bool showLatencyFlex =
-        fakenvapi::isUsingAsMainNvapi() || (state.activeFgOutput == FGOutput::XeFG && state.reflexLimitsFps);
+    // clang-format off
+    static const std::vector<MenuOption<LFXMode>> lfx_modes = {
+        { LFXMode::Conservative, "Conservative",
+            "The safest, but might not reduce latency well" },
+        { LFXMode::Aggressive, "Aggressive",
+            "Improves latency, but in some cases will lower FPS more than expected" },
+        { LFXMode::ReflexIDs, "Reflex ID",
+            "Best when can be used, some games are not compatible (e.g. Cyberpunk)\n"
+            "and will fallback to Aggressive" }
+    };
+    // clang-format on
 
-    if (showLatencyFlex)
-    {
-        ImGui::BeginDisabled(state.activeFgOutput == FGOutput::XeFG || state.activeFgInput == FGInput::ForceXeLL);
-        if (bool forceLFX = config->FN_ForceLatencyFlex.value_or_default();
-            ImGui::Checkbox("Force LatencyFlex", &forceLFX))
-        {
-            config->FN_ForceLatencyFlex = forceLFX;
-        }
-        ShowHelpMarker("By default, FSR Anti-Lag 2.0/XeLL is used when available.\n"
-                       "This setting lets you force LatencyFlex instead");
-        ImGui::EndDisabled();
-
-        // Keep Force XeLL on the same line if LatencyFlex is visible
-        ImGui::SameLine(0.0f, 16.0f);
-    }
-
-    // Force XeLL is always visible
-    bool forceXell = config->ForceXeLL.value_or_default();
-    static bool activeForceXeLL = forceXell;
-
-    if (ImGui::Checkbox("Force XeLL", &forceXell))
-    {
-        config->ForceXeLL = forceXell;
-    }
-    ShowHelpMarker("Allows XeLL to work without FG on non-Intel cards.\n\nDisables FG "
-                   "options\n\nRequires a restart");
-
-    if (activeForceXeLL != forceXell)
-    {
-        ImGui::Spacing();
-        ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.f, 0.0f, 1.f)), "Save INI and restart to apply the changes");
-        ImGui::Spacing();
-    }
-
-    if (showLatencyFlex)
-    {
-        // clang-format off
-        static const std::vector<MenuOption<LFXMode>> lfx_modes = {
-            { LFXMode::Conservative, "Conservative",
-                "The safest, but might not reduce latency well" },
-            { LFXMode::Aggressive, "Aggressive",
-                "Improves latency, but in some cases will lower FPS more than expected" },
-            { LFXMode::ReflexIDs, "Reflex ID",
-                "Best when can be used, some games are not compatible (e.g. Cyberpunk)\n"
-                "and will fallback to Aggressive" }
-        };
-
-        bool usingLFX = fakenvapi::getCurrentMode() == LowLatencyMode::LatencyFlex;
-
-        ImGui::BeginDisabled(!usingLFX);
+    // Only while LatencyFlex is what lowers latency
+    if (fakenvapi::getCurrentMode() == LowLatencyMode::LatencyFlex)
         PopulateCombo("LatencyFlex mode", config->FN_LatencyFlexMode, lfx_modes);
-        ImGui::EndDisabled();
 
-        static std::vector<MenuOption<ForceReflex>> reflex_modes = { { ForceReflex::InGame, "Follow in-game" },
-                                                                { ForceReflex::ForceDisable, "Force Disable" },
-                                                                { ForceReflex::ForceEnable, "Force Enable" } };
+    // clang-format off
+    static std::vector<MenuOption<ForceReflex>> reflex_modes = { { ForceReflex::InGame, "Follow in-game" },
+                                                            { ForceReflex::ForceDisable, "Force Disable" },
+                                                            { ForceReflex::ForceEnable, "Force Enable" } };
+    // clang-format on
 
-        PopulateCombo("Force Reflex", config->FN_ForceReflex, reflex_modes);
-        // clang-format on
-    }
+    PopulateCombo("Force Reflex", config->FN_ForceReflex, reflex_modes);
 }
 
 template <typename T> std::string GetMenuOptionLabel(const std::vector<MenuOption<T>>& options, T targetValue)
@@ -7904,6 +8003,7 @@ void MenuCommon::RenderMainMenuPages(RenderMenuContext& ctx)
             section(RenderActiveImageSettings);
             break;
         case Page::Framerate:
+            section(RenderFramerateLowLatency);
             section(RenderFramerateSettings);
 #ifdef LOW_LATENCY_INPUTS
             section(RenderLowLatencySettings);
