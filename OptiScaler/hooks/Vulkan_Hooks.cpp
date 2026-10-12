@@ -143,7 +143,11 @@ static VkResult Ll2ForwardSleepMode(ID3D12Device* xellDevice, VkDevice device, V
 {
     auto mode = Ll2SleepMode(info);
     ReflexHooks::noteLowLatency2SleepMode(info != nullptr ? &mode : nullptr);
-    ReflexHooks::xellSetSleepMode(xellDevice, mode);
+
+    // Anti-Lag 2 has no VK_NV_low_latency2 surface: XeLL keeps these calls and does the work then, not only the frame IDs
+    ReflexHooks::xellSetSleepMode(xellDevice, mode,
+                                  Ll2SplitToDriver() ? native::xefgreflex::XefgLatency::Reflex
+                                                     : native::xefgreflex::XefgLatency::XeLL);
 
     if (info == nullptr)
         return o_vkSetLatencySleepModeNV(device, swapchain, nullptr);

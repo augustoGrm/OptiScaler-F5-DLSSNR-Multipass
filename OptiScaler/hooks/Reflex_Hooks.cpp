@@ -142,10 +142,15 @@ void ForOutput(NV_VULKAN_SET_SLEEP_MODE_PARAMS& params)
 
 NvAPI_Status ReflexHooks::xellSetSleepMode(ID3D12Device* xellDevice, const native::xefgreflex::SleepMode& game)
 {
+    return xellSetSleepMode(xellDevice, game, CurrentSide());
+}
+
+NvAPI_Status ReflexHooks::xellSetSleepMode(ID3D12Device* xellDevice, const native::xefgreflex::SleepMode& game, Side side)
+{
     auto mode = native::xefgreflex::SleepModeForOutput(game, _minimumIntervalUs, true, ForceDisabled(), Blocked());
 
     // XeLL in the split: low latency off, it neither sleeps nor holds the cap
-    if (Split())
+    if (side != Side::XeLL)
         mode = native::xefgreflex::XellSleepModeInSplit(mode);
 
     NV_SET_SLEEP_MODE_PARAMS params {};
@@ -317,6 +322,10 @@ void ReflexHooks::releaseSide(Side previous)
         sideSetSleepModeVk(previous, _sideVkDev, &off);
         _sideVkDev = nullptr;
     }
+
+    // Anti-Lag 2 does not stay initialised beside XeLL once it has been told to stop
+    if (previous == Side::AntiLag2)
+        fakenvapi::companionRelease();
 }
 
 ID3D12Device* ReflexHooks::vkForwardDevice()
@@ -1462,8 +1471,11 @@ void ReflexHooks::setFPSLimit(float fps)
         else
             mode.lowLatency = true;
 
+        // VK_NV_low_latency2 has no Anti-Lag 2 side (AMD has no such extension): its calls stay XeLL's, which does the work
+        const auto xellSide = _lastVkSleepDev == nullptr && _lastLl2ModeSet && side == Side::AntiLag2 ? Side::XeLL : side;
+
         if (_lastVkSleepDev != nullptr || _lastLl2ModeSet || gameIsSendingMarkers())
-            xellSetSleepMode(xellDevice, mode);
+            xellSetSleepMode(xellDevice, mode, xellSide);
 
         // The split: the other side of the NvAPI_Vulkan mode gets the game's own with the cap (xellDevice is also non-null
         // for a game on VK_NV_low_latency2, which has no such mode here). When the split ends, update() has releaseSide

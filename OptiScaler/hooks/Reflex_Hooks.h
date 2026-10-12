@@ -185,6 +185,10 @@ class ReflexHooks
     // frame cap in place of its interval when one is set. A marker goes to XeLL when it takes it, and is noted either
     // way.
     static NvAPI_Status xellSetSleepMode(ID3D12Device* xellDevice, const native::xefgreflex::SleepMode& game);
+    // Same with the side that lowers latency given: VK_NV_low_latency2 calls are XeLL's (it does the work) when the side
+    // is Anti-Lag 2, which has no such surface; only a Reflex side takes them in the split
+    static NvAPI_Status xellSetSleepMode(ID3D12Device* xellDevice, const native::xefgreflex::SleepMode& game,
+                                         native::xefgreflex::XefgLatency side);
     static NvAPI_Status xellSleep(ID3D12Device* xellDevice);
     // The mode the game set (null: it reset it), so the cap hand-over (setFPSLimit) sends XeLL that one with the cap
     static void noteLowLatency2SleepMode(const native::xefgreflex::SleepMode* mode);
