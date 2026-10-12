@@ -274,10 +274,12 @@ Inputs GatherInputs(bool deviceAvailable)
     in.f5lowRunning = shown != DlssNrNativeMode::Shown::Off && !GameUpscalerCalledRecently();
     in.xefgRunning = state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr &&
                      state.currentFG->SwapchainContext() != nullptr;
-    // Only while it generates (paused or off, it adds no latency to take back). The Vulkan present bridge is left out:
-    // FSR FG there is untested with us.
+    // While it is on. Its short pauses (toggles, a changed interpolation count, swap chain remakes, about ten frames) do
+    // not count: stopping and starting again for them would change the sleep mode twice and hand the cap back and forth
+    // (XeFG's check does not look at the pause either). The Vulkan present bridge is left out: FSR FG there is untested
+    // with us.
     in.fsrFgRunning = state.activeFgOutput == FGOutput::FSRFG && state.currentFG != nullptr &&
-                      state.currentFG->IsActive() && !state.currentFG->IsPaused() &&
+                      state.currentFG->IsActive() &&
                       (state.swapchainInteropApi == SwapchainInteropApi::None ||
                        state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12);
 
@@ -396,7 +398,8 @@ CapInputs FrameCapInputs(Api api)
     static const bool intelGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::Intel;
     in.intelGpu = intelGpu;
     // FGHooks::FGPresent's limiter waits before our OnPresentEnd there; the Vulkan bridge's D3D12 present (and its
-    // limiter) comes after the game's present, our Sleep included. Only read together with fsrFgActive (FGPresent).
+    // limiter) comes after the game's present, our Sleep included. Read with FSR FG on real Reflex; d3d11Bridge is the
+    // separate fact that decides who keeps the cap beside NVIDIA Reflex and XeFG (SplitLimiterKeepsCap).
     in.limiterBeforeSleep = state.swapchainInteropApi != SwapchainInteropApi::VkwDx12;
     in.d3d11Bridge = state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
     return in;
