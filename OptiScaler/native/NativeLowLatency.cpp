@@ -817,6 +817,7 @@ OutputInputs CurrentOutputInputs()
     in.xefgOutput = State::Instance().activeFgOutput == FGOutput::XeFG;
     in.amdGpu = vendor == VendorId::AMD;
     in.nvidiaGpu = vendor == VendorId::Nvidia;
+    in.antiLag2Failed = fakenvapi::companionFailed();
     in.xefgLatency = Config::Instance()->FGXeFGLowLatencyOutput.value_or_default();
     return in;
 }

@@ -195,8 +195,10 @@ void LowLatency::get_latency_result(NV_LATENCY_RESULT_PARAMS* pGetLatencyParams)
 void LowLatency::add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams)
 {
     auto current_timestamp = get_timestamp() / 1000;
-    static auto last_sim_start = current_timestamp;
-    static auto _2nd_last_sim_start = current_timestamp;
+
+    if (last_sim_start == 0)
+        last_sim_start = second_last_sim_start = current_timestamp;
+
     auto current_report = &frame_reports[pSetLatencyMarkerParams->frameID % FRAME_REPORTS_BUFFER_SIZE];
 
     if (current_report->frameID != pSetLatencyMarkerParams->frameID)
@@ -205,7 +207,7 @@ void LowLatency::add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarke
     }
 
     current_report->frameID = pSetLatencyMarkerParams->frameID;
-    current_report->gpuFrameTimeUs = (uint32_t) (last_sim_start - _2nd_last_sim_start);
+    current_report->gpuFrameTimeUs = (uint32_t) (last_sim_start - second_last_sim_start);
     current_report->gpuActiveRenderTimeUs = 100;
     current_report->driverStartTime = current_timestamp;
     current_report->driverEndTime = current_timestamp + 100;
@@ -216,7 +218,7 @@ void LowLatency::add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarke
     switch (pSetLatencyMarkerParams->markerType)
     {
     case SIMULATION_START:
-        _2nd_last_sim_start = last_sim_start;
+        second_last_sim_start = last_sim_start;
         last_sim_start = get_timestamp() / 1000;
         current_report->simStartTime = last_sim_start;
         break;
