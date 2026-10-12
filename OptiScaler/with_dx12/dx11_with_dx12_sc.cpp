@@ -541,10 +541,23 @@ static void KeepSizeWhileWindowTiny(IDXGISwapChain* swapChain, HWND window, UINT
         return;
 
     RECT client {};
+    const bool haveClient = window != nullptr && GetClientRect(window, &client);
 
-    if (window == nullptr || swapChain == nullptr || !GetClientRect(window, &client) ||
-        (client.right >= 16 && client.bottom >= 16))
+    LOG_INFO("ResizeBuffers 0x0: window {:X} client {}x{} (read {}), iconic {}, visible {}", (uintptr_t) window,
+             client.right, client.bottom, haveClient, window != nullptr && IsIconic(window),
+             window != nullptr && IsWindowVisible(window));
+
+    if (!haveClient || swapChain == nullptr)
         return;
+
+    // A real window: say its size ourselves. The swapchain behind the bridge came out 1x1 from a 0x0 here (Call to Arms leaving
+    // exclusive full screen, window 2560x1440).
+    if (client.right >= 16 && client.bottom >= 16)
+    {
+        width = (UINT) client.right;
+        height = (UINT) client.bottom;
+        return;
+    }
 
     DXGI_SWAP_CHAIN_DESC current {};
 
@@ -615,6 +628,14 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Widt
     }
 
     LOG_DEBUG("Dx11wDx12SC ResizeBuffers results: real {:X}, fg {:X}", (UINT) realResult, (UINT) fgResult);
+
+    if (_real != nullptr)
+    {
+        DXGI_SWAP_CHAIN_DESC after {};
+
+        if (SUCCEEDED(_real->GetDesc(&after)))
+            LOG_INFO("ResizeBuffers: the game's swapchain is now {}x{}", after.BufferDesc.Width, after.BufferDesc.Height);
+    }
 
     if (SUCCEEDED(realResult) && SUCCEEDED(fgResult))
     {
