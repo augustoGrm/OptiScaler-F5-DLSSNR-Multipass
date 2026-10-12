@@ -543,6 +543,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="native\VirtualUpscalerDriver.h" />
     <ClInclude Include="native\NativeDriver.h" />
     <ClInclude Include="native\XefgReflexRule.h" />
+    <ClInclude Include="native\DriverInitGate.h" />
     <ClInclude Include="native\NativeLowLatency.h" />
     <ClInclude Include="native\NativeLowLatencyRule.h" />
     <ClInclude Include="native\NativeLowLatencyVkSync.h" />

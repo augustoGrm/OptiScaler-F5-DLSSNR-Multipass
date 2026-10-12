@@ -1,5 +1,6 @@
 #include "pch.h"
 #include <dlssnr/PassProfiles.h>
+#include <native/DriverInitGate.h>
 
 #include <set>
 #include <wrl/client.h>
@@ -3286,6 +3287,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
         SetExtras(cfg, nullptr, nullptr, 0, 0, 0, 0);
         const auto tuning = PassTuning(cfg, 0);
+        // Not at the same moment as a game's vkCreateDevice (native/DriverInitGate.h)
+        native::DriverInitScope driverInit;
         g_nr.feature =
             g_nr.create(snippet->wstring().c_str(), State::Instance().NVNGX_ApplicationDataPath.c_str(),
                         device, cmdList, g_nr.capabilityParams, modelWidth, modelHeight,
@@ -3427,6 +3430,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             {
                 SetExtras(cfg, nullptr, nullptr, 0, 0, 0, 0);
                 const auto tuning = PassTuning(cfg, pass);
+                native::DriverInitScope driverInit;
                 g_nr.passFeature[pass] = g_nr.create(
                     snippet->wstring().c_str(), State::Instance().NVNGX_ApplicationDataPath.c_str(),
                     device, cmdList, g_nr.capabilityParams, modelWidth, modelHeight,

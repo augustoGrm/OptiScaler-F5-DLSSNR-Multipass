@@ -530,6 +530,9 @@
     <ClInclude Include="native\XefgReflexRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="native\DriverInitGate.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="native\NativeLowLatencyRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
