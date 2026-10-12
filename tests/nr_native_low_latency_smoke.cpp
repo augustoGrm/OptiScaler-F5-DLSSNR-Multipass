@@ -878,6 +878,196 @@ int main()
         CHECK(!SleepModeForOutput(game, 0, true, true, true).lowLatency);
     }
 
+    // XeFG with NVIDIA Reflex or Anti-Lag 2 as the low latency Output ("split"): XeLL keeps its context and the frame
+    // markers with its low latency off, the driver's Reflex (or Anti-Lag 2 / Anti-Lag Vk through fakenvapi) lowers latency
+    {
+        using namespace native::xefgreflex;
+
+        // [XeFG] LowLatencyOutput
+        XefgLatency lat = XefgLatency::XeLL;
+        CHECK(XefgLatencyFromIniText("reflex", &lat) && lat == XefgLatency::Reflex);
+        CHECK(XefgLatencyFromIniText("antilag2", &lat) && lat == XefgLatency::AntiLag2);
+        CHECK(XefgLatencyFromIniText("xell", &lat) && lat == XefgLatency::XeLL);
+        lat = XefgLatency::AntiLag2;
+        CHECK(!XefgLatencyFromIniText("bogus", &lat) && lat == XefgLatency::AntiLag2); // left alone
+        CHECK(!XefgLatencyFromIniText(nullptr, &lat) && lat == XefgLatency::AntiLag2);
+        CHECK(!XefgLatencyFromIniText("", &lat));
+        for (const auto each : { XefgLatency::XeLL, XefgLatency::Reflex, XefgLatency::AntiLag2 })
+        {
+            XefgLatency back = XefgLatency::XeLL;
+            CHECK(XefgLatencyFromIniText(XefgLatencyIniText(each), &back) && back == each);
+        }
+
+        // Which entries a setup has
+        OutputInputs nvidia; // real nvapi, XeFG, Reflex asked for
+        nvidia.xefgOutput = true;
+        nvidia.xefgLatency = XefgLatency::Reflex;
+        OutputInputs amd; // fakenvapi on an AMD card
+        amd.xefgOutput = true;
+        amd.fakenvapiMain = true;
+        amd.amdGpu = true;
+        amd.xefgLatency = XefgLatency::AntiLag2;
+        OutputInputs intel; // fakenvapi, no AMD card: only XeLL
+        intel.xefgOutput = true;
+        intel.fakenvapiMain = true;
+        intel.xefgLatency = XefgLatency::Reflex;
+
+        CHECK(XefgLatencyAvailable(XefgLatency::XeLL, nvidia) && XefgLatencyAvailable(XefgLatency::XeLL, intel));
+        CHECK(XefgLatencyAvailable(XefgLatency::Reflex, nvidia));
+        CHECK(!XefgLatencyAvailable(XefgLatency::AntiLag2, nvidia));
+        CHECK(!XefgLatencyAvailable(XefgLatency::Reflex, amd));
+        CHECK(XefgLatencyAvailable(XefgLatency::AntiLag2, amd));
+        CHECK(!XefgLatencyAvailable(XefgLatency::Reflex, intel) && !XefgLatencyAvailable(XefgLatency::AntiLag2, intel));
+
+        CHECK(OutputAvailability(Output::XeLL, nvidia).available);
+        CHECK(OutputAvailability(Output::Reflex, nvidia).available);
+        CHECK(!OutputAvailability(Output::AntiLag2, nvidia).available);
+        CHECK(OutputAvailability(Output::AntiLag2, nvidia).why[0] != '\0');
+        CHECK(OutputAvailability(Output::AntiLag2, amd).available);
+        CHECK(!OutputAvailability(Output::Reflex, amd).available && OutputAvailability(Output::Reflex, amd).why[0] != '\0');
+        CHECK(!OutputAvailability(Output::Reflex, intel).available && !OutputAvailability(Output::AntiLag2, intel).available);
+        CHECK(!OutputAvailability(Output::Auto, nvidia).available && !OutputAvailability(Output::LatencyFlex, nvidia).available);
+
+        // Without XeFG the two are not offered
+        OutputInputs plain;
+        CHECK(!OutputAvailability(Output::Reflex, plain).available && OutputAvailability(Output::Reflex, plain).why[0] != '\0');
+        CHECK(!OutputAvailability(Output::AntiLag2, plain).available);
+
+        // Locked only when XeLL is the one choice
+        CHECK(!OutputLocked(nvidia) && !OutputLocked(amd));
+        CHECK(OutputLocked(intel));
+
+        // What the combo shows
+        CHECK(OutputShown(nvidia, false, false) == Output::Reflex);
+        CHECK(OutputShown(amd, false, false) == Output::AntiLag2);
+        CHECK(OutputShown(intel, false, false) == Output::XeLL); // asked for Reflex, not available
+        nvidia.xefgLatency = XefgLatency::XeLL;
+        CHECK(OutputShown(nvidia, false, false) == Output::XeLL);
+        nvidia.xefgLatency = XefgLatency::AntiLag2; // not available on NVIDIA
+        CHECK(OutputShown(nvidia, false, false) == Output::XeLL);
+        nvidia.xefgLatency = XefgLatency::Reflex;
+
+        // Boost is Reflex's: with XeFG only when Reflex is the output
+        CHECK(BoostAvailable(Input::Auto, nvidia, false));
+        CHECK(BoostAvailable(Input::OptiScaler, nvidia, false));
+        CHECK(!BoostAvailable(Input::Game, nvidia, false));
+        CHECK(!BoostAvailable(Input::Off, nvidia, false));
+        CHECK(!BoostAvailable(Input::Auto, amd, false));
+        CHECK(!BoostAvailable(Input::Auto, intel, false));
+        nvidia.xefgLatency = XefgLatency::XeLL;
+        CHECK(!BoostAvailable(Input::Auto, nvidia, false));
+        nvidia.xefgLatency = XefgLatency::Reflex;
+
+        // The side in force: the choice if the setup has it, XeLL for everything else. Input Off and Force Disable win.
+        CHECK(EffectiveXefgLatency(nvidia, false, false) == XefgLatency::Reflex);
+        CHECK(EffectiveXefgLatency(amd, false, false) == XefgLatency::AntiLag2);
+        CHECK(EffectiveXefgLatency(intel, false, false) == XefgLatency::XeLL);
+        CHECK(EffectiveXefgLatency(nvidia, true, false) == XefgLatency::XeLL); // Input Off
+        CHECK(EffectiveXefgLatency(nvidia, false, true) == XefgLatency::XeLL); // Force Disable
+        CHECK(EffectiveXefgLatency(amd, true, true) == XefgLatency::XeLL);
+        OutputInputs notXefg = nvidia;
+        notXefg.xefgOutput = false;
+        CHECK(EffectiveXefgLatency(notXefg, false, false) == XefgLatency::XeLL);
+        OutputInputs xellChosen = nvidia;
+        xellChosen.xefgLatency = XefgLatency::XeLL;
+        CHECK(EffectiveXefgLatency(xellChosen, false, false) == XefgLatency::XeLL);
+
+        // Routing per call. XeLL keeps what it had: everything, driver nothing.
+        for (const auto call : { Call::SetSleepMode, Call::Sleep, Call::Marker, Call::GetLatency })
+        {
+            const auto r = RouteFor(XefgLatency::XeLL, call);
+            CHECK(r.xell && !r.driver);
+        }
+
+        for (const auto side : { XefgLatency::Reflex, XefgLatency::AntiLag2 })
+        {
+            // The mode goes to both (XeLL's with low latency off), the Sleep to the driver alone (XeLL never sleeps),
+            // markers to both (XeLL's frame ID bookkeeping), the latency report from the driver
+            auto r = RouteFor(side, Call::SetSleepMode);
+            CHECK(r.xell && r.driver);
+            r = RouteFor(side, Call::Sleep);
+            CHECK(!r.xell && r.driver);
+            r = RouteFor(side, Call::Marker);
+            CHECK(r.xell && r.driver);
+            r = RouteFor(side, Call::GetLatency);
+            CHECK(!r.xell && r.driver);
+        }
+
+        // The two sleep modes
+        SleepMode game;
+        game.lowLatency = true;
+        game.boost = true;
+        game.minimumIntervalUs = 8333;
+        game.useMarkersToOptimize = true;
+
+        const auto xellMode = XellSleepModeInSplit(game);
+        CHECK(!xellMode.lowLatency && !xellMode.boost && xellMode.minimumIntervalUs == 0);
+        CHECK(xellMode.useMarkersToOptimize);
+
+        // The driver's: the game's own (Reflex off in its menu stays off), the cap in place of its interval
+        auto driverMode = DriverSleepModeInSplit(game, 0);
+        CHECK(driverMode.lowLatency && driverMode.boost && driverMode.minimumIntervalUs == 8333);
+        driverMode = DriverSleepModeInSplit(game, 16667);
+        CHECK(driverMode.lowLatency && driverMode.minimumIntervalUs == 16667);
+        SleepMode gameOff;
+        driverMode = DriverSleepModeInSplit(gameOff, 0);
+        CHECK(!driverMode.lowLatency && driverMode.minimumIntervalUs == 0);
+
+        // Methods: the three that carry XeFG's frame IDs, the two that leave the sleeping to the driver or Anti-Lag 2
+        CHECK(MethodWithXefg(XefgLatency::XeLL) == Method::XellWithXefg);
+        CHECK(MethodWithXefg(XefgLatency::Reflex) == Method::RealReflexWithXefg);
+        CHECK(MethodWithXefg(XefgLatency::AntiLag2) == Method::FakenvapiWithXefg);
+        CHECK(CarriesXefgFrameIds(Method::XellWithXefg) && CarriesXefgFrameIds(Method::RealReflexWithXefg) &&
+              CarriesXefgFrameIds(Method::FakenvapiWithXefg));
+        CHECK(!CarriesXefgFrameIds(Method::RealReflex) && !CarriesXefgFrameIds(Method::Fakenvapi));
+        CHECK(!LatencySplitFromXell(Method::XellWithXefg) && LatencySplitFromXell(Method::RealReflexWithXefg) &&
+              LatencySplitFromXell(Method::FakenvapiWithXefg));
+        CHECK(!LatencySplitFromXell(Method::RealReflex));
+
+        // The frame cap: the driver (or Anti-Lag 2) paces the game's own frames, so the shown-frame cap is divided by the
+        // frames XeFG shows per rendered one. XeLL being idle (XeFG paused) does not hand the cap away: it never held it.
+        for (const auto method : { Method::RealReflexWithXefg, Method::FakenvapiWithXefg })
+        {
+            CapInputs cap;
+            cap.running = true;
+            cap.method = method;
+            cap.capFps = 120.0f;
+            cap.xefgGenerating = true;
+            cap.shownPerRendered = 2;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 16667);
+            cap.shownPerRendered = 4;
+            CHECK(PlanCap(cap).minimumIntervalUs == 33333);
+            cap.shownPerRendered = 0; // never divides by nothing
+            CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+            cap.xefgGenerating = false; // XeFG paused: shown frames are rendered ones
+            cap.shownPerRendered = 1;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 8333);
+            CHECK(!XellIdle(cap));
+            cap.capFps = 0.0f;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 0);
+            cap.running = false;
+            CHECK(PlanCap(cap).owner == CapOwner::NotOurs);
+        }
+
+        // XeLL as the output: as before
+        CapInputs xellCap;
+        xellCap.running = true;
+        xellCap.method = Method::XellWithXefg;
+        xellCap.capFps = 120.0f;
+        xellCap.xefgGenerating = true;
+        xellCap.shownPerRendered = 2;
+        CHECK(PlanCap(xellCap).owner == CapOwner::LowLatency && PlanCap(xellCap).minimumIntervalUs == 8333);
+        xellCap.xefgGenerating = false;
+        CHECK(PlanCap(xellCap).owner == CapOwner::Limiter);
+
+        // The game's own Reflex cap: per rendered frame
+        CHECK(CapPerRenderedFrame(120.0f, 2) == 60.0f);
+        CHECK(CapPerRenderedFrame(120.0f, 4) == 30.0f);
+        CHECK(CapPerRenderedFrame(120.0f, 1) == 120.0f);
+        CHECK(CapPerRenderedFrame(120.0f, 0) == 120.0f);
+        CHECK(CapPerRenderedFrame(0.0f, 4) == 0.0f);
+    }
+
     printf(fails == 0 ? "nr_native_low_latency_smoke: PASS\n" : "nr_native_low_latency_smoke: %d FAIL\n", fails);
     return fails == 0 ? 0 : 1;
 }

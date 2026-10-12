@@ -84,6 +84,79 @@ inline SleepMode SleepModeForOutput(const SleepMode& game, uint32_t capIntervalU
 // wait, and the driver's Sleep must still return and signal the game's semaphore.
 inline constexpr SleepMode kDriverSleepMode {};
 
+// ---- XeFG with Reflex or Anti-Lag 2 as the low latency output ("split") ----
+//
+// XeFG needs an XeLL context and its frame IDs follow the markers sent (framegen/xefg/XeFGFrameId.h), so XeLL stays in
+// place and every call still reaches it, but with its low latency off: fakenvapi's XeLL skips every sleep and marker
+// while its mode is off (as with Force Disable), and XeFG keeps running. The latency work is the other side's: the
+// driver's Reflex (real nvapi) or Anti-Lag 2 / Anti-Lag Vk (fakenvapi's, a second context next to XeLL's) gets the
+// game's real mode, markers and Sleep, the way FSR FG's Reflex does.
+
+using lowlatency::XefgLatency;
+
+// The side that lowers latency right now. XeLL is today's behaviour and the answer whenever the setup lacks the choice,
+// XeFG is not the output, the Framerate page's Input is Off (nothing to lower) or fakenvapi's Force Disable is set.
+inline XefgLatency EffectiveXefgLatency(const lowlatency::OutputInputs& in, bool blockLowLatency, bool forceDisabled)
+{
+    if (!in.xefgOutput || blockLowLatency || forceDisabled || !lowlatency::XefgLatencyAvailable(in.xefgLatency, in))
+        return XefgLatency::XeLL;
+
+    return in.xefgLatency;
+}
+
+enum class Call
+{
+    SetSleepMode,
+    Sleep,
+    Marker,
+    GetLatency
+};
+
+struct Route
+{
+    bool xell = false;   // XeFG's XeLL (fakenvapi's, on the device XeFG made it on)
+    bool driver = false; // the other side: the driver's Reflex, or Anti-Lag 2 / Anti-Lag Vk (not for XeLL)
+};
+
+// Where one Reflex call goes. A bridged Vulkan game's semaphore is signalled by the other side's Sleep (the driver's, or
+// fakenvapi's NvAPI_Vulkan_Sleep): with XeLL as the output it is signalled from the host instead (VK_NV_low_latency2) or
+// by the driver's Sleep with its mode off (NvAPI_Vulkan).
+inline Route RouteFor(XefgLatency side, Call call)
+{
+    if (side == XefgLatency::XeLL)
+        return { true, false };
+
+    switch (call)
+    {
+    case Call::Sleep:
+    case Call::GetLatency:
+        return { false, true }; // XeLL never sleeps here, and the driver has the real GPU times
+    default:
+        return { true, true };
+    }
+}
+
+// The game's sleep mode as XeLL gets it: low latency off, no Boost, no interval (it neither sleeps nor holds the cap)
+inline SleepMode XellSleepModeInSplit(const SleepMode& game)
+{
+    SleepMode out = game;
+    out.lowLatency = false;
+    out.boost = false;
+    out.minimumIntervalUs = 0;
+    return out;
+}
+
+// ...and as the other side gets it: the game's own, the cap in place of its interval when one is set
+inline SleepMode DriverSleepModeInSplit(const SleepMode& game, uint32_t capIntervalUs)
+{
+    SleepMode out = game;
+
+    if (capIntervalUs != 0)
+        out.minimumIntervalUs = capIntervalUs;
+
+    return out;
+}
+
 // Whether XeFG's XeLL keeps the frame cap the game's Reflex hands it: while it is not idle (NativeLowLatencyRule.h
 // XellIdle: on NVIDIA and AMD it does nothing while XeFG generates no frames) and not turned off with fakenvapi's
 // Force Disable. OptiScaler's limiter keeps it otherwise.

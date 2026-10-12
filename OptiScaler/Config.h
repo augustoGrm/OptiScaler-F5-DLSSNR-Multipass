@@ -1144,6 +1144,10 @@ class Config
     CustomOptional<bool> FGXeFGHighResMV { false };
     CustomOptional<bool> FGXeFGDebugView { false };
     CustomOptional<bool> FGXeFGForceBorderless { false };
+    // [XeFG] LowLatencyOutput, what lowers latency with XeFG (native/NativeLowLatencyRule.h XefgLatency): xell (default),
+    // reflex (NVIDIA, real nvapi) or antilag2 (AMD, fakenvapi). XeLL stays in place for XeFG either way, with low latency
+    // off when the other two are chosen. A choice the setup lacks reads as xell.
+    CustomOptional<native::lowlatency::XefgLatency> FGXeFGLowLatencyOutput { native::lowlatency::XefgLatency::XeLL };
 
     // DLSSG
     CustomOptional<int> FGDLSSGInterpolationCount { 1 }; // For Opti's own SL instance

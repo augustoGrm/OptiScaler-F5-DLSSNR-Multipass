@@ -264,6 +264,15 @@ bool Config::Reload(std::filesystem::path iniPath)
             FGXeFGHighResMV.set_from_config(readBool("XeFG", "HighResMV"));
             FGXeFGDebugView.set_from_config(readBool("XeFG", "DebugView"));
             FGXeFGForceBorderless.set_from_config(readBool("XeFG", "ForceBorderless"));
+
+            // A word we do not know leaves it unset (xell)
+            if (const auto output = readString("XeFG", "LowLatencyOutput", true); output.has_value())
+            {
+                auto latency = native::lowlatency::XefgLatency::XeLL;
+
+                if (native::lowlatency::XefgLatencyFromIniText(output->c_str(), &latency))
+                    FGXeFGLowLatencyOutput.set_from_config(latency);
+            }
         }
 
         {
@@ -1314,6 +1323,12 @@ bool Config::SaveIni()
         ini.SetValue("XeFG", "DebugView", GetBoolValue(Instance()->FGXeFGDebugView.value_for_config()).c_str());
         ini.SetValue("XeFG", "ForceBorderless",
                      GetBoolValue(Instance()->FGXeFGForceBorderless.value_for_config()).c_str());
+
+        // Nothing held (never chosen): the default word, so the key is in the file for the player to find
+        ini.SetValue("XeFG", "LowLatencyOutput",
+                     native::lowlatency::XefgLatencyIniText(
+                         Instance()->FGXeFGLowLatencyOutput.value_for_config().value_or(
+                             native::lowlatency::XefgLatency::XeLL)));
     }
 
     {
