@@ -1278,13 +1278,14 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
 
     // The side that lowers latency with XeFG changed (the Output, or Input Off / Force Disable switched the split on or
     // off): the side that had the sleep mode lets it go, and the stored one is sent again in the new shape. Also when XeFG
-    // made a new XeLL context in the split: it starts with low latency on, and would sleep next to the other side.
+    // made a new XeLL context where XeLL must not sleep (the split, Input Off, Force Disable): it starts with low latency
+    // on (XeFG_Dx12), and the stored mode has to be sent again to turn it off.
     const auto side = CurrentSide();
     static Side lastSide = Side::XeLL;
     static uint32_t lastXellGeneration = 0;
     const auto xellGeneration = fakenvapi::forcedModeGeneration();
     const bool sideChanged = side != lastSide;
-    const bool xellRemade = side != Side::XeLL && xellGeneration != lastXellGeneration;
+    const bool xellRemade = (side != Side::XeLL || Blocked() || ForceDisabled()) && xellGeneration != lastXellGeneration;
 
     if (sideChanged)
     {
