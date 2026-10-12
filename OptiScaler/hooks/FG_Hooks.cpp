@@ -1482,7 +1482,9 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         state.activeFgOutput != FGOutput::NoFG &&
         (!IdentifyGpu::getPrimaryGpu().usesDxvk || VkPresentBridge::DxvkThroughVulkan()) && !XellHooks::canLimit())
     {
-        FrameLimit::sleep(fg != nullptr ? fg->IsActive() && !fg->IsPaused() : false);
+        // Shown frames per rendered one only while it generates: stood down waiting for frame data (FG only with no
+        // upscaler call feeding it) it shows the game's frames alone
+        FrameLimit::sleep(fg != nullptr && fg->IsGenerating() ? 1 + fg->GetInterpolatedFrameCount() : 1);
     }
 
     if ((config->SimulateWaitableObject.value_or_default() ||

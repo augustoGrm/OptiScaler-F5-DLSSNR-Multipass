@@ -1248,7 +1248,7 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
 
         // Unsure about Vulkan Reflex fps limit and if that could be causing an issue here
         if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap())
-            FrameLimit::sleep(false);
+            FrameLimit::sleep();
     }
 
     NotePresentTiming(hookStartMs);

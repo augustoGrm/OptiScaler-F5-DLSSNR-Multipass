@@ -1,4 +1,4 @@
-﻿#include "pch.h"
+#include "pch.h"
 #include "menu_common.h"
 #include "MenuPages.h"
 #include <framegen/dlssg/MfgUnlock.h>
@@ -1610,8 +1610,8 @@ void MenuCommon::UpdateRenderTiming(RenderMenuContext& ctx)
 
     // A dxvk game on the Vulkan bridge: the menu is drawn on the game's presents only, frame generation's swapchain
     // presents the generated frames past our hooks. The shown frames come that many times as often.
-    if (auto fg = state.currentFG; VkPresentBridge::MenuOnGamePresents() && fg != nullptr && fg->IsActive() &&
-                                   !fg->IsPaused() && frameTime > 0.0)
+    if (auto fg = state.currentFG; VkPresentBridge::MenuOnGamePresents() && fg != nullptr && fg->IsGenerating() &&
+                                   frameTime > 0.0)
     {
         frameTime /= (double) (fg->GetInterpolatedFrameCount() + 1);
         frameRate = 1000.0 / frameTime;
@@ -2201,7 +2201,7 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
             std::string thirdLine = "";
 
             auto fg = state.currentFG;
-            auto fgText = (fg != nullptr && fg->IsActive() && !fg->IsPaused()) ? (" (" + std::string(fg->Name()) + ")")
+            auto fgText = (fg != nullptr && fg->IsGenerating()) ? (" (" + std::string(fg->Name()) + ")")
                                                                                : std::string();
 
             const int fakeFramesCount = DlssgInterpolationCount(state);
@@ -2255,7 +2255,7 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                                      usesDx12CompatLayer ? " w/Dx12" : "");
             }
 
-            if (fg != nullptr && fg->IsActive() && !fg->IsPaused())
+            if (fg != nullptr && fg->IsGenerating())
             {
                 const double baseFps = frameRate / (double) (fg->GetInterpolatedFrameCount() + 1);
 

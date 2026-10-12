@@ -900,7 +900,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present(UINT SyncInterval, UIN
         if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
             State::Instance().activeFgOutput == FGOutput::NoFG &&
             !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
-            FrameLimit::sleep(false);
+            FrameLimit::sleep();
     }
     else
     {
@@ -1269,7 +1269,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present1(UINT SyncInterval, UI
         if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
             State::Instance().activeFgOutput == FGOutput::NoFG &&
             !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
-            FrameLimit::sleep(false);
+            FrameLimit::sleep();
     }
     else
     {
