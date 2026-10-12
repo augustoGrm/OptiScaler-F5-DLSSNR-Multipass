@@ -9,6 +9,19 @@
 #include <imgui/imgui_impl_vulkan.h>
 #include <imgui/imgui_impl_win32.h>
 
+// Diagnostic: the menu submits on the game's queue from the present thread. Says which thread, once per change, to compare with
+// the thread ids in a Vulkan validation threading error.
+static void LogMenuSubmitThread(const char* what, VkQueue queue)
+{
+    static thread_local bool logged = false;
+
+    if (logged)
+        return;
+
+    logged = true;
+    LOG_INFO("Vulkan menu {} on queue {:X}, thread {}", what, (uintptr_t) queue, GetCurrentThreadId());
+}
+
 // Vulkan overlay code adopted from here:
 // https://gist.github.com/mem99/0ec31ca302927457f86b1d6756aaa8c4
 // Need to check resize & recreate fixes
@@ -432,6 +445,7 @@ static void CreateVulkanObjects(VkDevice device, VkPhysicalDevice pd, VkInstance
             return;
         }
 
+        LogMenuSubmitThread("end-of-frame submit", queue);
         result = vkQueueSubmit(queue, 1, &end_info, VK_NULL_HANDLE);
         if (result != VK_SUCCESS)
         {
@@ -606,6 +620,7 @@ bool MenuOverlayVk::QueuePresent(VkQueue queue, VkPresentInfoKHR* pPresentInfo)
                 submit_info.signalSemaphoreCount = 1;
                 submit_info.pSignalSemaphores = &_ImVulkan_Semaphores[semaphoreIndex];
 
+                LogMenuSubmitThread("menu draw submit", _ImVulkan_Info.Queue);
                 auto qResult = vkQueueSubmit(_ImVulkan_Info.Queue, 1, &submit_info, fd->Fence);
                 if (qResult != VK_SUCCESS)
                 {
