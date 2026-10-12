@@ -25,6 +25,69 @@ static int fails = 0;
         }                                                                                                              \
     } while (0)
 
+// dxvk with the Vulkan bridge, as a sequence: the game's Present of frame f pushes its entry (id 100 + f, the site chosen
+// then), dxvk presents frame f `lag` game frames later and pops. Each frame must be paired exactly once (at the game's
+// Present for a GamePresent entry, at dxvk's for a VulkanPresent one or when nothing was queued) and a GamePresent frame
+// must reach XeFG with its own ID.
+struct SeqResult
+{
+    int pairs[64] = {};
+    uint32_t idSeen[64] = {};
+};
+
+// `siteOf(f)`: the site the game's Present picks for frame f. `failed(f)`: its real Present did not return S_OK (undone).
+template <class SiteFn, class FailFn> SeqResult RunSeq(int frames, int lag, SiteFn siteOf, FailFn failed)
+{
+    SeqResult r;
+    FrameLedger led;
+    auto dxvkPresent = [&](int frame)
+    {
+        FrameLedger::Entry e;
+        const bool popped = led.Pop(&e);
+
+        if (!popped || e.site == SleepSite::VulkanPresent)
+            ++r.pairs[frame];
+
+        r.idSeen[frame] = popped && e.site == SleepSite::GamePresent ? e.frameId : 0;
+    };
+
+    int next = 0; // the next frame dxvk presents (a failed frame is never presented)
+    auto skipFailed = [&] { while (next < frames && failed(next)) ++next; };
+
+    for (int f = 0; f < frames; ++f)
+    {
+        const auto site = siteOf(f);
+        const auto seq = led.Push(100 + f, site);
+
+        if (site == SleepSite::GamePresent)
+            ++r.pairs[f];
+
+        if (failed(f))
+            CHECK(led.Undo(seq));
+
+        // dxvk is `lag` frames behind
+        skipFailed();
+
+        if (f - lag >= 0 && next <= f - lag)
+        {
+            dxvkPresent(next++);
+            skipFailed();
+        }
+    }
+
+    while (true)
+    {
+        skipFailed();
+
+        if (next >= frames)
+            break;
+
+        dxvkPresent(next++);
+    }
+
+    return r;
+}
+
 int main()
 {
     Inputs in;
@@ -1200,6 +1263,227 @@ int main()
         CHECK(CapPerRenderedFrame(120.0f, 1) == 120.0f);
         CHECK(CapPerRenderedFrame(120.0f, 0) == 120.0f);
         CHECK(CapPerRenderedFrame(0.0f, 4) == 0.0f);
+    }
+
+    // dxvk through the Vulkan bridge: the pair runs at the game's Present only with the key on; every other game keeps the
+    // Vulkan (or its own D3D) site whatever the key says
+    CHECK(SleepSiteFor(true, true) == SleepSite::GamePresent);
+    CHECK(SleepSiteFor(true, false) == SleepSite::VulkanPresent);
+    CHECK(SleepSiteFor(false, true) == SleepSite::VulkanPresent);
+    CHECK(SleepSiteFor(false, false) == SleepSite::VulkanPresent);
+
+    // The ledger of a dxvk game: a few frames in flight while the site changes, a failed Present, a doubled present, a
+    // minimised game, the bridge going away. Every frame is paired exactly once and a game-site frame keeps its own ID.
+    {
+        constexpr auto none = [](int) { return false; };
+        constexpr auto allVulkan = [](int) { return SleepSite::VulkanPresent; };
+        constexpr auto allGame = [](int) { return SleepSite::GamePresent; };
+
+        for (int lag = 0; lag <= 3; ++lag)
+        {
+            // The site never changes
+            for (const auto r : { RunSeq(20, lag, allVulkan, none), RunSeq(20, lag, allGame, none) })
+            {
+                for (int f = 0; f < 20; ++f)
+                    CHECK(r.pairs[f] == 1);
+            }
+
+            // Vulkan -> game at frame 8, and game -> Vulkan at frame 8: no frame loses its pair or gets two
+            for (const bool toGame : { true, false })
+            {
+                const auto r = RunSeq(
+                    20, lag, [&](int f) { return (f >= 8) == toGame ? SleepSite::GamePresent : SleepSite::VulkanPresent; },
+                    none);
+
+                for (int f = 0; f < 20; ++f)
+                {
+                    CHECK(r.pairs[f] == 1);
+                    const bool gameFrame = (f >= 8) == toGame;
+                    CHECK(r.idSeen[f] == (gameFrame ? 100u + f : 0u));
+                }
+            }
+
+            // Back and forth every frame
+            {
+                const auto r = RunSeq(
+                    24, lag, [](int f) { return f % 2 ? SleepSite::GamePresent : SleepSite::VulkanPresent; }, none);
+
+                for (int f = 0; f < 24; ++f)
+                {
+                    CHECK(r.pairs[f] == 1);
+                    CHECK(r.idSeen[f] == (f % 2 ? 100u + f : 0u));
+                }
+            }
+
+            // Presents that did not go through (occluded, failed): their entries are undone, the rest stay in step
+            {
+                const auto r = RunSeq(20, lag, allGame, [](int f) { return f == 5 || f == 6 || f == 13; });
+
+                for (int f = 0; f < 20; ++f)
+                {
+                    if (f == 5 || f == 6 || f == 13)
+                        continue; // paired at the game's Present, but never presented by dxvk
+                    CHECK(r.pairs[f] == 1);
+                    CHECK(r.idSeen[f] == 100u + f);
+                }
+            }
+        }
+    }
+
+    // Edges of the ledger itself
+    {
+        FrameLedger q;
+        FrameLedger::Entry e;
+
+        // Empty before any pop worked is just the start: no resync, and the caller pairs at the Vulkan present
+        CHECK(!q.Pop(&e));
+        CHECK(!q.TakeResync());
+
+        // Undo of an entry dxvk already popped finds nothing
+        const auto a = q.Push(1, SleepSite::GamePresent);
+        const auto b = q.Push(2, SleepSite::VulkanPresent);
+        CHECK(q.Pop(&e) && e.frameId == 1 && e.site == SleepSite::GamePresent);
+        CHECK(!q.Undo(a));
+        CHECK(q.Undo(b));
+        CHECK(!q.Pop(&e));
+        CHECK(q.TakeResync()); // a pop found nothing after pops had worked
+
+        // A doubled dxvk present has nothing to pop for its second half: unpaired entries are not invented
+        q.Push(3, SleepSite::GamePresent);
+        CHECK(q.Pop(&e) && e.frameId == 3);
+        CHECK(!q.Pop(&e));
+
+        // Minimised: many game presents, no dxvk presents. The oldest are dropped, the newest kSize stay, and it is flagged
+        q.Clear();
+        q.TakeResync();
+
+        for (uint32_t id = 1; id <= 20; ++id)
+            q.Push(id, SleepSite::GamePresent);
+
+        CHECK(q.count == FrameLedger::kSize);
+        CHECK(q.TakeResync());
+        CHECK(!q.TakeResync());
+        CHECK(q.Pop(&e) && e.frameId == 20 - FrameLedger::kSize + 1);
+
+        // The bridge goes away: Clear leaves nothing, and a new bridge's first pop is "the start" again
+        q.Clear();
+        CHECK(!q.Pop(&e));
+        CHECK(!q.TakeResync());
+        q.Push(9, SleepSite::GamePresent);
+        CHECK(q.Pop(&e) && e.frameId == 9);
+    }
+
+    // The game minimised: it presents 20 frames (S_OK) that dxvk never presents, and goes on three seconds later. The
+    // entries left over are too old to be for dxvk's next presents and are dropped, so the ledger is back in step and every
+    // frame dxvk presents after it has its own ID. (Without the age rule the up-to-kSize left over would stay in front for
+    // good.)
+    {
+        FrameLedger led;
+        uint32_t idSeen[40] = {};
+
+        for (int f = 0; f < 20; ++f)
+            led.Push(100 + f, SleepSite::GamePresent, 0, 1000.0 + f * 16.0);
+
+        for (int f = 20; f < 40; ++f)
+        {
+            const double now = 4000.0 + (f - 20) * 16.0;
+            led.Push(100 + f, SleepSite::GamePresent, 0, now);
+
+            if (f - 2 >= 20) // dxvk presents two frames behind the game
+            {
+                FrameLedger::Entry e;
+                idSeen[f - 2] = led.Pop(&e, 0, now) ? e.frameId : 0;
+            }
+        }
+
+        for (int p = 20; p < 38; ++p)
+            CHECK(idSeen[p] == 100u + p);
+
+        CHECK(led.TakeResync());
+    }
+
+    // Frame generation off and on again in place, on the same window: entries pushed for frames dxvk presented unbridged
+    // are left over. They are dropped when the output is made again (a newer generation), and the frames presented after
+    // it get their own IDs.
+    {
+        FrameLedger led;
+        uint32_t idSeen[40] = {};
+        const int lag = 2;
+
+        for (int f = 0; f < 30; ++f)
+        {
+            const uint32_t generation = f < 10 ? 1 : 2;
+            led.Push(100 + f, SleepSite::GamePresent, generation);
+
+            const int p = f - lag; // dxvk presents frame p
+
+            if (p >= 10) // frames before the output was made again are presented unbridged: no pop
+            {
+                FrameLedger::Entry e;
+                idSeen[p] = led.Pop(&e, 2) ? e.frameId : 0;
+            }
+        }
+
+        for (int p = 10; p < 28; ++p)
+            CHECK(idSeen[p] == 100u + p);
+
+        CHECK(led.TakeResync());
+    }
+
+    // An entry's ID is read with the site lock held: the other site's End moves the frame ID on while the game's Present
+    // waits for the lock, and the entry must carry the ID the markers do
+    {
+        FrameLedger led;
+        uint32_t frameId = 7;
+        uint32_t markerId = 0;
+        uint64_t seq = BeginGameSiteFrame(
+            [&]
+            {
+                frameId = 8; // dxvk's thread finished the Vulkan site's End for the older frame first
+                return 0;
+            },
+            [&] { return frameId; }, [&](uint32_t id) { return led.Push(id, SleepSite::GamePresent); },
+            [&] { markerId = frameId; });
+
+        FrameLedger::Entry e;
+        CHECK(seq != 0 && led.Pop(&e));
+        CHECK(e.frameId == markerId);
+        CHECK(e.frameId == 8);
+    }
+
+    // The pair's End never comes (the device went away between Begin and End): not left half way, the frame ID moves on
+    {
+        bool started = true;
+        bool submitted = true;
+        uint64_t frameId = 5;
+        AbandonPair(started, submitted, frameId);
+        CHECK(!started && !submitted && frameId == 6);
+    }
+
+    // What the old design did (the Vulkan present reading the site the game's latest Present chose) is not enough: with the
+    // site changing while frames are in flight, a frame is left unpaired or paired twice. Kept as a check of the check.
+    {
+        const int lag = 2;
+        int pairs[20] = {};
+
+        for (int f = 0; f < 20; ++f) // the game's Present f pairs at the game's Present if its latch is GamePresent
+        {
+            const bool game = f >= 8;
+
+            if (game)
+                ++pairs[f];
+
+            // dxvk presents frame f - lag now and reads the latch of the game's latest Present (f)
+            if (f - lag >= 0 && !game)
+                ++pairs[f - lag];
+        }
+
+        int wrong = 0;
+
+        for (int f = 0; f < 18; ++f)
+            wrong += pairs[f] != 1;
+
+        CHECK(wrong > 0);
     }
 
     printf(fails == 0 ? "nr_native_low_latency_smoke: PASS\n" : "nr_native_low_latency_smoke: %d FAIL\n", fails);

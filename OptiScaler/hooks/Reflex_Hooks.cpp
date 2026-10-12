@@ -252,8 +252,11 @@ void ReflexHooks::xellMarker(ID3D12Device* xellDevice, uint64_t frameId, uint32_
 // Anti-Lag 2. Every sleep mode that goes to a side is noted, so releaseSide can switch it off again.
 NvAPI_Status ReflexHooks::sideSetSleepMode(Side side, IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* params)
 {
+    dropSideOnOtherApi(false);
+
     _sideDev = pDev;
     _sideOfDev = side;
+    _sideLastWasVk = false;
 
     const auto result = side == Side::AntiLag2 ? fakenvapi::companionSetSleepMode(pDev, params)
                                                : o_NvAPI_D3D_SetSleepMode(pDev, params);
@@ -312,8 +315,11 @@ NvAPI_Status ReflexHooks::sideSetAsyncFrameMarker(Side side, ID3D12CommandQueue*
 
 NvAPI_Status ReflexHooks::sideSetSleepModeVk(Side side, HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* params)
 {
+    dropSideOnOtherApi(true);
+
     _sideVkDev = vkDevice;
     _sideOfVkDev = side;
+    _sideLastWasVk = true;
 
     const auto result = side == Side::AntiLag2 ? fakenvapi::companionSetSleepMode(vkDevice, params)
                                                : o_NvAPI_Vulkan_SetSleepMode(vkDevice, params);
@@ -351,6 +357,39 @@ NvAPI_Status ReflexHooks::sideGetLatencyVk(Side side, HANDLE vkDevice, NV_VULKAN
         return fakenvapi::companionGetLatency(vkDevice, params);
 
     return o_NvAPI_Vulkan_GetLatency(vkDevice, params);
+}
+
+// A sleep mode now goes to one API (`nowVulkan`): the side's last one on the other API gets everything off and is
+// forgotten. Not recursive: the "off" itself is a sleep mode on the other API. Not inside setFPSLimit, which sends the
+// cap to both the D3D and the Vulkan device in one call (_keepBothSides): the second would turn the first off.
+void ReflexHooks::dropSideOnOtherApi(bool nowVulkan)
+{
+    static thread_local bool dropping = false;
+
+    if (dropping || _keepBothSides)
+        return;
+
+    std::scoped_lock lock(_sleepModeMutex);
+    dropping = true;
+
+    if (nowVulkan && _sideDev != nullptr)
+    {
+        NV_SET_SLEEP_MODE_PARAMS off {};
+        off.version = NV_SET_SLEEP_MODE_PARAMS_VER;
+        auto* device = _sideDev;
+        sideSetSleepMode(_sideOfDev, device, &off);
+        _sideDev = nullptr;
+    }
+    else if (!nowVulkan && _sideVkDev != nullptr)
+    {
+        NV_VULKAN_SET_SLEEP_MODE_PARAMS off {};
+        off.version = NV_VULKAN_SET_SLEEP_MODE_PARAMS_VER;
+        auto* device = _sideVkDev;
+        sideSetSleepModeVk(_sideOfVkDev, device, &off);
+        _sideVkDev = nullptr;
+    }
+
+    dropping = false;
 }
 
 // The Output went back to XeLL (or Input Off, Force Disable switched the split off): the side that had the sleep mode gets
@@ -556,6 +595,12 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_Sleep(IUnknown* pDev)
 
     if (State::Instance().activeFgOutput == FGOutput::XeFG)
     {
+        // Our own Sleep with XeFG: noted for the menu's Reflex timing graph only (updateTimingData), as below. With XeLL as
+        // the Output it is the one device whose report has the timings: a game with no Reflex of its own (dxvk on the
+        // Vulkan bridge) gives the graph nothing else, and it stayed empty.
+        if (_ownCall)
+            _ownSleepDev = pDev;
+
         // The split: XeLL never sleeps (its low latency is off), the other side does
         const auto side = CurrentSide();
         const auto route = RouteFor(side, Call::Sleep);
@@ -1237,13 +1282,15 @@ bool ReflexHooks::updateTimingData()
     // A game that only marks frames for XeFG's XeLL sets no sleep device: its markers' device asks
     auto* markersDev = XefgOutput() && gameIsSendingMarkers() ? _lastDev[SIMULATION_START].load() : nullptr;
     // In the split the XeFG branch of the Sleep hook stores no device (XeLL's or ours): the side's device has the report
-    auto* sideDev = XefgOutput() && Split() ? _sideDev : nullptr;
+    // Both a D3D and a Vulkan side can be registered for a moment across an Output change: the one set last has the report
+    const bool sideOnVulkan = XefgOutput() && Split() && _sideLastWasVk && _sideVkDev != nullptr;
+    auto* sideDev = XefgOutput() && Split() && !sideOnVulkan ? _sideDev : nullptr;
 
     if (auto sleepDev = sideDev != nullptr ? sideDev
                         : _lastSleepDev != nullptr
                             ? _lastSleepDev
                             : (_ownSleepDev != nullptr ? _ownSleepDev : markersDev);
-        sleepDev && o_NvAPI_D3D_GetLatency)
+        sleepDev && !sideOnVulkan && o_NvAPI_D3D_GetLatency)
     {
         // With XeFG, hkNvAPI_D3D_GetLatency answers from XeFG's XeLL through fakenvapi (the driver's report in the split)
         _timingEstimated = (XefgOutput() && !Split()) || fakenvapi::isUsingAsMainNvapi();
@@ -1533,6 +1580,12 @@ void ReflexHooks::setFPSLimit(float fps)
         _minimumIntervalUs = static_cast<uint32_t>(std::round(1'000'000 / fps));
 
     std::scoped_lock lock(_sleepModeMutex);
+
+    struct KeepBothSides
+    {
+        KeepBothSides() { _keepBothSides = true; }
+        ~KeepBothSides() { _keepBothSides = false; }
+    } keepBothSides;
 
     const auto side = CurrentSide();
 

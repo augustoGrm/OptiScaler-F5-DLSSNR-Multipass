@@ -911,9 +911,59 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
         LOG_INFO("Optical F5Low Vulkan: timelineSemaphore feature {}", what);
     }
 
+    // VK_AMD_anti_lag (added by VulkanSpoofing when the device offers it) does nothing until its antiLag feature is
+    // switched on too: vkAntiLagUpdateAMD needs it, and without it Anti-Lag Vk neither waited nor kept the frame cap
+    // (AMD tester, dxvk on the Vulkan bridge, XeFG with Anti-Lag 2 as the Output: the same frame rate under every cap).
+    // Where the game already chains the feature struct, the flag is set in it for the call and put back after; otherwise
+    // ours goes at the head of the chain.
+    VkPhysicalDeviceAntiLagFeaturesAMD antiLagFeature {};
+    VkBool32* antiLagBorrowedFlag = nullptr;
+
+    if (State::Instance().vkAntiLagSupported &&
+        DlssNr::VkExt::ListHas(localCreteInfo.ppEnabledExtensionNames, localCreteInfo.enabledExtensionCount,
+                               VK_AMD_ANTI_LAG_EXTENSION_NAME))
+    {
+        const char* what = nullptr;
+
+        for (auto* node = (VkBaseOutStructure*) localCreteInfo.pNext; node != nullptr && what == nullptr;
+             node = node->pNext)
+        {
+            if (node->sType != VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD)
+                continue;
+
+            auto* flag = &((VkPhysicalDeviceAntiLagFeaturesAMD*) node)->antiLag;
+
+            if (*flag)
+                what = "already on (the game's own)";
+            else if (!DlssNr::VkExt::IsWritable(flag))
+                what = "left off: the game's feature struct is read-only";
+            else
+            {
+                *flag = VK_TRUE;
+                antiLagBorrowedFlag = flag;
+                what = "switched on in the game's feature struct for the create call";
+            }
+        }
+
+        if (what == nullptr)
+        {
+            antiLagFeature.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ANTI_LAG_FEATURES_AMD;
+            antiLagFeature.antiLag = VK_TRUE;
+            antiLagFeature.pNext = (void*) localCreteInfo.pNext;
+            localCreteInfo.pNext = &antiLagFeature;
+            what = "switched on here";
+        }
+
+        LOG_INFO("Vulkan Anti-Lag: antiLag feature {}", what);
+    }
+
     auto result = o_vkCreateDevice(physicalDevice, &localCreteInfo, pAllocator, pDevice);
 
-    // As the call had it, before a borrowed flag is put back
+    if (antiLagBorrowedFlag != nullptr)
+        *antiLagBorrowedFlag = VK_FALSE;
+
+    // Whether the call had the timeline semaphore feature on (read from the create info, which is the game's own again
+    // now that the borrowed Anti-Lag flag above is put back)
     if (result == VK_SUCCESS && pDevice != nullptr && *pDevice != VK_NULL_HANDLE &&
         TimelineFeatureOn(localCreteInfo.pNext))
     {
@@ -1059,13 +1109,26 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     VkPresentInfoKHR localPresentInfo {};
     memcpy(&localPresentInfo, pPresentInfo, sizeof(VkPresentInfoKHR));
 
+    // The game's swapchain is on the bridge's hidden window: the menu and the frame limiter are the D3D12 swapchain's
+    const bool bridged = pPresentInfo->swapchainCount == 1 && VkPresentBridge::Active(pPresentInfo->pSwapchains[0]);
+
+    // dxvk with the bridge up: this frame's entry in the ledger the game's D3D11 Present fills (native/NativeLowLatency.h),
+    // taken before anything touches the frame: XeFG takes the frame's ID at its first tagged resource, which happens in
+    // NativeMotionVk::OnPresent below, and the ID has to be this frame's by then. The same call publishes the devices the
+    // game's Present may run the Reflex pair on.
+    const bool dxvkBridged = bridged && VkPresentBridge::DxvkThroughVulkan();
+    bool pairHere = true;
+
+    if (dxvkBridged)
+    {
+        pairHere = native::lowlatency::DxvkVulkanPresent(
+            presentDevice, static_cast<IUnknown*>(VkPresentBridge::Device()), VkPresentBridge::OutputGeneration());
+    }
+
     // Optical F5Low: the picture through NR before the menu is drawn over it. May replace the wait list.
     const auto motionStartMs = Util::MillisecondsNow();
     NativeMotionVk::OnPresent(queue, &localPresentInfo, presentDevice, presentPhysical);
     _presentTiming.Record(Stage::NativeMotion, Util::MillisecondsNow() - motionStartMs);
-
-    // The game's swapchain is on the bridge's hidden window: the menu and the frame limiter are the D3D12 swapchain's
-    const bool bridged = pPresentInfo->swapchainCount == 1 && VkPresentBridge::Active(pPresentInfo->pSwapchains[0]);
 
     // render menu if needed
     if (!bridged && !MenuOverlayVk::QueuePresent(queue, &localPresentInfo))
@@ -1093,11 +1156,26 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
         native::lowlatency::PresentTarget(true, bridged, presentDevice,
                                           bridged ? static_cast<IUnknown*>(VkPresentBridge::Device()) : nullptr,
                                           splitOnVulkan);
-    const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().usesDxvk || (bridged && VkPresentBridge::DxvkThroughVulkan())) &&
-                            lowLatencyTarget.device != nullptr;
+    // dxvk calls this present from its own thread, not the game's, so a Sleep here only paces dxvk and the game runs ahead
+    // until dxvk's frame latency limit stops it. By default (NativeLowLatencyDxvkGameThread) the game's own D3D11 Present
+    // runs the pair instead (wrapped/wrapped_swapchain.cpp), and says so in this frame's ledger entry: `pairHere` is false
+    // for those frames. It is this frame's own entry, not the current setting, that decides: a frame the game's Present
+    // already paired is never paired again here, and a frame it left to this present is never left unpaired.
+    // Unverified, to check in a game: with the pair at the game's Present, PRESENT_START/END (and Anti-Lag Vk's present
+    // stage call) no longer bracket the real vkQueuePresentKHR, which dxvk makes up to its frame latency later on its own
+    // thread, so the driver's Reflex report and the AMD pairing may read differently.
+    // Both sites only call the NVAPI entry points that take the device (NvAPI_D3D_* on the bridge's D3D12 device,
+    // NvAPI_Vulkan_SetLatencyMarker / Sleep on the VkDevice) and vkWaitSemaphores on the VkDevice's sleep semaphore.
+    // None of them takes a swapchain, and the Vulkan specification lists no externally synchronised parameter for
+    // vkWaitSemaphores, so none has to stay on dxvk's thread. The VK_NV_low_latency2 calls that do take the swapchain
+    // (vkLatencySleepNV, vkSetLatencyMarkerNV, externally synchronised in that extension) are not part of our pair.
+    const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().usesDxvk || dxvkBridged) &&
+                            lowLatencyTarget.device != nullptr && pairHere;
 
     const auto lowLatencyBegin = [&]
     {
+        native::lowlatency::DxvkSiteLock siteLock(dxvkBridged);
+
         if (lowLatencyTarget.api == native::lowlatency::Api::Vulkan)
             native::lowlatency::OnPresentBeginVulkan(presentDevice);
         else
@@ -1106,6 +1184,8 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     };
     const auto lowLatencyEnd = [&]
     {
+        native::lowlatency::DxvkSiteLock siteLock(dxvkBridged);
+
         if (lowLatencyTarget.api == native::lowlatency::Api::Vulkan)
             native::lowlatency::OnPresentEndVulkan(presentDevice);
         else

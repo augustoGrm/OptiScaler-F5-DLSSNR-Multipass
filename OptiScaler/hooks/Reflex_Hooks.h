@@ -76,11 +76,19 @@ class ReflexHooks
     // The side's sleep mode goes out with everything off to the device it was last set on: the Output went back to XeLL
     // (or Input Off, Force Disable), and the side must stop sleeping and limiting (_sleepModeMutex)
     static void releaseSide(Side previous);
+    // The side lives on one API at a time (the bridge's D3D12 device, or the game's VkDevice): a sleep mode going to one
+    // switches off what the other was left with, so a leftover cannot keep sleeping, limiting or answering the timings
+    // (_sleepModeMutex)
+    static void dropSideOnOtherApi(bool nowVulkan);
+    // setFPSLimit sends the side's sleep mode to its D3D and its Vulkan device in one call on purpose: no drop in between
+    inline static thread_local bool _keepBothSides = false;
     // The devices the side's last sleep mode went to (null: none), and the side that took it
     inline static IUnknown* _sideDev = nullptr;
     inline static HANDLE _sideVkDev = nullptr;
     inline static Side _sideOfDev = Side::XeLL;
     inline static Side _sideOfVkDev = Side::XeLL;
+    // Which of the two the side's sleep mode went to last: the one with the current report (updateTimingData)
+    inline static bool _sideLastWasVk = false;
 
     // The game's own Reflex calls versus OptiScaler's (ownSetSleepMode and friends, Optical F5Low's low latency): ours
     // go through the same wrappers, so they take the same routing, but they are not "the game sends markers".

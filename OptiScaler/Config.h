@@ -663,6 +663,11 @@ class Config
     // generation's Streamline Reflex on an Optical F5Low game. NVIDIA Reflex only: XeLL, Anti-Lag 2 and LatencyFlex
     // ignore it (XeLL: "Boost is not supported as of now").
     CustomOptional<bool> DlssNrNativeLowLatencyBoost { false };
+    // NativeLowLatencyDxvkGameThread: a D3D11 game on dxvk with the Vulkan present bridge runs Optical F5Low's low latency
+    // (markers and Sleep) at the game's own D3D11 Present, on the game's thread, instead of at dxvk's Vulkan present on
+    // dxvk's thread (native/NativeLowLatencyRule.h SleepSite). Read every present (no restart needed after a config
+    // reload). Only dxvk through the Vulkan bridge looks at it.
+    CustomOptional<bool> DlssNrNativeLowLatencyDxvkGameThread { true };
     // AutoExposureAdaptBrighterSeconds / AutoExposureAdaptDarkerSeconds are the menu's "Eye adaptation": how long
     // Automatic takes to follow a scene getting brighter / darker, as a time constant in seconds; 0 = at once. Faster to
     // brighter, as in Unreal and Unity HDRP. See shaders/dlssnr/DlssNr_ExposureAdapt.h.

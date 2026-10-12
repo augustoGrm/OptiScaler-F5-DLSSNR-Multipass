@@ -528,6 +528,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrNativeUpscaler.set_from_config(readBool("DlssNr", "NativeUpscaler"));
             DlssNrNativeFrameGenerationOnly.set_from_config(readBool("DlssNr", "NativeFrameGenerationOnly"));
             DlssNrNativeLowLatencyBoost.set_from_config(readBool("DlssNr", "NativeLowLatencyBoost"));
+            DlssNrNativeLowLatencyDxvkGameThread.set_from_config(readBool("DlssNr", "NativeLowLatencyDxvkGameThread"));
             DlssNrAutoExposureAdaptBrighterSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptBrighterSeconds"));
             DlssNrAutoExposureAdaptDarkerSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptDarkerSeconds"));
             DlssNrAutoExposureAdaptSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptSeconds"));
@@ -1596,6 +1597,8 @@ bool Config::SaveIni()
                  GetBoolValue(Instance()->DlssNrNativeFrameGenerationOnly.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeLowLatencyBoost",
                  GetBoolValue(Instance()->DlssNrNativeLowLatencyBoost.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "NativeLowLatencyDxvkGameThread",
+                 GetBoolValue(Instance()->DlssNrNativeLowLatencyDxvkGameThread.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoExposureAdaptBrighterSeconds",
                  GetFloatValue(Instance()->DlssNrAutoExposureAdaptBrighterSeconds.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoExposureAdaptDarkerSeconds",

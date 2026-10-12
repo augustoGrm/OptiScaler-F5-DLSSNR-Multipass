@@ -40,6 +40,60 @@ void OnPresentEnd(IUnknown* device, PresentSource source = PresentSource::SwapCh
 void OnPresentBeginVulkan(VkDevice device);
 void OnPresentEndVulkan(VkDevice device);
 
+// A D3D11 game on dxvk with the Vulkan present bridge presents twice a frame: the game's D3D11 Present on its own thread,
+// and dxvk's vkQueuePresentKHR on dxvk's. Each side notes its thread (cheap, a relaxed exchange; nothing is logged per
+// frame) and the one line saying whether the two are the same is logged when both are known, again if either changes.
+void NoteDxvkGamePresentThread();
+void NoteDxvkVulkanPresentThread();
+
+// Where the pair runs for that game (NativeLowLatencyRule.h SleepSite). The game's Present decides, once per frame, and
+// writes the decision into the frame's FrameLedger entry; dxvk's Vulkan present for that frame follows its own entry. So a
+// frame is paired exactly once at one site, also across a change of the setting or of XeFG's Output.
+//
+// hkvkQueuePresentKHR, every present of the bridged swapchain under dxvk, before anything else is done with the frame:
+// publishes the devices the game's Present may use (the bridge's D3D12 device and the VkDevice, as one unit), takes the
+// frame's entry, and hands XeFG the frame's ID (FrameIdForFrameGeneration). Returns true when the Vulkan present runs the
+// pair for this frame (the entry says so, or none was queued).
+bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12, uint32_t generation);
+
+// The game's Present with no bridge output up: what the ledger holds is for frames dxvk presents unbridged
+void DxvkBridgeDown();
+
+// What the game's Present began, to end it the same way
+struct DxvkGameScope
+{
+    bool began = false;    // the pair's Begin ran here
+    bool pushed = false;   // a ledger entry was pushed
+    uint64_t seq = 0;      // the entry's
+    Api api = Api::D3D;
+    IUnknown* device = nullptr; // a D3D device, or the VkDevice as a token (Api::Vulkan)
+};
+
+// The wrapped D3D11 swap chain's Present under dxvk through the Vulkan bridge, for the swap chain on the bridge's window
+// (the caller checked both): before the real Present, and after it returns with its result. `keyOn`: the ini key.
+// `window`: the bridge's window, a different one than last time starts the ledger over; `generation`: the bridge output's
+// (VkPresentBridge::OutputGeneration), a newer one does the same. The API is chosen here, from the
+// Output now (PresentTarget), never from the last frame's.
+DxvkGameScope OnDxvkGamePresentBegin(bool keyOn, HWND window, uint32_t generation);
+void OnDxvkGamePresentEnd(const DxvkGameScope& scope, HRESULT presentResult);
+
+// Held around each Begin/End call of either site while the bridge is up under dxvk. A frame is paired at one site, but
+// the pair's state (the frame ID, the sleep mode) is written for one thread, and two frames can overlap right after the
+// site changed: dxvk's thread still in the Vulkan site's pair of an older frame while the game's thread starts the next
+// one. The lock serialises those; in steady state only one side calls, so it costs nothing, and at a change the other
+// side may wait out one Sleep once. `take` false: no lock.
+class DxvkSiteLock
+{
+  public:
+    explicit DxvkSiteLock(bool take);
+    ~DxvkSiteLock();
+    DxvkSiteLock(const DxvkSiteLock&) = delete;
+    DxvkSiteLock& operator=(const DxvkSiteLock&) = delete;
+
+  private:
+    bool _held;
+};
+
 // The frame's first queue submit (D3D12) or first draw (D3D11): any thread, one relaxed load when we do not run.
 // `queue`: the D3D12 queue submitted to; only the game's queue counts. nullptr (D3D11) always counts.
 void OnFirstSubmit(const void* queue = nullptr);
