@@ -211,10 +211,26 @@ NvAPI_Status ReflexHooks::sideSetSleepMode(Side side, IUnknown* pDev, NV_SET_SLE
     _sideDev = pDev;
     _sideOfDev = side;
 
-    if (side == Side::AntiLag2)
-        return fakenvapi::companionSetSleepMode(pDev, params);
+    const auto result = side == Side::AntiLag2 ? fakenvapi::companionSetSleepMode(pDev, params)
+                                               : o_NvAPI_D3D_SetSleepMode(pDev, params);
 
-    return o_NvAPI_D3D_SetSleepMode(pDev, params);
+    // What the side was asked for, once per change: the frame cap it keeps is the interval
+    static NV_SET_SLEEP_MODE_PARAMS logged {};
+    static IUnknown* loggedDev = nullptr;
+    if (loggedDev != pDev || logged.bLowLatencyMode != params->bLowLatencyMode ||
+        logged.bLowLatencyBoost != params->bLowLatencyBoost || logged.minimumIntervalUs != params->minimumIntervalUs)
+    {
+        logged = *params;
+        loggedDev = pDev;
+        LOG_INFO("XeFG low latency: {} sleep mode on {:X}: low latency {}, boost {}, interval {} us ({}): {}",
+                 side == Side::AntiLag2 ? "Anti-Lag 2" : "NVIDIA Reflex", (uintptr_t) pDev, params->bLowLatencyMode != 0,
+                 params->bLowLatencyBoost != 0, params->minimumIntervalUs,
+                 params->minimumIntervalUs > 0 ? std::format("{:.1f} fps", 1e6 / params->minimumIntervalUs)
+                                               : std::string("no cap"),
+                 magic_enum::enum_name(result));
+    }
+
+    return result;
 }
 
 NvAPI_Status ReflexHooks::sideSleep(Side side, IUnknown* pDev)
