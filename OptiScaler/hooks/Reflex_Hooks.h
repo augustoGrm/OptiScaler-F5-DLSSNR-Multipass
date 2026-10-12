@@ -57,6 +57,29 @@ class ReflexHooks
     static NvAPI_Status forwardVkSleepMode(ID3D12Device* xellDevice, HANDLE vkDevice,
                                            const NV_VULKAN_SET_SLEEP_MODE_PARAMS& game);
 
+    // XeFG with Reflex or Anti-Lag 2 as the low latency Output (native/XefgReflexRule.h): XeLL (nvapi_calls, XeFG's
+    // context) gets every call with its low latency off and never sleeps, and "the other side" gets the real ones: the
+    // driver's Reflex (o_NvAPI_*), or fakenvapi's Anti-Lag 2 / Anti-Lag Vk context beside XeLL's (fakenvapi::companion*).
+    // The side that lowers latency is passed in (native::lowlatency::XefgSide), asked once per call.
+    using Side = native::xefgreflex::XefgLatency;
+    static NvAPI_Status sideSetSleepMode(Side side, IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* params);
+    static NvAPI_Status sideSleep(Side side, IUnknown* pDev);
+    static NvAPI_Status sideSetLatencyMarker(Side side, IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* params);
+    static NvAPI_Status sideGetLatency(Side side, IUnknown* pDev, NV_LATENCY_RESULT_PARAMS* params);
+    static NvAPI_Status sideSetAsyncFrameMarker(Side side, ID3D12CommandQueue* queue,
+                                                NV_ASYNC_FRAME_MARKER_PARAMS* params);
+    static NvAPI_Status sideSetSleepModeVk(Side side, HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* params);
+    static NvAPI_Status sideSetLatencyMarkerVk(Side side, HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* params);
+    static NvAPI_Status sideGetLatencyVk(Side side, HANDLE vkDevice, NV_VULKAN_LATENCY_RESULT_PARAMS* params);
+    // The side's sleep mode goes out with everything off to the device it was last set on: the Output went back to XeLL
+    // (or Input Off, Force Disable), and the side must stop sleeping and limiting (_sleepModeMutex)
+    static void releaseSide(Side previous);
+    // The devices the side's last sleep mode went to (null: none), and the side that took it
+    inline static IUnknown* _sideDev = nullptr;
+    inline static HANDLE _sideVkDev = nullptr;
+    inline static Side _sideOfDev = Side::XeLL;
+    inline static Side _sideOfVkDev = Side::XeLL;
+
     // The game's own Reflex calls versus OptiScaler's (ownSetSleepMode and friends, Optical F5Low's low latency): ours
     // go through the same wrappers, so they take the same routing, but they are not "the game sends markers".
     inline static thread_local bool _ownCall = false;

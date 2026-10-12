@@ -399,12 +399,17 @@ struct Target
 // private D3D12 device: its low latency goes through the D3D surface on that device (so XeFG's XeLL routing reaches it,
 // as for a D3D11 game's hidden present) and no Vulkan NVAPI call is made. Without the bridge a Vulkan game's own
 // VkDevice goes through the Vulkan surface. A D3D game's present is always D3D.
-inline Target PresentTarget(bool vulkanGame, bool bridged, const void* gameDevice, const void* bridgeDevice12)
+//
+// `splitOnVulkan`: XeFG has Reflex or Anti-Lag 2 as its Output (XefgLatency). XeLL on the bridge's device only keeps XeFG
+// running then, so the game's VkDevice and the Vulkan surface (the driver's Reflex, or Anti-Lag Vk) are where latency is
+// lowered.
+inline Target PresentTarget(bool vulkanGame, bool bridged, const void* gameDevice, const void* bridgeDevice12,
+                            bool splitOnVulkan = false)
 {
     if (!vulkanGame)
         return { Api::D3D, gameDevice };
 
-    if (bridged)
+    if (bridged && !splitOnVulkan)
         return { Api::D3D, bridgeDevice12 };
 
     return { Api::Vulkan, gameDevice };

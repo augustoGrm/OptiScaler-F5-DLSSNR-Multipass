@@ -21,6 +21,9 @@ class LowLatency
     // Once set, it will be used for all init attempts
     LowLatencyMode forced_low_latency_tech = LowLatencyMode::None;
 
+    // A context that runs Anti-Lag 2 (D3D) or Anti-Lag Vk (Vulkan) and nothing else (use_only): its tech could not start
+    bool forced_init_failed = false;
+
     void update_effective_fg_state();
     void update_enabled_override();
 
@@ -48,6 +51,10 @@ class LowLatency
                 current_tech->set_fg_type(interpolated, frame_id);
         }
     }
+    // For a second context next to the main one (fakenvapi::companion*): it runs `tech` (AntiLag2 on D3D, AntiLagVk on
+    // Vulkan) and nothing else, never falling back to another, and does not try again once the tech could not start. The
+    // tech is made by the first call that brings a device. A tech it already has is let go.
+    void use_only(LowLatencyMode tech);
     bool get_low_latency_tech_context(void** low_latency_tech_context, LowLatencyMode* low_latency_tech);
     bool set_low_latency_tech_mode(IUnknown* device, LowLatencyMode low_latency_tech);
 

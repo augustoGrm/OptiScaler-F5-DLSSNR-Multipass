@@ -772,6 +772,32 @@ bool GameLowLatencyBlocked()
                                 FrameGenerationNeedsReflex());
 }
 
+OutputInputs CurrentOutputInputs()
+{
+    // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
+    static const bool amdGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::AMD;
+
+    OutputInputs in;
+    in.fakenvapiMain = fakenvapi::isUsingAsMainNvapi();
+    in.xefgOutput = State::Instance().activeFgOutput == FGOutput::XeFG;
+    in.amdGpu = amdGpu;
+    in.xefgLatency = Config::Instance()->FGXeFGLowLatencyOutput.value_or_default();
+    return in;
+}
+
+XefgLatency XefgSide()
+{
+    return xefgreflex::EffectiveXefgLatency(CurrentOutputInputs(), GameLowLatencyBlocked(), ForceReflexDisabled());
+}
+
+uint32_t XefgShownPerRendered()
+{
+    if (!XefgGenerating() || State::Instance().currentFG == nullptr)
+        return 1;
+
+    return 1 + State::Instance().currentFG->GetInterpolatedFrameCount();
+}
+
 Status GetStatus()
 {
     Status status;

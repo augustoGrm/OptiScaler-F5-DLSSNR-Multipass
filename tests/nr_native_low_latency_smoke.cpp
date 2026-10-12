@@ -1060,6 +1060,20 @@ int main()
         xellCap.xefgGenerating = false;
         CHECK(PlanCap(xellCap).owner == CapOwner::Limiter);
 
+        // A bridged Vulkan game with the split: our calls go to the game's VkDevice through the Vulkan surface (the driver's
+        // Reflex, or Anti-Lag Vk, lives there); XeLL on the bridge's device gets the markers through the Vulkan hooks
+        {
+            int vkDevice = 0, bridgeDevice12 = 0, d3dDevice = 0;
+            auto t = PresentTarget(true, true, &vkDevice, &bridgeDevice12, true);
+            CHECK(t.api == Api::Vulkan && t.device == &vkDevice);
+            t = PresentTarget(true, true, &vkDevice, &bridgeDevice12, false);
+            CHECK(t.api == Api::D3D && t.device == &bridgeDevice12);
+            t = PresentTarget(true, false, &vkDevice, &bridgeDevice12, true);
+            CHECK(t.api == Api::Vulkan && t.device == &vkDevice);
+            t = PresentTarget(false, true, &d3dDevice, &bridgeDevice12, true);
+            CHECK(t.api == Api::D3D && t.device == &d3dDevice);
+        }
+
         // The game's own Reflex cap: per rendered frame
         CHECK(CapPerRenderedFrame(120.0f, 2) == 60.0f);
         CHECK(CapPerRenderedFrame(120.0f, 4) == 30.0f);

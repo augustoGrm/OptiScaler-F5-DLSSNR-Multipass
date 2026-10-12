@@ -52,4 +52,19 @@ class fakenvapi
 
     static bool isUsingAsMainNvapi();
     static void setUsingAsMainNvapi(bool usingAsMain);
+
+    // XeFG with Anti-Lag 2 as the low latency Output (native/XefgReflexRule.h): the main context is XeLL's (XeFG forces
+    // it), and Anti-Lag 2 (D3D) or Anti-Lag Vk (Vulkan) runs in a second context of its own beside it, one tech each,
+    // made by the first call that brings a device. A call returns an error when that tech cannot start (no AMD card,
+    // no driver support): the caller then treats its mode as refused. Any thread.
+    static NvAPI_Status companionSetSleepMode(IUnknown* device, NV_SET_SLEEP_MODE_PARAMS* params);
+    static NvAPI_Status companionSleep(IUnknown* device);
+    static NvAPI_Status companionSetLatencyMarker(IUnknown* device, NV_LATENCY_MARKER_PARAMS* params);
+    static NvAPI_Status companionSetAsyncFrameMarker(ID3D12CommandQueue* queue, NV_ASYNC_FRAME_MARKER_PARAMS* params);
+    static NvAPI_Status companionGetLatency(IUnknown* device, NV_LATENCY_RESULT_PARAMS* params);
+    static NvAPI_Status companionSetSleepMode(HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* params);
+    static NvAPI_Status companionSetLatencyMarker(HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* params);
+    static NvAPI_Status companionGetLatency(HANDLE vkDevice, NV_VULKAN_LATENCY_RESULT_PARAMS* params);
+    // The device is gone: its second context lets its tech go (a new device makes it again)
+    static void companionDeviceGone(const void* device);
 };

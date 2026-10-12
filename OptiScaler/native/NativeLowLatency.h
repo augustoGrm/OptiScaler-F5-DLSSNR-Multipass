@@ -71,6 +71,19 @@ struct Status
 // limiter keeps the frame cap. Any thread, cheap.
 bool GameLowLatencyBlocked();
 
+// With XeFG as the frame generation output: what lowers latency right now (NativeLowLatencyRule.h XefgLatency). XeLL
+// unless the player chose Reflex or Anti-Lag 2 ([XeFG] LowLatencyOutput) and the setup has it, and neither the Framerate
+// page's Input Off nor fakenvapi's Force Disable is on (native/XefgReflexRule.h EffectiveXefgLatency). Reflex or
+// Anti-Lag 2 means "split": XeLL stays in place for XeFG with its low latency off, and the other side gets the calls
+// (hooks/Reflex_Hooks.cpp). Any thread, cheap.
+XefgLatency XefgSide();
+
+// What the Output combo works from: the setup and the choice made
+OutputInputs CurrentOutputInputs();
+
+// Frames XeFG shows per frame the game renders: 1 plus the ones it generates, 1 while it generates none. Any thread.
+uint32_t XefgShownPerRendered();
+
 // The menu's line. Cheap; GetLatency is asked at most twice a second.
 Status GetStatus();
 

@@ -21,8 +21,118 @@ void fakenvapi::init(bool onlyContext)
         return;
 }
 
+// The second context XeFG's Anti-Lag 2 output runs in (fakenvapi.h companion*): one for D3D, one for Vulkan, each its own
+// LowLatency with one tech. Its calls hold the mutex: the game's present thread and ours do not overlap on it, but a
+// device going away must not take the tech from under a call.
+namespace
+{
+struct Companion
+{
+    std::mutex mutex;
+    LowLatency* context = nullptr;
+    const void* device = nullptr;
+    LowLatencyMode tech = LowLatencyMode::None;
+};
+
+Companion g_companionD3D { {}, nullptr, nullptr, LowLatencyMode::AntiLag2 };
+Companion g_companionVk { {}, nullptr, nullptr, LowLatencyMode::AntiLagVk };
+
+// The context for `device`: made on the first call, its tech made again for a new device. `fn` runs under the lock.
+template <typename Fn> NvAPI_Status WithCompanion(Companion& companion, const void* device, Fn&& fn)
+{
+    std::scoped_lock lock(companion.mutex);
+
+    if (companion.context == nullptr)
+    {
+        companion.context = new LowLatency();
+        companion.context->use_only(companion.tech);
+        companion.device = device;
+    }
+    else if (companion.device != device)
+    {
+        companion.context->use_only(companion.tech);
+        companion.device = device;
+    }
+
+    return fn(*companion.context);
+}
+
+void DropCompanion(Companion& companion)
+{
+    std::scoped_lock lock(companion.mutex);
+
+    delete companion.context;
+    companion.context = nullptr;
+    companion.device = nullptr;
+}
+} // namespace
+
+NvAPI_Status fakenvapi::companionSetSleepMode(IUnknown* device, NV_SET_SLEEP_MODE_PARAMS* params)
+{
+    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.SetSleepMode(device, params); });
+}
+
+NvAPI_Status fakenvapi::companionSleep(IUnknown* device)
+{
+    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.Sleep(device); });
+}
+
+NvAPI_Status fakenvapi::companionSetLatencyMarker(IUnknown* device, NV_LATENCY_MARKER_PARAMS* params)
+{
+    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.SetLatencyMarker(device, params); });
+}
+
+NvAPI_Status fakenvapi::companionSetAsyncFrameMarker(ID3D12CommandQueue* queue, NV_ASYNC_FRAME_MARKER_PARAMS* params)
+{
+    std::scoped_lock lock(g_companionD3D.mutex);
+
+    // It cannot start its tech from a queue: only once a device call has
+    if (g_companionD3D.context == nullptr)
+        return NVAPI_ERROR;
+
+    return g_companionD3D.context->SetAsyncFrameMarker(queue, params);
+}
+
+NvAPI_Status fakenvapi::companionGetLatency(IUnknown* device, NV_LATENCY_RESULT_PARAMS* params)
+{
+    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.GetLatency(device, params); });
+}
+
+NvAPI_Status fakenvapi::companionSetSleepMode(HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* params)
+{
+    return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.SetSleepMode(vkDevice, params); });
+}
+
+NvAPI_Status fakenvapi::companionSetLatencyMarker(HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* params)
+{
+    return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.SetLatencyMarker(vkDevice, params); });
+}
+
+NvAPI_Status fakenvapi::companionGetLatency(HANDLE vkDevice, NV_VULKAN_LATENCY_RESULT_PARAMS* params)
+{
+    return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.GetLatency(vkDevice, params); });
+}
+
+void fakenvapi::companionDeviceGone(const void* device)
+{
+    for (Companion* companion : { &g_companionD3D, &g_companionVk })
+    {
+        std::scoped_lock lock(companion->mutex);
+
+        // Its tech goes with the device; the next call with a new one makes it again
+        if (companion->context != nullptr && companion->device == device)
+        {
+            companion->context->use_only(companion->tech);
+            companion->device = nullptr;
+        }
+    }
+}
+
 void fakenvapi::deinit()
 {
+    DropCompanion(g_companionD3D);
+    DropCompanion(g_companionVk);
+
     LowLatencyCtx::get()->deinit_current_tech();
     LowLatencyCtx::shutdown();
 }

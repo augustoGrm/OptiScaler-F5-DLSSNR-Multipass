@@ -12,6 +12,25 @@ bool LowLatency::update_low_latency_tech(HANDLE vkDevice)
 {
     if (!currently_active_tech.load())
     {
+        // The second context (fakenvapi::companion*): Anti-Lag Vk next to XeFG's XeLL, no other tech and no second try
+        if (forced_low_latency_tech == LowLatencyMode::AntiLagVk)
+        {
+            if (forced_init_failed)
+                return false;
+
+            auto new_tech = std::make_shared<AntiLagVk>();
+            if (new_tech->init(nullptr))
+            {
+                LOG_INFO("LowLatency algo: AntiLag Vulkan (next to XeFG's XeLL)");
+                currently_active_tech.store(std::move(new_tech));
+                return true;
+            }
+
+            forced_init_failed = true;
+            LOG_WARN("AntiLag Vulkan could not start next to XeFG's XeLL, no low latency from it");
+            return false;
+        }
+
         if (!Config::Instance()->FN_ForceLatencyFlex.value_or_default())
         {
             auto new_tech = std::make_shared<AntiLagVk>();
@@ -31,6 +50,10 @@ bool LowLatency::update_low_latency_tech(HANDLE vkDevice)
             return true;
         }
     }
+
+    // The second context keeps its tech
+    if (forced_low_latency_tech == LowLatencyMode::AntiLagVk)
+        return true;
 
     static bool last_force_latencyflex = Config::Instance()->FN_ForceLatencyFlex.value_or_default();
     bool force_latencyflex = Config::Instance()->FN_ForceLatencyFlex.value_or_default();
