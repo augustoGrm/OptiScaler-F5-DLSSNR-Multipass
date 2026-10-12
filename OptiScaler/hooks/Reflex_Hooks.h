@@ -56,6 +56,8 @@ class ReflexHooks
     static void noteMarker(uint64_t frameId, uint32_t markerType, IUnknown* device);
     static NvAPI_Status forwardVkSleepMode(ID3D12Device* xellDevice, HANDLE vkDevice,
                                            const NV_VULKAN_SET_SLEEP_MODE_PARAMS& game);
+    // A D3D sleep mode with XeFG as the output: where it goes is native/XefgReflexRule.h RouteFor
+    static NvAPI_Status xefgSetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* params, uint32_t capIntervalUs);
 
     // XeFG with Reflex or Anti-Lag 2 as the low latency Output (native/XefgReflexRule.h): XeLL (nvapi_calls, XeFG's
     // context) gets every call with its low latency off and never sleeps, and "the other side" gets the real ones: the
