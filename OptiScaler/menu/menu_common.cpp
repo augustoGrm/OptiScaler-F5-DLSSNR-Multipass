@@ -1657,10 +1657,10 @@ void MenuCommon::HandleMenuShortcuts(RenderMenuContext& ctx)
             if (state.activeFgInput != FGInput::NoFG && state.activeFgOutput != FGOutput::NoFG &&
                 (state.currentFGSwapchain != nullptr || state.activeFgInput == FGInput::NvngxFG))
             {
-                config->FGEnabled = !config->FGEnabled.value_or_default();
-                LOG_DEBUG("FG toggle key pressed, setting FGEnabled to {}", config->FGEnabled.value_or_default());
+                config->FGEnabled = !config->IsFGEnabled();
+                LOG_DEBUG("FG toggle key pressed, setting FGEnabled to {}", config->IsFGEnabled());
 
-                if (config->FGEnabled.value_or_default())
+                if (config->IsFGEnabled())
                     state.fgChanged = true;
             }
         }
@@ -4314,6 +4314,61 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     }
 }
 
+// FG Input DLSSG: Frame Generation on/off and its multiplier can follow the game's own DLSS FG setting
+// (Enabled unset, framegen/FGFollowGameRule.h). Nothing is drawn where it can't (other inputs, Streamline 1).
+void MenuCommon::RenderFGFollowGame()
+{
+    if (!Config::FGCanFollowGame())
+        return;
+
+    auto* config = Config::Instance();
+    auto& state = State::Instance();
+
+    bool follow = config->FGFollowsGame();
+    if (ImGui::Checkbox("Follow game's DLSS FG", &follow))
+    {
+        if (follow)
+        {
+            config->FGEnabled.reset();
+        }
+        else
+        {
+            // Keep what runs now; from here the Active box below decides
+            config->FGEnabled = config->IsFGEnabled();
+        }
+
+        LOG_INFO("Frame Generation {} the game's DLSS FG setting", follow ? "follows" : "no longer follows");
+
+        if (config->IsFGEnabled())
+            state.fgChanged = true;
+    }
+    ShowHelpMarker("On: Frame Generation and its multiplier follow the game's own DLSS Frame Generation\n"
+                   "setting. Off: set them here.\n"
+                   "The multiplier is capped at what the selected FG output supports.\n"
+                   "ini: [FrameGen] Enabled=auto follows the game. Save Settings to keep it.");
+
+    if (!follow)
+        return;
+
+    ImGui::SameLine(0.0f, 16.0f);
+
+    const auto game = state.dlssgInputGameRequest.load();
+    if (!game.enabled)
+    {
+        ImGui::TextDisabled("Game: FG off");
+        return;
+    }
+
+    const int outputMax = state.currentFG != nullptr ? state.currentFG->GetMaxInterpolationCount() : 0;
+    const int running = config->FGInterpolationCount(1, outputMax);
+
+    if (running == game.count)
+        ImGui::TextColored(toneMapColor(ImVec4(0.f, 1.f, 0.25f, 1.f)), "Game: FG on %dx", game.count + 1);
+    else
+        ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "Game: FG on %dx, running %dx (output max)",
+                           game.count + 1, running + 1);
+}
+
 void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
@@ -4368,15 +4423,19 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 }
             }
 
-            bool fgActive = config->FGEnabled.value_or_default();
+            RenderFGFollowGame();
+
+            ImGui::BeginDisabled(config->FGFollowsGame());
+            bool fgActive = config->IsFGEnabled();
             if (ImGui::Checkbox("Active##2", &fgActive))
             {
                 config->FGEnabled = fgActive;
                 LOG_DEBUG("FGEnabled set FGEnabled: {}", fgActive);
 
-                if (config->FGEnabled.value_or_default())
+                if (config->IsFGEnabled())
                     state.fgChanged = true;
             }
+            ImGui::EndDisabled();
             ShowHelpMarker("Enable Frame Generation");
 
             bool fgAsync = config->FGAsync.value_or_default();
@@ -4384,7 +4443,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             {
                 config->FGAsync = fgAsync;
 
-                if (config->FGEnabled.value_or_default())
+                if (config->IsFGEnabled())
                 {
                     state.fgChanged = true;
                     state.scChanged = true;
@@ -4400,7 +4459,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             {
                 config->FGDebugView = fgDV;
 
-                if (config->FGEnabled.value_or_default())
+                if (config->IsFGEnabled())
                 {
                     state.fgChanged = true;
                     LOG_DEBUG("DebugView set FGChanged");
@@ -4597,6 +4656,11 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         if (!correctMVs || state.realExclusiveFullscreen)
         {
             config->FGEnabled.reset();
+
+            // Unset now follows the game's DLSS FG with FG Input DLSSG, which could turn it back on: off for this run
+            if (Config::FGCanFollowGame())
+                config->FGEnabled.set_volatile_value(false);
+
             config->FGXeFGDebugView.reset();
         }
 
@@ -4645,15 +4709,22 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
         ImGui::BeginDisabled(!correctMVs || cantActivate);
 
-        bool fgActive = config->FGEnabled.value_or_default();
+        RenderFGFollowGame();
+
+        // While following, the game's DLSS FG setting drives these two
+        const bool followsGame = config->FGFollowsGame();
+
+        ImGui::BeginDisabled(followsGame);
+        bool fgActive = config->IsFGEnabled();
         if (ImGui::Checkbox("Active##3", &fgActive))
         {
             config->FGEnabled = fgActive;
             LOG_DEBUG("Enabled set FGEnabled: {}", fgActive);
 
-            if (config->FGEnabled.value_or_default())
+            if (config->IsFGEnabled())
                 state.fgChanged = true;
         }
+        ImGui::EndDisabled();
 
         ShowHelpMarker("Enable Frame Generation");
 
@@ -4662,6 +4733,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         if (maxInterpolationCount > 1)
         {
             ImGui::SameLine(0.0f, 16.0f);
+            ImGui::BeginDisabled(followsGame);
 
             auto currentSet = fgOutput->GetInterpolatedFrameCount() - 1;
 
@@ -4687,6 +4759,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             }
 
             ImGui::PopItemWidth();
+            ImGui::EndDisabled();
 
             ShowHelpMarker("Set XeFG interpolation count");
         }
@@ -4809,15 +4882,22 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.f, 0.f, 1.f)), "OFF");
         }
 
-        bool fgActive = config->FGEnabled.value_or_default();
+        RenderFGFollowGame();
+
+        // While following, the game's DLSS FG setting drives these two
+        const bool followsGame = config->FGFollowsGame();
+
+        ImGui::BeginDisabled(followsGame);
+        bool fgActive = config->IsFGEnabled();
         if (ImGui::Checkbox("Active##4", &fgActive))
         {
             config->FGEnabled = fgActive;
             LOG_DEBUG("Enabled set FGEnabled: {}", fgActive);
 
-            if (config->FGEnabled.value_or_default())
+            if (config->IsFGEnabled())
                 state.fgChanged = true;
         }
+        ImGui::EndDisabled();
 
         ShowHelpMarker("Enable Frame Generation");
 
@@ -4827,7 +4907,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         {
             ImGui::SameLine(0.0f, 16.0f);
 
-            ImGui::BeginDisabled(config->FGDLSSGForceDMFG.value_or_default());
+            ImGui::BeginDisabled(config->FGDLSSGForceDMFG.value_or_default() || followsGame);
 
             auto currentSet = fgOutput->GetInterpolatedFrameCount() - 1;
 
@@ -5438,7 +5518,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 {
                     config->FGAsync = fgAsync;
 
-                    if (config->FGEnabled.value_or_default())
+                    if (config->IsFGEnabled())
                     {
                         state.fgChanged = true;
                         LOG_DEBUG("Async set FGChanged");
@@ -5452,7 +5532,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 {
                     config->FGDebugView = fgDV;
 
-                    if (config->FGEnabled.value_or_default())
+                    if (config->IsFGEnabled())
                     {
                         state.fgChanged = true;
                         LOG_DEBUG("DebugView set FGChanged");

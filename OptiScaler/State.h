@@ -4,6 +4,7 @@
 #include "misc/Quirks.h"
 #include "misc/SkipSpoof.h"
 #include "framegen/IFGFeature_Dx12.h"
+#include "framegen/FGFollowGameRule.h"
 #include <inputs/FG/Streamline_Inputs_Dx12.h>
 #include <inputs/FG/Streamline_Inputs_Sl1_Dx12.h>
 
@@ -276,6 +277,9 @@ class State
     bool dlssgGameDMFGSupported = false;
     sl::DLSSGMode dlssgLastSetMode = sl::DLSSGMode::eOff;
     int dlssgDetectedInterpolationCount = 0;
+    // The game's own DLSS FG choice (slDLSSGSetOptions) with FG Input DLSSG; OptiScaler's FG follows it while
+    // Enabled is auto (Config::IsFGEnabled). Written on the game's thread, read on render and present threads.
+    std::atomic<FGFollowGame::Request> dlssgInputGameRequest {};
     UINT64 dlssgLastEvaluateFrame = UINT64_MAX; // frameCount at the last DLSS-G evaluate passed through
     // That evaluate generated frames: its DLSSG.MultiFrameCount was above zero, or it had none (builds without multi
     // frame generation leave it out).

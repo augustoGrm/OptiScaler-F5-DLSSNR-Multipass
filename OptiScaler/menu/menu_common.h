@@ -238,6 +238,7 @@ class MenuCommon
     static void RenderActiveUpscalerSettings(RenderMenuContext& ctx);
     static void RenderFrameGenerationSelection(RenderMenuContext& ctx);
     static void RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx);
+    static void RenderFGFollowGame();
     static void RenderFsrCommonSettings(RenderMenuContext& ctx);
     static void RenderFramerateLowLatency(RenderMenuContext& ctx);
     static void RenderFramerateSettings(RenderMenuContext& ctx);

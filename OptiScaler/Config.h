@@ -1115,7 +1115,9 @@ class Config
     CustomOptional<FrameTimeSource> FTInput { FrameTimeSource::Input };
 
     // OptiFG
-    CustomOptional<bool> FGEnabled { false };
+    // Unset (auto) follows the game's DLSS FG with FG Input DLSSG: read it through IsFGEnabled(). SoftDefault so a
+    // false set in the menu is saved and stops the following.
+    CustomOptional<bool, SoftDefault> FGEnabled { false };
     CustomOptional<bool> FGUseMutexForSwapchain { true };
     CustomOptional<bool> FGMakeMVCopy { true };
     CustomOptional<bool> FGMakeDepthCopy { true };
@@ -1255,6 +1257,13 @@ class Config
     bool SaveXeFG();
 
     void CheckUpscalerFiles();
+
+    // FG on/off and frame count. With FG Input DLSSG (Streamline 2+) and Enabled unset they follow the game's DLSS
+    // Frame Generation setting (framegen/FGFollowGameRule.h); otherwise FGEnabled and the output's menu count.
+    static bool FGCanFollowGame();
+    bool FGFollowsGame() const;
+    bool IsFGEnabled() const;
+    int FGInterpolationCount(int menuCount, int outputMax) const;
 
     std::vector<std::string> GetConfigLog();
 
