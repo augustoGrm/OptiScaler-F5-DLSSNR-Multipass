@@ -330,7 +330,6 @@ class State
 
     // Vulkan stuff
     bool vulkanCreatingSC = false;
-    bool creatingD3DDevice = false;
     bool vulkanSkipHooks = false;
     VkInstance VulkanInstance = nullptr;
 
@@ -574,16 +573,18 @@ class ScopedVulkanCreatingSC
     ~ScopedVulkanCreatingSC() { State::Instance().vulkanCreatingSC = previousState; }
 };
 
+// Per thread: dxvk and vkd3d-proton make their Vulkan instance and device on the thread that creates the D3D device.
+// One process-wide flag was left set when two threads' creations overlapped and finished out of order (the later one
+// restored the earlier one's "set"), and the game's own Vulkan device then went without OptiScaler's extensions.
 class ScopedCreatingD3DDevice
 {
   private:
-    bool previousState;
+    inline static thread_local int depth = 0;
 
   public:
-    ScopedCreatingD3DDevice()
-    {
-        previousState = State::Instance().creatingD3DDevice;
-        State::Instance().creatingD3DDevice = true;
-    }
-    ~ScopedCreatingD3DDevice() { State::Instance().creatingD3DDevice = previousState; }
+    ScopedCreatingD3DDevice() { ++depth; }
+    ~ScopedCreatingD3DDevice() { --depth; }
+
+    // This thread is inside a D3D device creation
+    static bool Active() { return depth > 0; }
 };
