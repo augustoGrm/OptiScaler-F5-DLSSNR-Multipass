@@ -1672,6 +1672,44 @@ static void RenderExposureSection(Config* config, float menuResScale)
     ImGui::SeparatorText("NR Exposure");
     ImGui::TextDisabled("HDR input settings. Adjust the brightness range presented to NR.");
 
+    // Whether these controls act on the frame NR last ran on (shaders/dlssnr/DlssNr_ExposureState.h). They pick the
+    // white point that divides a linear HDR frame; a tone-mapped frame reaches the model as it is, and a display HDR
+    // frame (HDR10, scRGB, forced PQ) is put at its paper white instead. Shown greyed rather than hidden, so the values
+    // stay visible and come back as they were on a linear HDR frame. Highlight guard, below, acts in every case.
+    const auto encodingStatus = DlssNr::ReadColourEncodingStatus();
+    const auto exposureState = encodingStatus.seen ? encodingStatus.exposureState : DlssNrExposureState::State::LinearHdr;
+    const bool exposureActs = exposureState == DlssNrExposureState::State::LinearHdr;
+
+    if (exposureState == DlssNrExposureState::State::ToneMapped)
+    {
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: the game's picture is already tone mapped.");
+        HelpMarker("NR gets this picture as it is, with no exposure applied, so the settings below change nothing. "
+                   "Colour encoding (NR Output) says how the picture was read.");
+    }
+    else if (exposureState == DlssNrExposureState::State::DisplayPinned)
+    {
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: HDR screen picture. NR's white is the paper "
+                                                            "white below.");
+        HelpMarker("An HDR10 or scRGB picture is already in screen brightness, so NR takes its white from the game's "
+                   "HDR paper white, not from an exposure. The greyed settings change nothing.");
+
+        // The one brightness control that acts here (DlssNr_ExposureState.h PinnedWhitePoint).
+        float nits = DlssNrExposureState::PaperWhiteNits(config->DlssNrDisplayPaperWhiteNits.value_or_default());
+
+        if (ImGui::SliderFloat("Game's HDR paper white", &nits, DlssNrExposureState::kMinPaperWhiteNits,
+                               DlssNrExposureState::kMaxPaperWhiteNits, "%.0f nits", ImGuiSliderFlags_Logarithmic))
+            config->DlssNrDisplayPaperWhiteNits = DlssNrExposureState::PaperWhiteNits(nits);
+
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset##displaypaperwhite"))
+            config->DlssNrDisplayPaperWhiteNits = DlssNrExposureState::kReferenceWhiteNits;
+
+        HelpMarker("Set it to the game's own HDR paper white (or UI brightness) setting. Higher: darker input to NR. "
+                   "Default 203 nits, the HDR reference white.");
+    }
+
+    ImGui::BeginDisabled(!exposureActs);
+
     {
     // Logarithmic, because the useful range is not linear. A quarter to 240: the low end because
     // a frame the game already tone mapped wants roughly 1, the high end because there is no
@@ -1777,6 +1815,12 @@ static void RenderExposureSection(Config* config, float menuResScale)
                 }
                 else
                     ImGui::TextDisabled("Calculating automatic exposure...");
+            }
+            else if (source == 2 && vk)
+            {
+                // The scan watches D3D12 resource creation only; the Vulkan path resolves source 2 to Paper white.
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f),
+                                   "Scanned exposure is DirectX 12 only. Using Paper white.");
             }
             else if (source == 2)
             {
@@ -2149,9 +2193,11 @@ static void RenderExposureSection(Config* config, float menuResScale)
         if (ImGui::SmallButton("Reset##paperwhite"))
             config->DlssNrWhitePointScale = 1.0f;
 
-    HelpMarker("Brightness reference for NR's input. Higher: darker input. Lower: brighter input. Change it if NR "
-               "loses detail or shifts colours.");
+    HelpMarker("Brightness reference for NR's input (linear HDR pictures). Higher: darker input. Lower: brighter "
+               "input. Change it if NR loses detail or shifts colours.");
     }
+
+    ImGui::EndDisabled();
 
     // Highlight guard, directly under the white point / trim -- it bounds the model's edit and
     // belongs with the exposure controls it works alongside.
@@ -3140,7 +3186,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
     }
 
     // How the game's colour is decoded (DlssNr_ColourEncoding.h). Auto trusts the game; a forced choice is applied
-    // even when the format looks wrong for it, and the line under the combo says so.
+    // even when the format looks unusual for it, and the line under the combo says so -- except Linear HDR on a format
+    // that cannot hold it, which is refused (read as Tone-mapped sRGB), also said under the combo.
     {
         static const char* encodingNames[] = { "Auto", "Linear HDR", "Tone-mapped sRGB", "Tone-mapped gamma 2.2",
                                                "PQ (HDR10)" };
@@ -3154,7 +3201,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
             LOG_INFO("DLSS-NR colour encoding set to {}", encodingNames[encoding]);
         }
         HelpMarker("How NR reads the game's colour. Auto: trust the game (default). Pick another only if the picture "
-                   "looks washed out, too dark or banded.");
+                   "looks washed out, too dark or banded. Linear HDR needs a float buffer; on an 8/10-bit one it is "
+                   "ignored.");
 
         const auto status = DlssNr::ReadColourEncodingStatus();
         // The line and the warning are wrapped and the warning comes and goes with the detected format: a fixed slot.

@@ -349,7 +349,7 @@ void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue
         screenPq ? Screen::Pq : screenScrgb ? Screen::Scrgb : Screen::Sdr,
         desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT,
         desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || desc.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
-    DlssNr::ReportColourEncoding(screenChoice.choice, DiagFormatName(desc.Format), "finished picture");
+    DlssNr::ReportColourEncoding(screenChoice.choice, DiagFormatName(desc.Format), "finished picture", true);
     if (!screenChoice.supported)
     {
         Late::Cancel();
@@ -457,8 +457,13 @@ void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue
         frame.InputEncoding = screenChoice.shaderConversion; // gamma 2.2 re-encoded as sRGB by the shared pass
         frame.ColourEncoding = (uint32_t) screenChoice.choice.encoding;
         frame.ColourEncodingForced = !screenChoice.choice.automatic;
-        // Absolute display encodings: 203-nit reference white, in 80-nit scRGB units.
-        frame.WhitePointOverride = (pq || scrgb) ? 203.0f / 80.0f : 0.0f;
+        // Absolute display encodings: white at the game's HDR paper white (203 nits by default), in 80-nit scRGB units
+        // (the PQ conversion above writes scRGB too).
+        frame.WhitePointOverride =
+            (pq || scrgb) ? DlssNrExposureState::PinnedWhitePoint(
+                                Config::Instance()->DlssNrDisplayPaperWhiteNits.value_or_default(),
+                                DlssNrExposureState::kNitsPerScrgbUnit)
+                          : 0.0f;
         frame.Reset |= Late::reset;
         frame.SubmissionEpoch = epoch;
         if (slot.depth) Barrier(cmd, slot.depth.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -598,7 +603,7 @@ bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd,
         // copies take the picture's own format.
         desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || desc.Format == DXGI_FORMAT_R10G10B10A2_UNORM ||
             desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM);
-    DlssNr::ReportColourEncoding(screenChoice.choice, DiagFormatName(desc.Format), "native input");
+    DlssNr::ReportColourEncoding(screenChoice.choice, DiagFormatName(desc.Format), "native input", true);
     if (!screenChoice.supported)
     {
         Late::Say("This screen colour format is not supported.");
@@ -622,7 +627,10 @@ bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd,
     frame.InputEncoding = screenChoice.shaderConversion;
     frame.ColourEncoding = (uint32_t) screenChoice.choice.encoding;
     frame.ColourEncodingForced = !screenChoice.choice.automatic;
-    frame.WhitePointOverride = scrgb ? 203.0f / 80.0f : 0.0f;
+    frame.WhitePointOverride =
+        scrgb ? DlssNrExposureState::PinnedWhitePoint(Config::Instance()->DlssNrDisplayPaperWhiteNits.value_or_default(),
+                                                      DlssNrExposureState::kNitsPerScrgbUnit)
+              : 0.0f;
     frame.Reset = reset || Late::reset;
     frame.OutputWidth = (unsigned) desc.Width;
     frame.OutputHeight = desc.Height;

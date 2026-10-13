@@ -95,9 +95,11 @@ class DlssNr_LutVk
     void ReleaseLutImage();
 
     // Grades `sourceView` (in `sourceLayout`) into `targetView` (GENERAL, RGBA16F) and records the barrier that makes
-    // the result readable by the next compute dispatch. `constants` is copied into the next ring slot.
+    // the result readable by the next compute dispatch. `constants` is copied into the next ring slot. `exposureView`
+    // is the live 1x1 exposure the encode reads, when its constants say it is used (VK_NULL_HANDLE: none bound).
     bool Dispatch(VkCommandBuffer cmd, VkImageView sourceView, VkImageLayout sourceLayout, VkImageView targetView,
-                  const DlssNrLutConstants& constants);
+                  const DlssNrLutConstants& constants, VkImageView exposureView = VK_NULL_HANDLE,
+                  VkImageLayout exposureLayout = VK_IMAGE_LAYOUT_GENERAL);
 
     // Frees everything. The device must be idle.
     void Destroy();

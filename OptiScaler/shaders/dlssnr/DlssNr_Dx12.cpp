@@ -1598,23 +1598,16 @@ void InvalidateExposureMeter()
     g_nr.meterFrames = 0;
 }
 
-// Turns what the meter saw into the divisor the encode uses, or falls back to the slider.
-//
-// `cut` says the exposure may jump rather than drift, and it is the difference between this working
-// and not. GTA V's character switch pulls the camera up through the sky: a linear HDR buffer's sky is
-// tens of times brighter than the ground, the proxy clips to flat white, and the frame blows out until
-// the camera comes back down. Easing across that at two percent a frame takes three and a half
-// seconds, which is longer than the transition -- so a meter that only eases would lag through the
-// whole thing and fix nothing.
-//
-// So a cut snaps and a drift eases. Walking out of a cave is a drift; a camera cut is not, and
-// pretending otherwise to avoid pumping just moves the failure somewhere more visible.
+// Turns what the meter saw into the divisor the encode uses, or falls back to the slider. Nothing here
+// eases: the game's exposure is taken as it comes, and Automatic's easing is eye adaptation's, on the
+// GPU (DlssNr_ExposureAdapt.h), with a snap on the game's own cut.
 float ResolveWhitePoint(const Config& cfg, bool isHdrBuffer)
 {
     const float slider = cfg.DlssNrWhitePointScale.value_or_default();
 
     // A frame the game already tone mapped is display-referred: white is at 1 by definition and there
-    // is nothing to measure. The slider stays available as a manual exposure on that path.
+    // is nothing to measure. The encode passes such a frame through with no white point at all
+    // (dlssnr.hlsl's passthrough); the slider's value only scales the debug views there (DebugScale).
     if (!isHdrBuffer)
         return slider;
 
@@ -1912,12 +1905,14 @@ void ApplyColourEncoding(DlssNrFrameInfo& frame, uint32_t setting, bool gameSays
     frame.InputEncoding = DlssNrColourEncoding::ShaderConversion(choice.encoding);
     frame.ColourEncoding = (uint32_t) choice.encoding;
     frame.ColourEncodingForced = !choice.automatic;
-    // Forced PQ is display light: the decode put its reference white at 1.0, and that is the white point, not the
+    // Forced PQ is display light: its white is the game's HDR paper white (the decode puts 203 nits at 1.0), not the
     // game's exposure (which describes the scene) or Automatic's meter.
     if (choice.encoding == DlssNrColourEncoding::Encoding::Pq)
-        frame.WhitePointOverride = 1.0f;
+        frame.WhitePointOverride = DlssNrExposureState::PinnedWhitePoint(
+            Config::Instance()->DlssNrDisplayPaperWhiteNits.value_or_default(),
+            DlssNrExposureState::kNitsPerPqDecodedUnit);
     if (report)
-        DlssNr::ReportColourEncoding(choice, DiagFormatName(format), "");
+        DlssNr::ReportColourEncoding(choice, DiagFormatName(format), "", false);
 }
 
 ID3D12Resource* GetResource(NVSDK_NGX_Parameter* params, const char* a, const char* b)
@@ -2246,7 +2241,8 @@ bool DlssNr_Dx12::LutPipelineReady()
     if (_lutPipelineState != nullptr || _lutPipelineFailed || !_init)
         return _lutPipelineState != nullptr;
 
-    // Its own root signature: t0 input, t1 the LUT as a 3D texture, u0 output, b0 constants, plus a static
+    // Its own root signature: t0 input, t1 the LUT as a 3D texture, t2 the encode's live exposure (dlssnr_lut.hlsl
+    // recomputes the white point from it as the encode does), u0 output, b0 constants, plus a static
     // linear-clamp sampler at s0 (the same filter/address choice as this class's own sampler, just not that
     // root signature: this is the first pass here to sample a 3D texture, and folding it into the shared
     // table would mean touching every other Dispatch* call site's stand-in array for a slot only this
@@ -2262,7 +2258,7 @@ bool DlssNr_Dx12::LutPipelineReady()
     sampler.ShaderVisibility = D3D12_SHADER_VISIBILITY_ALL;
 
     CD3DX12_DESCRIPTOR_RANGE1 ranges[3] = {
-        CD3DX12_DESCRIPTOR_RANGE1(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 2, 0), // t0, t1
+        CD3DX12_DESCRIPTOR_RANGE1(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 3, 0), // t0, t1, t2
         CD3DX12_DESCRIPTOR_RANGE1(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 1, 0), // u0
         CD3DX12_DESCRIPTOR_RANGE1(D3D12_DESCRIPTOR_RANGE_TYPE_CBV, 1, 0), // b0
     };
@@ -2301,7 +2297,7 @@ bool DlssNr_Dx12::LutPipelineReady()
 
     for (uint32_t i = 0; i < kLutHeapCount; ++i)
     {
-        if (!_lutHeaps[i].Initialize(_device, 2, 1, 1)) // 2 SRV (t0, t1), 1 UAV (u0), 1 CBV (b0)
+        if (!_lutHeaps[i].Initialize(_device, 3, 1, 1)) // 3 SRV (t0, t1, t2), 1 UAV (u0), 1 CBV (b0)
         {
             _lutPipelineFailed = true;
             LOG_WARN("DLSS-NR: the LUT pass's descriptor heaps could not be built; LutFile is ignored");
@@ -2433,7 +2429,8 @@ bool DlssNr_Dx12::EnsureLutTexture(ID3D12GraphicsCommandList* InCmdList)
 
 bool DlssNr_Dx12::DispatchLut(ID3D12GraphicsCommandList* InCmdList, ID3D12Resource* InSource, ID3D12Resource* OutTarget,
                               unsigned int Width, unsigned int Height, float Strength, uint32_t InputEncoding,
-                              bool ColourIsLinearHdr, float Trim, const std::string& LutPath)
+                              bool ColourIsLinearHdr, const DlssNrConstants& White, ID3D12Resource* ExposureTex,
+                              const std::string& LutPath)
 {
     DlssNr_LutEnsureParsed(&_lutState, LutPath);
 
@@ -2457,6 +2454,8 @@ bool DlssNr_Dx12::DispatchLut(ID3D12GraphicsCommandList* InCmdList, ID3D12Resour
 
     CreateShaderResourceView(_device, InSource, heap.GetSrvCPU(0));
     CreateShaderResourceView(_device, _lutTexture, heap.GetSrvCPU(1));
+    // The source stands in when there is no live exposure; the constants then say not to read it.
+    CreateShaderResourceView(_device, ExposureTex != nullptr ? ExposureTex : InSource, heap.GetSrvCPU(2));
     CreateUnorderedAccessView(_device, OutTarget, heap.GetUavCPU(0), 0);
 
     DlssNrLutConstants constants {};
@@ -2472,7 +2471,9 @@ bool DlssNr_Dx12::DispatchLut(ID3D12GraphicsCommandList* InCmdList, ID3D12Resour
     constants.LutSize = (uint32_t) _lutState.lut.size;
     constants.InputEncoding = InputEncoding;
     constants.ColourIsLinearHdr = ColourIsLinearHdr ? 1u : 0u;
-    constants.Trim = Trim;
+    CopyLiveWhitePoint(constants, White);
+    if (ExposureTex == nullptr)
+        constants.UseGameExposure = constants.UseExposureWhitePoint = 0u;
 
     if (!CreateConstantsBuffer(_device, _lutConstantBuffers[slot], constants, heap.GetCbvCPU(0)))
     {
@@ -3778,8 +3779,85 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         ConsumeMeterReadback();
     }
 
+    // Automatic follows the game's own exposure when that is on (DlssNr_GameDefaults.h: a known unexposed game or the
+    // user's choice), once the calibration has locked and while the game is still supplying its exposure this frame.
+    // See DlssNr_FollowGame.h.
+    g_nr.followingGame = usingAutoExposure && frame.ExposureTexture != nullptr && DlssNr::FollowGameOn(cfg) &&
+                         DlssNrFollowGame::Instance().Locked() && g_nr.autoPairGameExposure > 1e-8f;
+    const float exposureBaseScale = g_nr.followingGame ? DlssNrFollowGame::Instance().Scale() : 1.0f;
+
+    // "Tune for this scene" (DlssNr_ExposureCalibrate_Dx12.inl): before the white point is resolved, so a run's
+    // pinned white point (CalibrationWhitePoint) reaches the encode and resolve below. While no run is on and the menu
+    // is not looking, only a timestamp.
+    if (CalibrationWanted())
+        CalibrationBeginFrame(cfg, device, width, height,
+                              CalibrationSituation(cfg, usingAutoExposure, isHdrBuffer, frame.FinishedPicture,
+                                                   frame.ExposureTexture != nullptr,
+                                                   DlssNrColourEncoding::ShaderConverts(frame.InputEncoding)),
+                              CalibrationBase(cfg));
+    else
+        CalibrationIdleFrame();
+
+    g_nr.gamePreExposure = frame.PreExposure;
+
+    float whitePoint = frame.WhitePointOverride > 0.0f ? frame.WhitePointOverride : ResolveWhitePoint(cfg, isHdrBuffer);
+
+    // While Tune for this scene runs, the white point is pinned on the CPU (the base frozen at its start times the
+    // step's Trim) and the shader is not asked to recompute it from the live exposure, so the steps differ only by the
+    // Trim. The sweep aborts if the live base drifts.
+    const bool calibrationPinned = CalibrationWhitePoint() > 0.0f;
+
+    if (calibrationPinned)
+        whitePoint = CalibrationWhitePoint();
+
+    // Zero-latency exposure (D3D12, source 1): when the game hands us a live exposure texture, the
+    // white point is recomputed in-shader every frame from it (ExposurePreMul / exposure) instead of
+    // the 3-4 frame CPU meter readback. whitePoint above still rides along in gWhitePoint as the
+    // fallback the shader uses if the live sample is missing or absurd. Bound at t4 (InPrevEdit) below.
+    ID3D12Resource* exposureTex = nullptr;
+    uint32_t useGameExposure = 0;
+    float exposurePreMul = 0.0f;
+
+    // Only with the game's-setting scale: the shader recomputes PreExposure / exposure, and Native look's base is 1
+    // whatever the exposure (DlssNr_GameScale.h), so there the host value, 1 x the Trim, is the white point. Binding the
+    // texture under Native look made the shader put the game's exposure back (NBA 2K27: ~0.4 EV; ai-os HDR audit HC15).
+    if (cfg.DlssNrWhitePointSource.value_or_default() == 1 && frame.ExposureTexture != nullptr &&
+        frame.WhitePointOverride <= 0.0f &&
+        cfg.DlssNrGameExposureScale.value_or_default() != DlssNrGameScale::kAsIs)
+    {
+        exposureTex = (ID3D12Resource*) frame.ExposureTexture;
+        useGameExposure = 1;
+        // The Trim no longer rides in here. It goes to the shader in the trim fields, so anchors can
+        // move it with the live base white point.
+        exposurePreMul = g_nr.gamePreExposure;
+    }
+    else if (usingAutoExposure)
+    {
+        // The automatic exposure texture takes the same t4 slot. It does not set UseGameExposure:
+        // that flag means the game's own texture, and UseExposureWhitePoint says this one. Following the game, the
+        // game's texture is bound in its place and ExposureBaseScale carries the calibration.
+        exposureTex = g_nr.followingGame ? (ID3D12Resource*) frame.ExposureTexture : g_nr.autoExposure;
+    }
+
+    // Tune for this scene pins the white point for Game exposure too: not recomputed from the game's live texture.
+    if (calibrationPinned)
+        useGameExposure = 0;
+
+    // The encode's, the resolve's and the LUT pass's live white point fields, one rule for all three: the shader
+    // recomputes the white point from exposureTex where these say so, else uses the host's whitePoint.
+    const auto fillLiveWhitePoint = [&](DlssNrConstants& params)
+    {
+        params.WhitePoint = whitePoint;
+        params.UseGameExposure = useGameExposure;
+        params.ExposurePreMul = exposurePreMul;
+        params.UseExposureWhitePoint = usingAutoExposure && !calibrationPinned ? 1u : 0u;
+        params.ExposureBaseScale = exposureBaseScale;
+        FillExposureConstants(params, cfg, usingAutoExposure ? 3u : 1u, frame.PreExposure);
+    };
+
     // LUT-apply epic (dlssnr-lut-apply), Story 2: grade `target` through a
-    // loaded .cube file before the model sees it. Deliberately placed AFTER the crop above and the
+    // loaded .cube file before the model sees it. After the white point is resolved above (it grades for that
+    // white), and deliberately AFTER the crop and the
     // exposure measurement above that, not right after g_gpuTime->Start where Story 2 originally put
     // it -- that measured the LUT's own graded output as if it were the clean upscaler frame, repeating
     // (from a different angle) the exact mistake the Automatic-exposure meter's own comment above warns
@@ -3815,15 +3893,17 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                 TransitionTarget(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
 
                 const float lutStrength = std::clamp(cfg.DlssNrLutStrength.value_or_default(), 0.0f, 1.0f);
-                // The divisor the encode below will use, so a linear HDR frame lands in the LUT's 0-1 domain where the
+                // The white point the encode below uses, so a linear HDR frame lands in the LUT's 0-1 domain where the
                 // model's own proxy puts it. Not AutoTrimEffective: that is only the Trim on top of the base white point,
                 // and a game whose frame is scaled by its exposure (RDR2: paper white ~1700x) would otherwise be seen
-                // as ~1000x over white -- the whole picture pinned at the top of the curve.
-                const float lutWhitePoint =
-                    frame.WhitePointOverride > 0.0f ? frame.WhitePointOverride : ResolveWhitePoint(cfg, isHdrBuffer);
+                // as ~1000x over white -- the whole picture pinned at the top of the curve. With the encode's live
+                // fields and texture, so where the encode recomputes it this frame the LUT does too (it used to take
+                // the host value, 3-4 frames old: ai-os HDR audit HC13).
+                DlssNrConstants lutWhite {};
+                fillLiveWhitePoint(lutWhite);
                 const bool graded =
                     DispatchLut(cmdList, target, g_nr.lutScratch, width, height, lutStrength, frame.InputEncoding,
-                                isHdrBuffer, lutWhitePoint, lutPath);
+                                isHdrBuffer, lutWhite, exposureTex, lutPath);
 
                 DlssNr::ReportLutStatus(true, _lutState.loadedPath, _lutState.lut.size, _lutState.failed,
                                         _lutState.error, _lutState.attemptedPath, lutStrength);
@@ -3859,25 +3939,6 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             DlssNr::ReportLutStatus(false, "", 0, false, "", "", cfg.DlssNrLutStrength.value_or_default());
         }
     }
-
-    // Automatic follows the game's own exposure when that is on (DlssNr_GameDefaults.h: a known unexposed game or the
-    // user's choice), once the calibration has locked and while the game is still supplying its exposure this frame.
-    // See DlssNr_FollowGame.h.
-    g_nr.followingGame = usingAutoExposure && frame.ExposureTexture != nullptr && DlssNr::FollowGameOn(cfg) &&
-                         DlssNrFollowGame::Instance().Locked() && g_nr.autoPairGameExposure > 1e-8f;
-    const float exposureBaseScale = g_nr.followingGame ? DlssNrFollowGame::Instance().Scale() : 1.0f;
-
-    // "Tune for this scene" (DlssNr_ExposureCalibrate_Dx12.inl): before the white point is resolved, so a run's
-    // pinned white point (CalibrationWhitePoint) reaches the encode and resolve below. While no run is on and the menu
-    // is not looking, only a timestamp.
-    if (CalibrationWanted())
-        CalibrationBeginFrame(cfg, device, width, height,
-                              CalibrationSituation(cfg, usingAutoExposure, isHdrBuffer, frame.FinishedPicture,
-                                                   frame.ExposureTexture != nullptr,
-                                                   DlssNrColourEncoding::ShaderConverts(frame.InputEncoding)),
-                              CalibrationBase(cfg));
-    else
-        CalibrationIdleFrame();
 
     // Frame statistics diagnostic (ini [DlssNr] FrameStats). Every 120th frame: average every tile of the
     // frame NR was handed into the meter grid and queue it for readback, then courier the game's exposure
@@ -3928,49 +3989,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         g_nr.diagExposureSupplied = frame.ExposureTexture != nullptr;
     }
 
-    g_nr.gamePreExposure = frame.PreExposure;
-
-    float whitePoint = frame.WhitePointOverride > 0.0f ? frame.WhitePointOverride : ResolveWhitePoint(cfg, isHdrBuffer);
-
-    // While Tune for this scene runs, the white point is pinned on the CPU (the base frozen at its start times the
-    // step's Trim) and the shader is not asked to recompute it from the live exposure, so the steps differ only by the
-    // Trim. The sweep aborts if the live base drifts.
-    const bool calibrationPinned = CalibrationWhitePoint() > 0.0f;
-
-    if (calibrationPinned)
-        whitePoint = CalibrationWhitePoint();
-
     if (g_nr.diagQueuedAt != 0 && g_frames >= g_nr.diagQueuedAt + 8)
         ReportFrameStats(whitePoint, whitePointSource);
-
-    // Zero-latency exposure (D3D12, source 1): when the game hands us a live exposure texture, the
-    // white point is recomputed in-shader every frame from it (ExposurePreMul / exposure) instead of
-    // the 3-4 frame CPU meter readback. whitePoint above still rides along in gWhitePoint as the
-    // fallback the shader uses if the live sample is missing or absurd. Bound at t4 (InPrevEdit) below.
-    ID3D12Resource* exposureTex = nullptr;
-    uint32_t useGameExposure = 0;
-    float exposurePreMul = 0.0f;
-
-    if (cfg.DlssNrWhitePointSource.value_or_default() == 1 && frame.ExposureTexture != nullptr &&
-        frame.WhitePointOverride <= 0.0f)
-    {
-        exposureTex = (ID3D12Resource*) frame.ExposureTexture;
-        useGameExposure = 1;
-        // The Trim no longer rides in here. It goes to the shader in the trim fields, so anchors can
-        // move it with the live base white point.
-        exposurePreMul = g_nr.gamePreExposure;
-    }
-    else if (usingAutoExposure)
-    {
-        // The automatic exposure texture takes the same t4 slot. It does not set UseGameExposure:
-        // that flag means the game's own texture, and UseExposureWhitePoint says this one. Following the game, the
-        // game's texture is bound in its place and ExposureBaseScale carries the calibration.
-        exposureTex = g_nr.followingGame ? (ID3D12Resource*) frame.ExposureTexture : g_nr.autoExposure;
-    }
-
-    // Tune for this scene pins the white point for Game exposure too: not recomputed from the game's live texture.
-    if (calibrationPinned)
-        useGameExposure = 0;
 
     // Frame hold. Freeze the encode's input so a live setting change re-renders the same frame. This
     // is self-contained on purpose: it copies the output aside on hold-on and copies it BACK over the
@@ -4045,12 +4065,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // the resolve adds the model's edit back at full scale.
     encodeParams.Passthrough = isHdrBuffer ? 0u : 1u;
     encodeParams.InputEncoding = frame.InputEncoding;
-    encodeParams.WhitePoint = whitePoint;
-    encodeParams.UseGameExposure = useGameExposure;
-    encodeParams.ExposurePreMul = exposurePreMul;
-    encodeParams.UseExposureWhitePoint = usingAutoExposure && !calibrationPinned ? 1u : 0u;
-    encodeParams.ExposureBaseScale = exposureBaseScale;
-    FillExposureConstants(encodeParams, cfg, usingAutoExposure ? 3u : 1u, frame.PreExposure);
+    fillLiveWhitePoint(encodeParams);
     encodeParams.ReversibleMode = cfg.DlssNrReversibleMode.value_or_default();
     // Linear stores the light as it is, and the proxy takes the colour's own format: in 8 or 10 bits that leaves too
     // few codes in the shadows, so they band (DlssNr_ProxyCurve.h). Said once per format per session; the curve runs.
@@ -4792,12 +4807,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         // or PQ Colour encoding is the exception: the frame is converted on the way in and back on the way out.)
         DlssNrConstants resolveParams {};
         resolveParams.Mode = DlssNrMode_Resolve;
-        resolveParams.WhitePoint = whitePoint;
-        resolveParams.UseGameExposure = useGameExposure;
-        resolveParams.ExposurePreMul = exposurePreMul;
-        resolveParams.UseExposureWhitePoint = usingAutoExposure && !calibrationPinned ? 1u : 0u;
-        resolveParams.ExposureBaseScale = exposureBaseScale;
-        FillExposureConstants(resolveParams, cfg, usingAutoExposure ? 3u : 1u, frame.PreExposure);
+        fillLiveWhitePoint(resolveParams);
         resolveParams.Width = width;
         resolveParams.Height = height;
         resolveParams.TransferStrength = cfg.DlssNrTransferStrength.value_or_default();

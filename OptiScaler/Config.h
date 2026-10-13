@@ -378,6 +378,11 @@ class Config
     // 1 linear HDR, 2 tone-mapped sRGB, 3 tone-mapped gamma 2.2, 4 PQ. Values are DlssNr_ColourEncoding.h's.
     CustomOptional<uint32_t> DlssNrColourEncoding { 0 };
 
+    // The game's HDR paper white in nits, the white NR is given on a display-referred HDR picture (forced PQ, or Finished
+    // Picture on an HDR10 / scRGB screen), where no exposure applies. 203 = ITU-R BT.2408's reference white, the value
+    // used before this existed. Bounded 80..1000 at the point of use (DlssNr_ExposureState.h).
+    CustomOptional<float> DlssNrDisplayPaperWhiteNits { 203.0f };
+
     // LUT-apply epic (dlssnr-lut-apply), Story 2: a .cube file graded onto the
     // NR input image before the model ever sees it. Empty (the default) is the feature not existing -- no
     // parse, no GPU texture, no dispatch. Accepts a path outside OptiScaler\LUTs too.
@@ -784,8 +789,10 @@ class Config
 
 
 
-    // Multiplies the (auto or manual) white point before the encode: what the model considers "white".
-    // Higher means highlights sit lower on the curve and the model treats them as less extreme.
+    // The manual white point (WhitePointSource 0, and the fallback while Game exposure has no reading yet): what the
+    // model considers "white" on a linear HDR frame. Higher means highlights sit lower on the curve and the model
+    // treats them as less extreme. Not applied to a tone-mapped frame (passed through as it is) or to display HDR
+    // (white at the paper white); there it only scales the debug views.
     CustomOptional<float> DlssNrWhitePointScale { 1.0f };
 
 

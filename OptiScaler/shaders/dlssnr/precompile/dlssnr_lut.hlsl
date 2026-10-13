@@ -8,7 +8,8 @@
 // DispatchExposureAdapt/DispatchDetailReuse, with its own PSO and heap ring, not the shared one).
 //
 // t0 the pass's input (the real NGX colour resource, before Encode ever sees it), t1 the LUT as a 3D
-// texture, s0 a static linear-clamp sampler, u0 the graded output, b0 these constants.
+// texture, t2 the live 1x1 exposure the encode reads (a stand-in when there is none), s0 a static linear-clamp
+// sampler, u0 the graded output, b0 these constants.
 //
 // Decode is deliberately NOT dlssnr.hlsl's DecodeGameColour/EncodeGameColour: those land in the model's own
 // working domain (tone-mapped sRGB OR linear light, depending on gInputEncoding there), not in the
@@ -18,7 +19,7 @@
 // gamma 2.2 (and passthrough/tone-mapped-sRGB) frame is already there with nothing to convert, a PQ frame
 // is tone-mapped through the same ITU-R BT.2408 reference-white convention Finished Picture/
 // PqToReferenceLinear use before the sRGB encode, and open-ended scene-linear light (colourIsLinearHdr) is
-// divided by trim and compressed with Neutwo -- the same reversible proxy curve the model's own encode
+// divided by the encode's white point and compressed with Neutwo -- the same reversible proxy curve the model's own encode
 // pass uses, not a new one invented for this pass -- before the sRGB encode.
 //
 // Fixed (Review Pass, 2026-10-04): this used to fall through scene-linear HDR to the gamma-2.2 branch
@@ -46,9 +47,34 @@ cbuffer Params : register(b0)
     // tell them apart (DlssNrColourEncoding::ShaderConversion collapses both to the same value). This
     // carries the real signal (frame.ColourIsLinearHdr) so the two are no longer treated as one.
     uint colourIsLinearHdr;
-    // What to divide linear light by before compressing it, matching DLSS-NR's own default exposure trim
-    // (DlssNr::AutoTrimEffective) when nothing more specific has been measured yet for this frame.
-    float trim;
+    // What to divide linear light (and PQ's decoded light) by before compressing it: the white point the encode uses
+    // this frame, as the host resolved it. Named as dlssnr.hlsl names it, for dlssnr_whitepoint.hlsli. When the
+    // encode recomputes its white point from a live exposure texture, so does this pass (the fields below, copied from
+    // the encode's constants), so the LUT grades for exactly the white the model is shown, not a value 3-4 frames old.
+    float gWhitePoint;
+    float gPreExposure;
+    uint  gUseGameExposure;
+    uint  gUseExposureWhitePoint;
+    float gExposureBaseScale;
+    float gExposureTrim;
+    uint  gExposureTrimPreview;
+    uint  gExposureTrimAnchorCount;
+    float gExposureTrimAnchorExposure0;
+    float gExposureTrimAnchorTrim0;
+    float gExposureTrimAnchorExposure1;
+    float gExposureTrimAnchorTrim1;
+    float gExposureTrimAnchorExposure2;
+    float gExposureTrimAnchorTrim2;
+    float gExposureTrimAnchorExposure3;
+    float gExposureTrimAnchorTrim3;
+    float gExposureTrimAnchorExposure4;
+    float gExposureTrimAnchorTrim4;
+    float gExposureTrimAnchorExposure5;
+    float gExposureTrimAnchorTrim5;
+    float gExposureTrimAnchorExposure6;
+    float gExposureTrimAnchorTrim6;
+    float gExposureTrimAnchorExposure7;
+    float gExposureTrimAnchorTrim7;
 };
 
 #ifdef VK_MODE
@@ -67,25 +93,35 @@ SamplerState gLutSampler : register(s0);
 [[vk::binding(4, 0)]] [[vk::image_format("rgba16f")]]
 #endif
 RWTexture2D<float4> gTarget : register(u0);
+#ifdef VK_MODE
+[[vk::binding(5, 0)]]
+#endif
+Texture2D<float4> gExposureLive : register(t2);
+
+// The live exposure texel, for dlssnr_whitepoint.hlsli; read only when gUseGameExposure or gUseExposureWhitePoint is set.
+float ExposureSample() { return gExposureLive.Load(int3(0, 0, 0)).r; }
+
+#include "dlssnr_whitepoint.hlsli"
 
 static const uint kInputGamma22 = 3u;
 static const uint kInputPq = 4u;
 static const float kScrgbPerReferenceWhite = 203.0 / 80.0; // mirrors dlssnr.hlsl's own constant of the same name
 
 // PQ -> this pass's reference-linear light, exactly as dlssnr.hlsl's PqToReferenceLinear reads it (ST 2084,
-// BT.2020 -> BT.709, ITU-R BT.2408 reference white at 1.0), then LinearToSrgb lands it in display 0-1.
-float3 DecodeToDisplay01(float3 c)
+// BT.2020 -> BT.709, ITU-R BT.2408 reference white at 1.0), put on the game's HDR paper white (the encode's white point
+// for forced PQ, 1.0 at the default 203 nits), then LinearToSrgb lands it in display 0-1.
+float3 DecodeToDisplay01(float3 c, float white)
 {
     if (inputEncoding == kInputPq)
-        return LinearToSrgb(mul(kBt2020To709, DecodePQ(c)) / kScrgbPerReferenceWhite);
+        return LinearToSrgb(mul(kBt2020To709, DecodePQ(c)) / kScrgbPerReferenceWhite / white);
 
     if (colourIsLinearHdr != 0)
     {
-        // Open-ended scene-linear light: divide by trim (the same default the model's own exposure uses
-        // absent a better measurement) to land roughly near 1.0, then Neutwo compresses [0, inf) into
-        // [0, 1) with no hard clip -- the same reversible proxy curve dlssnr_replace_curve.hlsli's own
-        // Encode pass uses, so a bright highlight fades toward white instead of being clipped flat there.
-        return NeutwoEncode(max(c, 0.0) / max(trim, 1e-4));
+        // Open-ended scene-linear light: divide by the encode's white point to land near 1.0, then Neutwo
+        // compresses [0, inf) into [0, 1) with no hard clip -- the same reversible proxy curve
+        // dlssnr_replace_curve.hlsli's own Encode pass uses, so a bright highlight fades toward white instead of
+        // being clipped flat there.
+        return NeutwoEncode(max(c, 0.0) / white);
     }
 
     // Gamma 2.2, passthrough and tone-mapped-sRGB frames are already display-referred: a .cube LUT is
@@ -93,13 +129,13 @@ float3 DecodeToDisplay01(float3 c)
     return saturate(c);
 }
 
-float3 EncodeFromDisplay01(float3 c)
+float3 EncodeFromDisplay01(float3 c, float white)
 {
     if (inputEncoding == kInputPq)
-        return EncodePQ(mul(kBt709To2020, SrgbToLinear(c) * kScrgbPerReferenceWhite));
+        return EncodePQ(mul(kBt709To2020, SrgbToLinear(c) * white * kScrgbPerReferenceWhite));
 
     if (colourIsLinearHdr != 0)
-        return NeutwoDecode(saturate(c)) * max(trim, 1e-4);
+        return NeutwoDecode(saturate(c)) * white;
 
     return c;
 }
@@ -110,8 +146,12 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     if (id.x >= width || id.y >= height)
         return;
 
+    // Uniform across the dispatch: the host's value, or recomputed from the live exposure as the encode does.
+    // WhitePoint() floors the host value at 1e-4, as this pass's own max(trim, 1e-4) did.
+    const float white = WhitePoint();
+
     const float4 raw = gSource.Load(int3(id.xy, 0));
-    const float3 display = DecodeToDisplay01(raw.rgb);
+    const float3 display = DecodeToDisplay01(raw.rgb, white);
 
     const float3 domainMin = float3(domainMinR, domainMinG, domainMinB);
     const float3 domainMax = float3(domainMaxR, domainMaxG, domainMaxB);
@@ -126,5 +166,5 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     const float3 graded = gLut.SampleLevel(gLutSampler, texCoord, 0).rgb;
 
     const float3 result = lerp(display, graded, saturate(strength));
-    gTarget[id.xy] = float4(EncodeFromDisplay01(result), raw.a);
+    gTarget[id.xy] = float4(EncodeFromDisplay01(result, white), raw.a);
 }
