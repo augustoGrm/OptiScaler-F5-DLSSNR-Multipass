@@ -323,6 +323,10 @@ struct Settings
     bool depth = true;
     int smooth = -1;  // the flow's smoothing radius (-1: its default)
     int surface = -1; // the guide's enlarging by surface (-1: its default)
+    int uncover = -1; // uncovered background given its surface's motion (-1: its default)
+    float reach = -1; // ... gathered from this far (-1: its default)
+    float jitter = 0; // the depth's disc is this many pixels off the colour's, alternating left and right per frame
+                      // (a game that jitters its picture for anti-aliasing)
 };
 
 void Apply(const Settings& s, OpticalFlowDx12& flow, TrustMaskDx12& trust)
@@ -331,6 +335,10 @@ void Apply(const Settings& s, OpticalFlowDx12& flow, TrustMaskDx12& trust)
         flow.Tuning().smoothRadius = s.smooth;
     if (s.surface >= 0)
         trust.Tuning().guideSurface = s.surface != 0;
+    if (s.uncover >= 0)
+        trust.Tuning().uncoverBackground = s.uncover != 0;
+    if (s.reach >= 0)
+        trust.Tuning().uncoverReach = s.reach;
 }
 
 struct Result
@@ -379,7 +387,9 @@ Result Run(Gpu& gpu, const Case& c, const Settings& settings)
             depth = gpu.Upload(DXGI_FORMAT_R32_FLOAT, 4,
                                [&](uint32_t x, uint32_t y, uint8_t* px)
                                {
-                                   const float d = 0.1f / (Inside(disc, (float) x + 0.5f, (float) y + 0.5f) ? 5.0f : 20.0f);
+                                   const float shift = (frame & 1) != 0 ? settings.jitter : -settings.jitter;
+                                   const float d =
+                                       0.1f / (Inside(disc, (float) x + 0.5f - shift, (float) y + 0.5f) ? 5.0f : 20.0f);
                                    memcpy(px, &d, 4);
                                },
                                keep);
@@ -469,8 +479,10 @@ Result Run(Gpu& gpu, const Case& c, const Settings& settings)
     return result;
 }
 
-// GPU time of BuildGuides at the current size, median of several frames.
-double TimeGuides(Gpu& gpu, const Settings& settings)
+// GPU time of BuildGuides at the current size, median of several frames. busy: the picture is also covered with small
+// near discs 40 pixels apart (foliage, a fence): nearly every pixel has a nearer surface around, the uncover pass's
+// worst case.
+double TimeGuides(Gpu& gpu, const Settings& settings, bool busy)
 {
     OpticalFlowDx12 flow;
     TrustMaskDx12 trust;
@@ -506,7 +518,10 @@ double TimeGuides(Gpu& gpu, const Settings& settings)
         auto depth = gpu.Upload(DXGI_FORMAT_R32_FLOAT, 4,
                                 [&](uint32_t x, uint32_t y, uint8_t* px)
                                 {
-                                    const float d = 0.1f / (Inside(disc, (float) x, (float) y) ? 5.0f : 20.0f);
+                                    const float gx = (float) ((x + 3 * frame) % 40) - 20.0f, gy = (float) (y % 40) - 20.0f;
+                                    const bool leaf = busy && gx * gx + gy * gy < 144.0f;
+                                    const float d =
+                                        0.1f / (Inside(disc, (float) x, (float) y) ? 5.0f : leaf ? 8.0f : 20.0f);
                                     memcpy(px, &d, 4);
                                 },
                                 keep);
@@ -584,6 +599,12 @@ int main(int argc, char** argv)
             settings.smooth = (int) value;
         else if (key == "surface")
             settings.surface = (int) value;
+        else if (key == "uncover")
+            settings.uncover = (int) value;
+        else if (key == "reach")
+            settings.reach = value;
+        else if (key == "jitter")
+            settings.jitter = value;
         else
         {
             printf("unknown argument %s\n", arg.c_str());
@@ -596,8 +617,8 @@ int main(int argc, char** argv)
         kWidth = 2560;
         kHeight = 1440;
         settings.depth = !onlyNoDepth;
-        printf("BuildGuides at %ux%u (%s depth): %.4f ms\n", kWidth, kHeight, settings.depth ? "with" : "no",
-               TimeGuides(gpu, settings));
+        printf("BuildGuides at %ux%u (%s depth): %.4f ms, busy depth %.4f ms\n", kWidth, kHeight,
+               settings.depth ? "with" : "no", TimeGuides(gpu, settings, false), TimeGuides(gpu, settings, true));
         return 0;
     }
 

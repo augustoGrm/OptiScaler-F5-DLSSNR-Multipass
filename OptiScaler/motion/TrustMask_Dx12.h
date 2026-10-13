@@ -98,6 +98,13 @@ class TrustMaskDx12
         // instead of a bilinear mix of the texels around it, so a thing's outline carries its own motion and the
         // background beside it the background's (off: plain bilinear, as without depth).
         bool guideSurface = true;
+        // The motion guide, with depth this frame and last: background that was hidden a frame ago behind something
+        // nearer (it moved off, or the background moved out from under it, as on the trailing side of a camera turn
+        // around a character) takes the motion of the surface it is on, gathered from up to uncoverReach flow pixels
+        // around, instead of what the match found for it (it had nothing to find). The flow itself, its history and
+        // the mask are not changed.
+        bool uncoverBackground = true;
+        float uncoverReach = 24.0f;
     };
 
     Settings& Tuning() { return _settings; }
@@ -120,7 +127,8 @@ class TrustMaskDx12
         float fullPerFlow, revealTolerance;
         uint32_t depthCount, debugView, depthBoth, sceneCutEnabled;
         uint32_t guideSurface; // GuideMotion: enlarge by surface (Settings::guideSurface, with depth)
-        uint32_t padding[3];
+        float uncoverReach;    // Uncover: how far the surface's motion is gathered from, in flow pixels
+        uint32_t padding[2];
     };
 
     bool CreateTexture(Tex& tex, uint32_t width, uint32_t height, DXGI_FORMAT format, const wchar_t* name);
@@ -139,6 +147,8 @@ class TrustMaskDx12
     ID3D12PipelineState* _copyFlow = nullptr;
     ID3D12PipelineState* _guideDepthPso = nullptr;
     ID3D12PipelineState* _guideMotionPso = nullptr;
+    ID3D12PipelineState* _uncoverPso = nullptr;
+    Tex _guideFlow; // the flow with uncovered background given its surface's motion (Settings::uncoverBackground)
     Tex _guideDepth;
     bool _guideDepthValid = false; // set by BuildGuides: whether this call had depth to write into _guideDepth
     Tex _guideMotion;
@@ -162,6 +172,7 @@ class TrustMaskDx12
 
     bool _haveHistory = false;
     bool _hadDepth = false; // whether the last Dispatch had depth
+    bool _depthBoth = false; // whether the last Dispatch had depth for its frame and the one before (both proxies hold one)
     uint32_t _width = 0;
     uint32_t _height = 0;
     Settings _settings;
