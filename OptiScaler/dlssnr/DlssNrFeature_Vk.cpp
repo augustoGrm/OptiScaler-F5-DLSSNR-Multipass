@@ -2164,6 +2164,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     // shrink and the edge packing). It then stands in for the model input and the resolve's proxy (ordinaryProxy below,
     // and through the edge unpacking), so Composed hands back only what the model painted on top of it. Skipped above
     // 100% model resolution, where the resolve compares against the full proxy instead.
+    bool inputRestyled = false;
     {
         const uint32_t style = cfg.DlssNrInputStyle.value_or_default();
         const float strength = std::min(cfg.DlssNrInputStyleStrength.value_or_default(), style == 2u ? 3.0f : 1.0f);
@@ -2204,6 +2205,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
                 {
                     modelInput = &g_vk.styled;
                     restyled = true;
+                    inputRestyled = true;
                 }
                 else
                 {
@@ -2428,6 +2430,10 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
 
     DlssNrConstants resolve = encode;
     resolve.Mode = DlssNrMode_Resolve;
+    // Replace's detail injection puts back the game frame's own fine texture, which is what a style removed: off while
+    // the picture was restyled, so Replace shows the model's painting of the restyled picture.
+    if (inputRestyled)
+        resolve.ReplaceDetailStrength = 0.0f;
 
     // Supersampling down-leg (Vulkan). Average the Nx model answer back to native with the chosen
     // filter so the resolve composites a native answer against the native proxy 1:1 -- not the single

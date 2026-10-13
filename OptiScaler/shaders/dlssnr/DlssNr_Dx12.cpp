@@ -330,8 +330,8 @@ struct NrState
     SGSR1_Dx12* sgsr1UpAnswer = nullptr;
     Scaler nrScaler = Scaler::Count;
 
-    // Experimental input style (DlssNrInputStyle): the model's picture restyled (DlssNrMode_Watercolor or
-    // DlssNrMode_StructureHint), which then stands in for the model input and the resolve's proxy. Created when first
+    // Experimental input style (DlssNrInputStyle): the model's picture restyled (DlssNrMode_Watercolor,
+    // DlssNrMode_StructureHint or DlssNrMode_SmoothCanvas), which then stands in for the model input and the resolve's proxy. Created when first
     // used, parked with the scratch set; its state is tracked because the resolve reads it.
     ID3D12Resource* styled = nullptr;
     D3D12_RESOURCE_STATES styledState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -4286,6 +4286,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // the edge packing). The restyled picture is both the model input and the resolve's proxy (ordinaryProxy below,
     // and through the edge unpacking), so Composed hands back only what the model painted on top of it. Skipped above
     // 100% model resolution (the resolve compares against colorCopy there) and on the deferred path.
+    bool inputRestyled = false;
     {
         const uint32_t style = cfg.DlssNrInputStyle.value_or_default();
         const float strength = std::min(cfg.DlssNrInputStyleStrength.value_or_default(), style == 2u ? 3.0f : 1.0f);
@@ -4327,13 +4328,25 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                 paint.ReversibleMode = cfg.DlssNrReversibleMode.value_or_default();
                 paint.TransferStrength = strength;
                 paint.SkinProtection = facesOnly ? 1u : 0u; // the style passes read it as "faces only"
-                DispatchPass(cmdList, paint, modelInput, nullptr, nullptr, nullptr, nullptr, g_nr.styled, nullptr);
+                const bool painted =
+                    DispatchPass(cmdList, paint, modelInput, nullptr, nullptr, nullptr, nullptr, g_nr.styled, nullptr);
 
                 Barrier(cmdList, g_nr.styled, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                         D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
                 g_nr.styledState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
-                modelInput = g_nr.styled;
-                restyled = true;
+
+                // A failed dispatch left the texture as it was (never written, or last frame's): the model keeps the
+                // picture as it is, as on Vulkan
+                if (painted)
+                {
+                    modelInput = g_nr.styled;
+                    restyled = true;
+                    inputRestyled = true;
+                }
+                else
+                {
+                    skip = "its dispatch failed";
+                }
             }
             else
             {
@@ -4819,7 +4832,10 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         resolveParams.EnvironmentDetail = strength(cfg.DlssNrEnvironmentDetail.value_or_default());
         resolveParams.EnvironmentColour = strength(cfg.DlssNrEnvironmentColour.value_or_default());
         resolveParams.ColourStrength = cfg.DlssNrColourStrength.value_or_default();
-        resolveParams.ReplaceDetailStrength = cfg.DlssNrReplaceDetailStrength.value_or_default();
+        // Replace's detail injection puts back the game frame's own fine texture, which is what a style removed:
+        // off while the picture was restyled, so Replace shows the model's painting of the restyled picture.
+        resolveParams.ReplaceDetailStrength =
+            inputRestyled ? 0.0f : cfg.DlssNrReplaceDetailStrength.value_or_default();
         resolveParams.ModelWorkScale = (reduced && workScale < 1.0f) ? workScale : 1.0f;
         resolveParams.DebugView = cfg.DlssNrDebugView.value_or_default();
         resolveParams.MaxRatio = std::clamp(cfg.DlssNrMaxRatio.value_or_default(), 1.0f, 8.0f);
