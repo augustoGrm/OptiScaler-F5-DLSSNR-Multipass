@@ -12,8 +12,8 @@ class XeLL : public LowLatencyTech
     uint64_t simulation_start_last_id {};
     uint64_t sleep_last_id {};
 
-    // The sleep mode last sent to this context. Per instance: a remade XeLL (new context) must get the mode even when it
-    // equals the old one's, e.g. our cap resent after XeFG made its new context (XL14). UINT32_MAX = nothing sent yet.
+    // The sleep mode last sent to this context. Per instance: a remade XeLL (new context) gets the mode even when it
+    // equals the old one's, e.g. our cap resent after XeFG remade it (XL14). UINT32_MAX = nothing sent yet.
     uint32_t last_low_latency_mode = UINT32_MAX;
     uint32_t last_minimum_interval_us = UINT32_MAX;
     uint32_t last_low_latency_boost = UINT32_MAX;

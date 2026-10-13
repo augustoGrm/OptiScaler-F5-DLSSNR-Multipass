@@ -300,7 +300,6 @@ void UpscalerInputsDx11wDx12::UpscaleEnd(NVSDK_NGX_Parameter* InParameters, IFea
     if (fg == nullptr || State::Instance().activeFgInput != FGInput::Upscaler || _dx12Device == nullptr)
         return;
 
-    if (fg->IsActive() && Config::Instance()->IsFGEnabled() &&
-        State::Instance().currentSwapchain != nullptr)
+    if (fg->IsActive() && Config::Instance()->IsFGEnabled() && State::Instance().currentSwapchain != nullptr)
         LOG_DEBUG("(FG Dx11wDx12) running, frame: {}", feature->FrameCount());
 }

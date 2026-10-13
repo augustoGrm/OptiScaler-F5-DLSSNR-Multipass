@@ -1390,8 +1390,8 @@ void FSR3FG::SetUpscalerInputs(ID3D12GraphicsCommandList* InCmdList, NVSDK_NGX_P
 
     // FG Prepare
     UINT frameIndex;
-    if (!State::Instance().isShuttingDown && fg->IsActive() && Config::Instance()->IsFGEnabled() &&
-        !fg->IsPaused() && State::Instance().currentSwapchain != nullptr)
+    if (!State::Instance().isShuttingDown && fg->IsActive() && Config::Instance()->IsFGEnabled() && !fg->IsPaused() &&
+        State::Instance().currentSwapchain != nullptr)
     {
         //// Wait for present
         // if (fg->Mutex.getOwner() == 2)
