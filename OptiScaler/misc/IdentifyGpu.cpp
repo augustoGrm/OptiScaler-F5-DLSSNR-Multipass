@@ -8,6 +8,7 @@
 #include <proxies/D3d12_Proxy.h>
 #include "nvapi/NvApiTypes.h"
 #include <hooks/Amdxc64_Hooks.h>
+#include <hooks/DxvkOutputs.h>
 
 using Microsoft::WRL::ComPtr;
 
@@ -100,6 +101,9 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
             if (SUCCEEDED(adapter->QueryInterface(__uuidof(IDXGIVkInteropAdapter), (void**) &interopAdapter)))
             {
                 gpuInfo.usesDxvk = true;
+
+                // dxvk lists the outputs in monitor order, not with the primary display first as Windows' DXGI does
+                DxvkOutputs::Hook(adapter.Get());
 
                 // Try to get the real GPU info when using dxvk.conf to spoof
                 ComPtr<IDXGIVkInteropFactory> interopFactory;
