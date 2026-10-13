@@ -111,7 +111,9 @@ struct Gpu
     ComPtr<ID3D11ComputeShader> Compile(const wchar_t* path)
     {
         ComPtr<ID3DBlob> code, errors;
-        HRESULT hr = D3DCompileFromFile(path, nullptr, D3D_COMPILE_STANDARD_FILE_INCLUDE, "CSMain", "cs_5_0",
+        // WARP crashes on the percentile meter's branch (since 507c9404); this test does not use the meter.
+        const D3D_SHADER_MACRO noMeter[] = { { "DLSSNR_NO_PERCENTILE_METER", "1" }, { nullptr, nullptr } };
+        HRESULT hr = D3DCompileFromFile(path, noMeter, D3D_COMPILE_STANDARD_FILE_INCLUDE, "CSMain", "cs_5_0",
                                         D3DCOMPILE_OPTIMIZATION_LEVEL3, 0, &code, &errors);
         if (errors && FAILED(hr)) std::fprintf(stderr, "%s", (char*) errors->GetBufferPointer());
         check(hr);

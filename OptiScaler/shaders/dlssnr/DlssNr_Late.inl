@@ -457,8 +457,13 @@ void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue
         frame.InputEncoding = screenChoice.shaderConversion; // gamma 2.2 re-encoded as sRGB by the shared pass
         frame.ColourEncoding = (uint32_t) screenChoice.choice.encoding;
         frame.ColourEncodingForced = !screenChoice.choice.automatic;
-        // Absolute display encodings: 203-nit reference white, in 80-nit scRGB units.
-        frame.WhitePointOverride = (pq || scrgb) ? 203.0f / 80.0f : 0.0f;
+        // Absolute display encodings: white at the game's HDR paper white (203 nits by default), in 80-nit scRGB units
+        // (the PQ conversion above writes scRGB too).
+        frame.WhitePointOverride =
+            (pq || scrgb) ? DlssNrExposureState::PinnedWhitePoint(
+                                Config::Instance()->DlssNrDisplayPaperWhiteNits.value_or_default(),
+                                DlssNrExposureState::kNitsPerScrgbUnit)
+                          : 0.0f;
         frame.Reset |= Late::reset;
         frame.SubmissionEpoch = epoch;
         if (slot.depth) Barrier(cmd, slot.depth.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -622,7 +627,10 @@ bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd,
     frame.InputEncoding = screenChoice.shaderConversion;
     frame.ColourEncoding = (uint32_t) screenChoice.choice.encoding;
     frame.ColourEncodingForced = !screenChoice.choice.automatic;
-    frame.WhitePointOverride = scrgb ? 203.0f / 80.0f : 0.0f;
+    frame.WhitePointOverride =
+        scrgb ? DlssNrExposureState::PinnedWhitePoint(Config::Instance()->DlssNrDisplayPaperWhiteNits.value_or_default(),
+                                                      DlssNrExposureState::kNitsPerScrgbUnit)
+              : 0.0f;
     frame.Reset = reset || Late::reset;
     frame.OutputWidth = (unsigned) desc.Width;
     frame.OutputHeight = desc.Height;

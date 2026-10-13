@@ -1899,10 +1899,12 @@ void ApplyColourEncoding(DlssNrFrameInfo& frame, uint32_t setting, bool gameSays
     frame.InputEncoding = DlssNrColourEncoding::ShaderConversion(choice.encoding);
     frame.ColourEncoding = (uint32_t) choice.encoding;
     frame.ColourEncodingForced = !choice.automatic;
-    // Forced PQ is display light: the decode put its reference white at 1.0, and that is the white point, not the
+    // Forced PQ is display light: its white is the game's HDR paper white (the decode puts 203 nits at 1.0), not the
     // game's exposure (which describes the scene) or Automatic's meter.
     if (choice.encoding == DlssNrColourEncoding::Encoding::Pq)
-        frame.WhitePointOverride = 1.0f;
+        frame.WhitePointOverride = DlssNrExposureState::PinnedWhitePoint(
+            Config::Instance()->DlssNrDisplayPaperWhiteNits.value_or_default(),
+            DlssNrExposureState::kNitsPerPqDecodedUnit);
     if (report)
         DlssNr::ReportColourEncoding(choice, DiagFormatName(format), "", false);
 }

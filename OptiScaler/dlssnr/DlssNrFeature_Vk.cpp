@@ -1382,8 +1382,8 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
                                                             FormatCanHoldLinearHdr(colour->Resource.ImageViewInfo.Format));
     const bool linearHdr = colourChoice.LinearHdr();
     const uint32_t shaderConversion = DlssNrColourEncoding::ShaderConversion(colourChoice.encoding);
-    // Forced PQ is display light: its reference white is 1.0 after the decode, whatever the game's or Automatic's
-    // exposure says (the D3D12 path's ApplyColourEncoding does the same).
+    // Forced PQ is display light: its white is the game's HDR paper white (203 nits = 1.0 after the decode), whatever
+    // the game's or Automatic's exposure says (the D3D12 path's ApplyColourEncoding does the same).
     const bool displayWhite = colourChoice.encoding == DlssNrColourEncoding::Encoding::Pq;
     {
         char colourFormat[32];
@@ -1472,8 +1472,9 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
 
     if (displayWhite)
     {
-        whitePoint = 1.0f;
-        debugWhitePoint = 1.0f;
+        whitePoint = DlssNrExposureState::PinnedWhitePoint(cfg.DlssNrDisplayPaperWhiteNits.value_or_default(),
+                                                           DlssNrExposureState::kNitsPerPqDecodedUnit);
+        debugWhitePoint = whitePoint;
     }
 
     static bool saidEncoding = false;

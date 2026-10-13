@@ -8,14 +8,15 @@
 //   ToneMapped     the game already tone mapped the frame (an SDR picture): it reaches the model as it is, with no
 //                  white point at all (dlssnr.hlsl's passthrough). Paper white then only scales the debug views.
 //   DisplayPinned  display-referred HDR -- a forced PQ frame on the game-input path, or Finished Picture on an scRGB or
-//                  HDR10 screen. White is the game's HDR paper white (ITU-R BT.2408's 203 nits by default), not an
-//                  exposure, so the controls are skipped.
+//                  HDR10 screen. White is the game's HDR paper white ([DlssNr] DisplayPaperWhiteNits, ITU-R BT.2408's
+//                  203 nits by default), not an exposure, so the controls are skipped.
 //
 // Decided from the colour encoding choice (DlssNr_ColourEncoding.h) alone, so the menu can say which case it is
 // without asking the backend. Header-only and free of D3D and Vulkan types (tests/nr_exposure_state_smoke.cpp).
 
 #include "DlssNr_ColourEncoding.h"
 
+#include <cmath>
 #include <cstdint>
 
 namespace DlssNrExposureState
@@ -27,8 +28,36 @@ enum class State : uint32_t
     DisplayPinned,
 };
 
-// ITU-R BT.2408's reference white, the white a display-referred HDR frame is put at.
+// ITU-R BT.2408's reference white, the default white of a display-referred HDR frame.
 constexpr float kReferenceWhiteNits = 203.0f;
+
+// The game's HDR paper white is a player setting (often 100-400 nits; a game's UI may sit at the Windows SDR level), so
+// [DlssNr] DisplayPaperWhiteNits sets it. Bounded here, at the point of use: an ini value outside the range, or not a
+// number, gives the nearest bound or the default.
+constexpr float kMinPaperWhiteNits = 80.0f;
+constexpr float kMaxPaperWhiteNits = 1000.0f;
+
+inline float PaperWhiteNits(float setting)
+{
+    if (!std::isfinite(setting))
+        return kReferenceWhiteNits;
+    return setting < kMinPaperWhiteNits ? kMinPaperWhiteNits
+           : setting > kMaxPaperWhiteNits ? kMaxPaperWhiteNits
+                                          : setting;
+}
+
+// Nits in one unit of the light the pass reads a display-referred frame in: the PQ decode puts the reference white
+// (203 nits) at 1.0 (dlssnr.hlsl PqToReferenceLinear); scRGB is 80 nits per unit (Finished Picture's PQ conversion
+// writes scRGB too).
+constexpr float kNitsPerPqDecodedUnit = 203.0f;
+constexpr float kNitsPerScrgbUnit = 80.0f;
+
+// The white point of a display-referred frame. At the default this is exactly the value the pass always pinned
+// (1.0 after the PQ decode, 203/80 in scRGB).
+inline float PinnedWhitePoint(float paperWhiteNitsSetting, float nitsPerUnit)
+{
+    return PaperWhiteNits(paperWhiteNitsSetting) / nitsPerUnit;
+}
 
 // finishedPicture: the choice came from DlssNrColourEncoding::ResolveFinished (the screen), where Linear HDR is
 // scRGB, display light with 1.0 = 80 nits, rather than the scene light a DLSS evaluate hands over.

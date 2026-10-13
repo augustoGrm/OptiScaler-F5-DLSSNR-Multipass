@@ -605,6 +605,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrColourEncoding.set_from_config(readUInt("DlssNr", "ColourEncoding"));
             if (DlssNrColourEncoding.value_or_default() > 4u) // not a Colour encoding: back to Auto, saved as auto
                 DlssNrColourEncoding.reset();
+            DlssNrDisplayPaperWhiteNits.set_from_config(readFloat("DlssNr", "DisplayPaperWhiteNits"));
             DlssNrLutFile.set_from_config(readString("DlssNr", "LutFile"));
             DlssNrLutStrength.set_from_config(readFloat("DlssNr", "LutStrength"));
             if (DlssNrLutStrength.has_value() && (!std::isfinite(DlssNrLutStrength.value()) ||
@@ -1670,6 +1671,8 @@ bool Config::SaveIni()
     }
     ini.SetValue("DlssNr", "ReversibleMode", GetIntValue(Instance()->DlssNrReversibleMode.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ColourEncoding", GetIntValue(Instance()->DlssNrColourEncoding.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "DisplayPaperWhiteNits",
+                 GetFloatValue(Instance()->DlssNrDisplayPaperWhiteNits.value_for_config()).c_str());
     ini.SetValue("DlssNr", "LutFile", Instance()->DlssNrLutFile.value_for_config_or("").c_str());
     ini.SetValue("DlssNr", "LutStrength", GetFloatValue(Instance()->DlssNrLutStrength.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ApplyModel", GetBoolValue(Instance()->DlssNrApplyModel.value_for_config()).c_str());

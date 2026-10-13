@@ -1688,10 +1688,24 @@ static void RenderExposureSection(Config* config, float menuResScale)
     }
     else if (exposureState == DlssNrExposureState::State::DisplayPinned)
     {
-        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: HDR screen picture, white fixed at %.0f nits.",
-                           DlssNrExposureState::kReferenceWhiteNits);
-        HelpMarker("An HDR10 or scRGB picture is already in screen brightness, so NR takes its white from the paper "
-                   "white, not from an exposure. The settings below change nothing.");
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: HDR screen picture. NR's white is the paper "
+                                                            "white below.");
+        HelpMarker("An HDR10 or scRGB picture is already in screen brightness, so NR takes its white from the game's "
+                   "HDR paper white, not from an exposure. The greyed settings change nothing.");
+
+        // The one brightness control that acts here (DlssNr_ExposureState.h PinnedWhitePoint).
+        float nits = DlssNrExposureState::PaperWhiteNits(config->DlssNrDisplayPaperWhiteNits.value_or_default());
+
+        if (ImGui::SliderFloat("Game's HDR paper white", &nits, DlssNrExposureState::kMinPaperWhiteNits,
+                               DlssNrExposureState::kMaxPaperWhiteNits, "%.0f nits", ImGuiSliderFlags_Logarithmic))
+            config->DlssNrDisplayPaperWhiteNits = DlssNrExposureState::PaperWhiteNits(nits);
+
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset##displaypaperwhite"))
+            config->DlssNrDisplayPaperWhiteNits = DlssNrExposureState::kReferenceWhiteNits;
+
+        HelpMarker("Set it to the game's own HDR paper white (or UI brightness) setting. Higher: darker input to NR. "
+                   "Default 203 nits, the HDR reference white.");
     }
 
     ImGui::BeginDisabled(!exposureActs);

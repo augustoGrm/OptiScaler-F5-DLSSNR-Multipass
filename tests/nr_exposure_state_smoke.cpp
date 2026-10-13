@@ -3,6 +3,7 @@
 // cl /std:c++20 /EHsc tests/nr_exposure_state_smoke.cpp
 #include "../OptiScaler/shaders/dlssnr/DlssNr_ExposureState.h"
 
+#include <cmath>
 #include <cstdio>
 
 using namespace DlssNrColourEncoding;
@@ -42,6 +43,21 @@ int main()
           State::ToneMapped);
 
     CHECK(DlssNrExposureState::kReferenceWhiteNits == 203.0f);
+
+    // The display paper white: the default gives exactly the white points the pass always pinned.
+    {
+        using namespace DlssNrExposureState;
+        CHECK(PinnedWhitePoint(203.0f, kNitsPerPqDecodedUnit) == 1.0f);
+        CHECK(PinnedWhitePoint(203.0f, kNitsPerScrgbUnit) == 203.0f / 80.0f);
+        CHECK(PinnedWhitePoint(406.0f, kNitsPerPqDecodedUnit) == 2.0f);
+        CHECK(PinnedWhitePoint(400.0f, kNitsPerScrgbUnit) == 5.0f);
+        // Bounded at the point of use; not a number is the default.
+        CHECK(PaperWhiteNits(10.0f) == kMinPaperWhiteNits);
+        CHECK(PaperWhiteNits(5000.0f) == kMaxPaperWhiteNits);
+        CHECK(PaperWhiteNits(std::nanf("")) == kReferenceWhiteNits);
+        CHECK(PaperWhiteNits(-INFINITY) == kReferenceWhiteNits);
+        CHECK(PaperWhiteNits(250.0f) == 250.0f);
+    }
 
     printf(fails == 0 ? "PASS\n" : "%d FAILED\n", fails);
     return fails == 0 ? 0 : 1;
