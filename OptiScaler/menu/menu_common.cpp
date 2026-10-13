@@ -6888,6 +6888,12 @@ void MenuCommon::RenderAdvancedSettings(RenderMenuContext& ctx)
             MARK_ALL_BACKENDS_CHANGED();
         }
 
+        if (bool asiPlugins = config->LoadAsiPlugins.value_or_default();
+            ImGui::Checkbox("Load ASI plugins", &asiPlugins))
+            config->LoadAsiPlugins = asiPlugins;
+        ShowHelpMarker("Let OptiScaler load *.asi files from the plugins folder\n"
+                       "ini: [Plugins] LoadAsiPlugins. Save Settings and restart to apply.");
+
         // DRS
         ImGui::SeparatorText("DRS (Dynamic Resolution Scaling)");
         if (ImGui::BeginTable("drs", 2, ImGuiTableFlags_SizingStretchProp))
