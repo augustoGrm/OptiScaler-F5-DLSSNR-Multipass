@@ -90,25 +90,33 @@ HMODULE StreamlineHooks::LoadIsolatedGamePlugin(LPCWSTR requestedPath)
     return nullptr;
 }
 
-static bool IsSL1AndDLSSGActive()
-{
-    return State::Instance().streamlineVersion.major == 1 && State::Instance().activeFgInput == FGInput::DLSSG &&
-           (State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG);
-}
-
 static bool IsSL1AndFGActive()
 {
     const auto& state = State::Instance();
 
-    return state.streamlineVersion.major == 1 && state.activeFgInput == FGInput::DLSSG;
+    return state.streamlineVersion.major == 1 && state.activeFgInput == FGInput::DLSSG &&
+           state.activeFgOutput != FGOutput::NoFG;
+}
+
+// Game's SL1 DLSSG has to stay inert when we use its inputs or provide DLSSG ourselves,
+// otherwise its swapchain hooks end up stacked on top of our FG swapchain
+static bool IsSL1AndDLSSGManaged()
+{
+    const auto& state = State::Instance();
+
+    return state.streamlineVersion.major == 1 &&
+           (state.activeFgInput == FGInput::DLSSG || state.activeFgOutput == FGOutput::DLSSG);
 }
 
 static void PatchSL1PluginJson(nlohmann::json& configJson)
 {
-    if (!IsSL1AndFGActive())
+    if (!IsSL1AndDLSSGManaged())
         return;
 
-    LOG_DEBUG("Patching SL1 plugin JSON for external FG management");
+    // Once per plugin load: says in a user's log why the game's own SL1 frame generation does nothing
+    LOG_INFO("SL1 DLSSG kept inert, OptiScaler manages it (FG Input {}, FG Output {}): plugin hooks and tags cleared",
+             magic_enum::enum_name(State::Instance().activeFgInput),
+             magic_enum::enum_name(State::Instance().activeFgOutput));
 
     if (configJson.contains("/hooks"_json_pointer))
         configJson["hooks"].clear();
@@ -1635,7 +1643,7 @@ void* StreamlineHooks::hkdlssg_slGetPluginFunction(const char* functionName)
         return &hkslDLSSGGetState;
     }
 
-    if (strcmp(functionName, "slGetPluginJSONConfig") == 0 && IsSL1AndDLSSGActive())
+    if (strcmp(functionName, "slGetPluginJSONConfig") == 0 && IsSL1AndDLSSGManaged())
     {
         o_dlssg_slGetPluginJSONConfig_sl1 =
             reinterpret_cast<PFN_slGetPluginJSONConfig_sl1>(o_dlssg_slGetPluginFunction(functionName));

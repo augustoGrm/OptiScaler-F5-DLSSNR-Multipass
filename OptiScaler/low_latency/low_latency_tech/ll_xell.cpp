@@ -146,11 +146,6 @@ void XeLL::set_sleep_mode(SleepMode* sleep_mode)
     xell_sleep_params.minimumIntervalUs = sleep_mode->minimum_interval_us;
     xell_sleep_params.bLowLatencyBoost = sleep_mode->low_latency_boost;
 
-    static uint32_t last_bLowLatencyMode = 0;
-    static uint32_t last_minimumIntervalUs = 0;
-    static uint32_t last_bLowLatencyBoost = 0;
-    static int last_enabled = -1;
-
     // With XeFG, XeLL itself is always told low latency on; whether its sleeps and markers run is the low latency asked
     // for (is_enabled: fakenvapi's Force Reflex, else the caller's mode). Said whenever either changes.
     const auto enabledText = [this]() -> const char*
@@ -167,9 +162,9 @@ void XeLL::set_sleep_mode(SleepMode* sleep_mode)
     if (Config::Instance()->ForceXeLL.value_or_default())
         xell_sleep_params.minimumIntervalUs /= 2;
 
-    if (xell_sleep_params.bLowLatencyMode != last_bLowLatencyMode ||
-        xell_sleep_params.minimumIntervalUs != last_minimumIntervalUs ||
-        xell_sleep_params.bLowLatencyBoost != last_bLowLatencyBoost)
+    if (xell_sleep_params.bLowLatencyMode != last_low_latency_mode ||
+        xell_sleep_params.minimumIntervalUs != last_minimum_interval_us ||
+        xell_sleep_params.bLowLatencyBoost != last_low_latency_boost)
     {
         // Intel: all GPU work finished first (R11)
         native::lowlatency::WaitForGameQueueIdle();
@@ -180,9 +175,9 @@ void XeLL::set_sleep_mode(SleepMode* sleep_mode)
                  xell_sleep_params.bLowLatencyMode != 0, (uint32_t) xell_sleep_params.minimumIntervalUs,
                  xell_sleep_params.bLowLatencyBoost != 0, result ? "" : ", refused", enabledText());
 
-        last_bLowLatencyMode = xell_sleep_params.bLowLatencyMode;
-        last_minimumIntervalUs = xell_sleep_params.minimumIntervalUs;
-        last_bLowLatencyBoost = xell_sleep_params.bLowLatencyBoost;
+        last_low_latency_mode = xell_sleep_params.bLowLatencyMode;
+        last_minimum_interval_us = xell_sleep_params.minimumIntervalUs;
+        last_low_latency_boost = xell_sleep_params.bLowLatencyBoost;
         last_enabled = is_enabled();
     }
     else if (forced_mode && last_enabled != (int) is_enabled())
