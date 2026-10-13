@@ -491,6 +491,12 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (DlssNrReducedUpscaleMethod.has_value() && DlssNrReducedUpscaleMethod.value() > 1u)
                 DlssNrReducedUpscaleMethod = 0u;
             DlssNrModelResolutionAuto.set_from_config(readBool("DlssNr", "ModelResolutionAuto"));
+            DlssNrInputStyle.set_from_config(readUInt("DlssNr", "InputStyle"));
+            if (DlssNrInputStyle.has_value() && DlssNrInputStyle.value() > 2u)
+                DlssNrInputStyle.reset();
+            DlssNrInputStyleStrength.set_from_config(readFloat("DlssNr", "InputStyleStrength"));
+            if (DlssNrInputStyleStrength.has_value())
+                DlssNrInputStyleStrength = std::clamp(DlssNrInputStyleStrength.value(), 0.0f, 3.0f);
             DlssNrSpatialCompression.set_from_config(readBool("DlssNr", "SpatialCompression"));
             DlssNrSpatialCenterX.set_from_config(readFloat("DlssNr", "SpatialCenterX"));
             DlssNrSpatialCenterY.set_from_config(readFloat("DlssNr", "SpatialCenterY"));
@@ -1547,6 +1553,9 @@ bool Config::SaveIni()
                  GetIntValue(Instance()->DlssNrReducedUpscaleMethod.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ModelResolutionAuto",
                  GetBoolValue(Instance()->DlssNrModelResolutionAuto.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "InputStyle", GetIntValue(Instance()->DlssNrInputStyle.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "InputStyleStrength",
+                 GetFloatValue(Instance()->DlssNrInputStyleStrength.value_for_config()).c_str());
     ini.SetValue("DlssNr", "SpatialCompression",
                  GetBoolValue(Instance()->DlssNrSpatialCompression.value_for_config()).c_str());
     ini.SetValue("DlssNr", "SpatialCenterX", GetFloatValue(Instance()->DlssNrSpatialCenterX.value_for_config()).c_str());

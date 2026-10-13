@@ -161,6 +161,10 @@ struct VkState
     OwnedImage lutScratch;
     bool lutScratchFailed = false;
 
+    // Experimental input style (DlssNrInputStyle): the model's picture restyled, standing in for the model input and the
+    // resolve's proxy. Made on first use at the model picture's size; freed with the other sized images.
+    OwnedImage styled;
+
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t workWidth = 0;
@@ -1238,6 +1242,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
         DestroyImage(g_vk.scratch);
         DestroyImage(g_vk.lutScratch); // recreated at the new size when a LutFile still wants it
         g_vk.lutScratchFailed = false;
+        DestroyImage(g_vk.styled); // recreated at the model picture's size when an input style still wants it
 
         const VkFormat working = VK_FORMAT_R16G16B16A16_SFLOAT;
 
@@ -2097,6 +2102,79 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
         mvY *= (float) workHeight / height;
     }
 
+    // Experimental input style (DlssNrInputStyle), as on D3D12: restyle the model's picture once it is final (after the
+    // shrink and the edge packing). It then stands in for the model input and the resolve's proxy (ordinaryProxy below,
+    // and through the edge unpacking), so Composed hands back only what the model painted on top of it. Skipped above
+    // 100% model resolution, where the resolve compares against the full proxy instead.
+    {
+        const uint32_t style = cfg.DlssNrInputStyle.value_or_default();
+        const float strength = std::min(cfg.DlssNrInputStyleStrength.value_or_default(), style == 2u ? 3.0f : 1.0f);
+        const bool wanted = (style == 1u || style == 2u) && strength > 0.0f;
+        const char* skip = wanted && workScale > 1.0f ? "model resolution above 100%" : nullptr;
+        bool restyled = false;
+
+        if (wanted && skip == nullptr)
+        {
+            if (g_vk.styled.Valid() && (g_vk.styled.width != modelInput->width ||
+                                        g_vk.styled.height != modelInput->height ||
+                                        g_vk.styled.format != modelInput->format))
+            {
+                // Earlier frames may still read it (a switch of Compress screen edges changes the model picture's size)
+                vkDeviceWaitIdle(device);
+                DestroyImage(g_vk.styled);
+            }
+
+            if (!g_vk.styled.Valid())
+                CreateImage(g_vk.styled, modelInput->width, modelInput->height, modelInput->format, true);
+
+            if (g_vk.styled.Valid())
+            {
+                DlssNrConstants paint = encode;
+                paint.Mode = style == 2u ? DlssNrMode_StructureHint : DlssNrMode_Watercolor;
+                paint.Width = modelInput->width;
+                paint.Height = modelInput->height;
+                paint.TransferStrength = strength;
+
+                Transition(cmdBuffer, *modelInput, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                Transition(cmdBuffer, g_vk.styled, VK_IMAGE_LAYOUT_GENERAL);
+
+                if (g_vk.pass->Dispatch(cmdBuffer, paint, modelInput->width, modelInput->height, modelInput->view,
+                                        VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, g_vk.styled.view, VK_NULL_HANDLE,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL))
+                {
+                    modelInput = &g_vk.styled;
+                    restyled = true;
+                }
+                else
+                {
+                    skip = "its dispatch failed";
+                }
+            }
+            else
+            {
+                skip = "its image could not be created";
+            }
+        }
+
+        // Said when it changes, so a log shows each A/B toggle.
+        static int said = -1;
+        const int state = restyled ? (int) style + 10 : (skip != nullptr ? 2 : 0);
+
+        if (state != said)
+        {
+            said = state;
+
+            if (restyled)
+                LOG_INFO("DLSS-NR Vulkan input style: {} on (strength {:.2f}, {}x{}{})",
+                         style == 2u ? "structure hint" : "watercolour", strength, modelInput->width,
+                         modelInput->height, spatial ? ", edge-compressed picture" : "");
+            else if (skip != nullptr)
+                LOG_INFO("DLSS-NR Vulkan input style: skipped ({})", skip);
+            else
+                LOG_INFO("DLSS-NR Vulkan input style: off");
+        }
+    }
+
     OwnedImage* answer = &g_vk.output;
     OwnedImage* input = modelInput;
     int evaluated = 1;
@@ -2568,6 +2646,7 @@ void ReleaseNrObjects()
     DestroyImage(g_vk.autoExposureRaw);
     DestroyImage(g_vk.lutScratch);
     g_vk.lutScratchFailed = false;
+    DestroyImage(g_vk.styled);
     g_vk.autoExposureAdapter.Invalidate();
     DestroyMeterReadback();
 
@@ -2622,6 +2701,7 @@ void ShutdownVk(bool deviceAlive)
         g_vk.autoExposureRaw = OwnedImage {};
         g_vk.lutScratch = OwnedImage {};
         g_vk.lutScratchFailed = false;
+        g_vk.styled = OwnedImage {};
         g_vk.autoExposureAdapter.Invalidate();
         CalibrationVkShutdown(false);
         DetailReuseVk::Release(false);
