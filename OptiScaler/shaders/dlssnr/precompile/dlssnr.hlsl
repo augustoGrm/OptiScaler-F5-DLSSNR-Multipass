@@ -1232,8 +1232,10 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         //   L' = L + amount * (L - mean3x3(L)), clamped to the 3x3 neighbourhood's own min and max widened by a
         // quarter of that range per unit of strength -- a hard clamp at the range itself (no halo at all) stops the
         // boost exactly on smooth texture's peaks and troughs, where it would show (a 4-pixel weave gained 3%);
-        // the pixel is then scaled by L' / L so its chromaticity stays. amount = 2 * gTransferStrength, which runs
-        // 0..3 (the user found 1 weak in NBA; Composed cancels whatever part of the boost the model only copies).
+        // the dark side also by no more than a quarter of the darkest neighbour per unit of strength, so it never
+        // reaches black; the pixel is then scaled by L' / L (kRatioFloor on both sides) so its chromaticity stays.
+        // amount = 2 * gTransferStrength, which runs 0..3 (the user found 1 weak in NBA; Composed cancels whatever
+        // part of the boost the model only copies).
         // Works on the stored values (roughly perceptual), where a step reads the same in shadow and highlight.
         uint w, h;
         gSource.GetDimensions(w, h);
@@ -1259,11 +1261,14 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         const float strength = clamp(gTransferStrength, 0.0, 3.0);
         const float amount = 2.0 * strength;
         const float margin = 0.25 * strength * (hi - lo);
-        const float boosted = clamp(l + amount * (l - sum / 9.0), lo - margin, hi + margin);
+        // The dark side may also go no lower than a quarter of the darkest neighbour per unit of strength: next to a
+        // strong edge (0.03 | 0.9) the range's quarter is far below 0, and the dark side went to black.
+        const float darkMargin = min(margin, 0.25 * strength * lo);
+        const float boosted = clamp(l + amount * (l - sum / 9.0), lo - darkMargin, hi + margin);
         // One scale on the triple, capped so no channel passes 1 (a clipped channel would shift the hue).
         // Black stays black: with no luminance there is no chromaticity to keep.
         const float peak = max(max(c.r, c.g), c.b);
-        float3 hinted = l > 1e-6 ? c * min(boosted / l, 1.0 / max(peak, 1e-6)) : c;
+        float3 hinted = c * min((boosted + kRatioFloor) / (l + kRatioFloor), 1.0 / max(peak, 1e-6));
 
         // Faces only (the style pass's SkinProtection): as much of the style as the pixel looks like skin
         if (gSkinProtection != 0)
