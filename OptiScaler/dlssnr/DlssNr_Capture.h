@@ -9,6 +9,10 @@
 // a perfect control, with nothing varying but the thing under test. Flicker in one against flicker in
 // the other is then a direct answer rather than an inference.
 //
+// A run can also carry more images per frame (the edit cache dump adds the game's motion vectors and depth, so an
+// offline replay can carry one frame's edit to the next), and a line of notes per frame for what the images alone do
+// not say (the vectors' scale and subrect, which way depth runs, the white point).
+//
 // Raw, because a codec is the confound. A manifest alongside says how to read them.
 
 #pragma once
@@ -26,6 +30,19 @@ namespace capture
 // Bounded on purpose: this writes hundreds of megabytes and must not be able to fill a drive. Each run
 // overwrites the last.
 constexpr unsigned int kMaxFrames = 8;
+// The edit cache dump: long enough to measure carrying an edit 8 frames on a few starting frames.
+constexpr unsigned int kMaxDumpFrames = 32;
+// And never more than this in readback buffers (system memory), whatever the frame count asks: a run is shortened
+// to fit. 16 frames of a 1440p half-float before/after pair with render-size vectors and depth is about 1.2 GB.
+constexpr unsigned long long kMaxBytes = 1536ull << 20;
+
+// One image of a frame: its name in the files ("before" -> before_NN.raw) and the state it is in when recorded.
+struct Source
+{
+    const char* name = nullptr;
+    ID3D12Resource* resource = nullptr;
+    D3D12_RESOURCE_STATES state = D3D12_RESOURCE_STATE_COMMON;
+};
 
 struct Shot
 {
@@ -34,30 +51,36 @@ struct Shot
     unsigned long long bytes = 0;
 };
 
-// Captures a run of consecutive frames of two images at once.
+// Captures a run of consecutive frames of several images at once.
 class FrameCapture
 {
   public:
     // Asks for a capture. Ignored if one is already running.
-    void request(unsigned int frames)
+    void request(unsigned int frames, unsigned int maxFrames = kMaxFrames)
     {
         if (active_)
             return;
 
-        wanted_ = frames > kMaxFrames ? kMaxFrames : frames;
+        wanted_ = frames > maxFrames ? maxFrames : frames;
         captured_ = 0;
         active_ = wanted_ > 0;
     }
 
     bool isActive() const { return active_; }
     unsigned int progress() const { return captured_; }
+    unsigned int wanted() const { return wanted_; }
 
-    // Records copies of both images for this frame. Both must be in the state given.
-    void record(ID3D12GraphicsCommandList* cmd, ID3D12Device* device, ID3D12Resource* before,
-                D3D12_RESOURCE_STATES beforeState, ID3D12Resource* after, D3D12_RESOURCE_STATES afterState)
+    // Records copies of every image for this frame, each in the state given. The first frame fixes which images a
+    // run has; a frame that brings a different set ends the run there (a guide that went away, say).
+    void record(ID3D12GraphicsCommandList* cmd, ID3D12Device* device, const std::vector<Source>& sources,
+                const std::string& note = {})
     {
-        if (!active_ || before == nullptr || after == nullptr)
+        if (!active_ || sources.empty())
             return;
+
+        for (const Source& s : sources)
+            if (s.resource == nullptr || s.name == nullptr)
+                return;
 
         // Recording stops the moment the run is complete, and does not resume until write() has
         // released everything.
@@ -71,22 +94,34 @@ class FrameCapture
         if (ready_ || captured_ >= wanted_)
             return;
 
-        if (!ensure(device, before, after))
+        if (!ensure(device, sources))
         {
-            active_ = false;
+            release();
+            return;
+        }
+
+        if (!sameSet(sources))
+        {
+            ready_ = captured_ > 0;
+            active_ = ready_;
             return;
         }
 
         // ensure() sizes the vectors to wanted_. Belt and braces: an index into them is never taken
         // on trust again.
-        if (captured_ >= beforeShots_.size() || captured_ >= afterShots_.size())
+        for (const Channel& c : channels_)
         {
-            ready_ = true;
-            return;
+            if (captured_ >= c.shots.size())
+            {
+                ready_ = true;
+                return;
+            }
         }
 
-        copy(cmd, before, beforeState, beforeShots_[captured_]);
-        copy(cmd, after, afterState, afterShots_[captured_]);
+        for (size_t i = 0; i < sources.size(); ++i)
+            copy(cmd, sources[i].resource, sources[i].state, channels_[i].shots[captured_]);
+
+        notes_.push_back(note);
         ++captured_;
 
         if (captured_ >= wanted_)
@@ -98,20 +133,18 @@ class FrameCapture
     bool readyToWrite() const { return ready_; }
 
     // Writes what was captured and releases everything. Returns the directory, or an empty string.
-    std::string write(const std::filesystem::path& directory)
+    std::string write(const std::filesystem::path& directory, const std::string& about = {})
     {
         if (!ready_)
             return {};
 
         // A dark frame -- a menu, a loading screen -- measures nothing. Discard the run and quietly
         // re-arm for the same length, so the set that finally lands is of actual gameplay.
-        if (captured_ > 0 && isDark(beforeShots_[0]))
+        if (captured_ > 0 && !channels_.empty() && isDark(channels_[0].shots[0]))
         {
             const unsigned int frames = wanted_;
             release();
-            ready_ = false;
-            active_ = false;
-            request(frames);
+            request(frames, frames);
             return {};
         }
 
@@ -119,49 +152,81 @@ class FrameCapture
         std::filesystem::create_directories(directory, ec);
 
         for (unsigned int i = 0; i < captured_; ++i)
-        {
-            dump(directory, "before", i, beforeShots_[i]);
-            dump(directory, "after", i, afterShots_[i]);
-        }
+            for (Channel& c : channels_)
+                dump(directory, c.name.c_str(), i, c.shots[i]);
 
-        writeManifest(directory);
+        writeManifest(directory, about);
         release();
         return directory.string();
     }
 
     void release()
     {
-        for (auto& s : beforeShots_)
-            if (s.readback != nullptr)
-                s.readback->Release();
+        for (Channel& c : channels_)
+            for (Shot& s : c.shots)
+                if (s.readback != nullptr)
+                    s.readback->Release();
 
-        for (auto& s : afterShots_)
-            if (s.readback != nullptr)
-                s.readback->Release();
-
-        beforeShots_.clear();
-        afterShots_.clear();
+        channels_.clear();
+        notes_.clear();
         active_ = false;
         ready_ = false;
         captured_ = 0;
     }
 
   private:
-    bool ensure(ID3D12Device* device, ID3D12Resource* before, ID3D12Resource* after)
+    struct Channel
     {
-        if (!beforeShots_.empty())
+        std::string name;
+        D3D12_RESOURCE_DESC desc = {};
+        std::vector<Shot> shots;
+    };
+
+    bool ensure(ID3D12Device* device, const std::vector<Source>& sources)
+    {
+        if (!channels_.empty())
             return true;
 
-        beforeShots_.resize(wanted_);
-        afterShots_.resize(wanted_);
-        beforeDesc_ = before->GetDesc();
-        afterDesc_ = after->GetDesc();
-        beforeDesc_.Format = TypedForCopy(beforeDesc_.Format);
-        afterDesc_.Format = TypedForCopy(afterDesc_.Format);
+        channels_.resize(sources.size());
+        unsigned long long perFrame = 0;
 
-        for (unsigned int i = 0; i < wanted_; ++i)
+        for (size_t i = 0; i < sources.size(); ++i)
         {
-            if (!alloc(device, beforeDesc_, beforeShots_[i]) || !alloc(device, afterDesc_, afterShots_[i]))
+            channels_[i].name = sources[i].name;
+            channels_[i].desc = sources[i].resource->GetDesc();
+            channels_[i].desc.Format = TypedForCopy(channels_[i].desc.Format);
+            perFrame += FootprintBytes(device, channels_[i].desc);
+        }
+
+        // Shortened to fit the budget, but never below two frames (nothing to compare otherwise).
+        if (perFrame == 0)
+            return false;
+        while (wanted_ > 2 && perFrame * wanted_ > kMaxBytes)
+            --wanted_;
+        if (perFrame * wanted_ > kMaxBytes)
+            return false;
+
+        for (Channel& c : channels_)
+        {
+            c.shots.resize(wanted_);
+            for (unsigned int f = 0; f < wanted_; ++f)
+                if (!alloc(device, c.desc, c.shots[f]))
+                    return false;
+        }
+
+        return true;
+    }
+
+    bool sameSet(const std::vector<Source>& sources) const
+    {
+        if (sources.size() != channels_.size())
+            return false;
+
+        for (size_t i = 0; i < sources.size(); ++i)
+        {
+            const D3D12_RESOURCE_DESC d = sources[i].resource->GetDesc();
+            if (channels_[i].name != sources[i].name || d.Width != channels_[i].desc.Width ||
+                d.Height != channels_[i].desc.Height || TypedForCopy(d.Format) != channels_[i].desc.Format)
                 return false;
         }
 
@@ -171,7 +236,8 @@ class FrameCapture
     // A copy needs a fully typed format, and the buffer the upscaler writes is occasionally declared
     // typeless. A placed footprint carrying a typeless format makes CopyTextureRegion invalid, and an
     // invalid copy removes the device -- which is what capturing did: it crashed the game every time
-    // the output happened to be one of these.
+    // the output happened to be one of these. Guides add their own typeless formats (the pass clones
+    // typeless depth and vectors to typed ones, so these are a second line).
     static DXGI_FORMAT TypedForCopy(DXGI_FORMAT f)
     {
         switch (f)
@@ -186,21 +252,34 @@ class FrameCapture
             return DXGI_FORMAT_R8G8B8A8_UNORM;
         case DXGI_FORMAT_B8G8R8A8_TYPELESS:
             return DXGI_FORMAT_B8G8R8A8_UNORM;
+        case DXGI_FORMAT_R16G16_TYPELESS:
+            return DXGI_FORMAT_R16G16_FLOAT;
+        case DXGI_FORMAT_R32G32_TYPELESS:
+            return DXGI_FORMAT_R32G32_FLOAT;
+        case DXGI_FORMAT_R32_TYPELESS:
+            return DXGI_FORMAT_R32_FLOAT;
+        case DXGI_FORMAT_R16_TYPELESS:
+            return DXGI_FORMAT_R16_UNORM;
         default:
             return f;
         }
     }
 
+    static unsigned long long FootprintBytes(ID3D12Device* device, const D3D12_RESOURCE_DESC& desc)
+    {
+        unsigned long long total = 0;
+        D3D12_PLACED_SUBRESOURCE_FOOTPRINT layout = {};
+        device->GetCopyableFootprints(&desc, 0, 1, 0, &layout, nullptr, nullptr, &total);
+        return total == ~0ull ? 0 : total;
+    }
+
     static bool alloc(ID3D12Device* device, const D3D12_RESOURCE_DESC& desc, Shot& shot)
     {
-        D3D12_RESOURCE_DESC typed = desc;
-        typed.Format = TypedForCopy(desc.Format);
-
         unsigned long long total = 0;
-        device->GetCopyableFootprints(&typed, 0, 1, 0, &shot.layout, nullptr, nullptr, &total);
+        device->GetCopyableFootprints(&desc, 0, 1, 0, &shot.layout, nullptr, nullptr, &total);
         shot.bytes = total;
 
-        if (total == 0)
+        if (total == 0 || total == ~0ull)
             return false;
 
         D3D12_HEAP_PROPERTIES heap = {};
@@ -312,31 +391,32 @@ class FrameCapture
         shot.readback->Unmap(0, &written);
     }
 
-    void writeManifest(const std::filesystem::path& dir)
+    void writeManifest(const std::filesystem::path& dir, const std::string& about)
     {
         const auto path = dir / "manifest.txt";
 
         if (std::FILE* f = _wfopen(path.wstring().c_str(), L"wt"))
         {
             std::fprintf(f, "frames %u\n", captured_);
-            std::fprintf(f, "before width %llu height %u format %d rowPitch %u\n",
-                         (unsigned long long) beforeDesc_.Width, beforeDesc_.Height,
-                         (int) beforeDesc_.Format,
-                         beforeShots_.empty() ? 0 : beforeShots_[0].layout.Footprint.RowPitch);
-            std::fprintf(f, "after width %llu height %u format %d rowPitch %u\n",
-                         (unsigned long long) afterDesc_.Width, afterDesc_.Height, (int) afterDesc_.Format,
-                         afterShots_.empty() ? 0 : afterShots_[0].layout.Footprint.RowPitch);
+            for (const Channel& c : channels_)
+                std::fprintf(f, "%s width %llu height %u format %d rowPitch %u copyFormat %d\n", c.name.c_str(),
+                             (unsigned long long) c.desc.Width, c.desc.Height, (int) c.desc.Format,
+                             c.shots.empty() ? 0 : c.shots[0].layout.Footprint.RowPitch,
+                             c.shots.empty() ? 0 : (int) c.shots[0].layout.Footprint.Format);
+            for (unsigned int i = 0; i < captured_ && i < notes_.size(); ++i)
+                if (!notes_[i].empty())
+                    std::fprintf(f, "frame %02u %s\n", i, notes_[i].c_str());
             std::fprintf(f, "\nbefore_NN.raw is the frame as the upscaler produced it.\n");
             std::fprintf(f, "after_NN.raw is the same frame once the model's edit was applied.\n");
             std::fprintf(f, "Consecutive frames, same run, so the pair is a control.\n");
+            if (!about.empty())
+                std::fprintf(f, "%s\n", about.c_str());
             std::fclose(f);
         }
     }
 
-    std::vector<Shot> beforeShots_;
-    std::vector<Shot> afterShots_;
-    D3D12_RESOURCE_DESC beforeDesc_ = {};
-    D3D12_RESOURCE_DESC afterDesc_ = {};
+    std::vector<Channel> channels_;
+    std::vector<std::string> notes_;
     unsigned int wanted_ = 0;
     unsigned int captured_ = 0;
     bool active_ = false;

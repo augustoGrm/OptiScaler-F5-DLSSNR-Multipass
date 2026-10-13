@@ -569,6 +569,10 @@ std::optional<double> g_lastGpuTime;
 
 // Writes matched before/after frames on request, so comparisons stop depending on video.
 capture::FrameCapture g_capture;
+// The capture running is an edit cache dump (RequestCacheDump): it also copies the game's motion vectors and depth
+// and notes each frame's guide facts, for the offline replay of carrying an edit from frame to frame
+// (DLSS-TOOLS editcache). Written to dlssnr-cachedump beside OptiScaler.
+bool g_captureIsDump = false;
 
 // One capture happens on its own each session, so there is always a fresh sample without anyone having
 // to remember to ask. Started after the scene has had a moment to settle: the first frames after a
@@ -625,6 +629,24 @@ void CheckCaptureTrigger()
         DlssNr::RequestCapture(capture::kMaxFrames);
         LOG_INFO("DLSS-NR capture requested by trigger file");
     }
+
+    const auto dumpTrigger = Util::DllPath().remove_filename() / "dlssnr-cachedump.trigger";
+
+    if (std::filesystem::exists(dumpTrigger, ec))
+    {
+        std::filesystem::remove(dumpTrigger, ec);
+        DlssNr::RequestCacheDump(16);
+        LOG_INFO("DLSS-NR edit cache dump requested by trigger file");
+    }
+}
+
+// Depth formats copied into an edit cache dump: one plane, read back as is. Depth-stencil layouts with a stencil plane
+// (R24_UNORM_X8, R32_FLOAT_X8X24) are left out rather than risk a copy the device rejects; the dump then says so and
+// the replay validates by colour alone.
+bool DumpableDepth(DXGI_FORMAT f)
+{
+    return f == DXGI_FORMAT_R32_FLOAT || f == DXGI_FORMAT_D32_FLOAT || f == DXGI_FORMAT_R16_UNORM ||
+           f == DXGI_FORMAT_D16_UNORM;
 }
 
 // The encoded mean is aimed here. Mid-grey rather than anything brighter: the model has to see both the
@@ -3533,11 +3555,23 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     if (g_captureWriteAtFrame != 0 && g_frames >= g_captureWriteAtFrame)
     {
         g_captureWriteAtFrame = 0;
-        const auto captureDir = Util::DllPath().remove_filename() / "dlssnr-capture";
-        const auto written = g_capture.write(captureDir);
+        const bool dump = g_captureIsDump;
+        const auto captureDir = Util::DllPath().remove_filename() / (dump ? "dlssnr-cachedump" : "dlssnr-capture");
+        std::string about;
+        if (dump)
+        {
+            std::error_code ec;
+            std::filesystem::remove_all(captureDir, ec); // each dump replaces the last
+            about = "motion_NN.raw is the game's motion vectors as the pass reads them (the frame note's mvScale "
+                    "applies, then the subrect: motion WxH at X Y), depth_NN.raw its depth (depth WxH at X Y, inverted "
+                    "1 = reversed-Z). The model ran on every frame (detail reuse stands aside during a capture). "
+                    "linearHdr 0: before/after are display-encoded (sRGB-like); curve is DlssNrConstants::ReversibleMode; "
+                    "white is the encode's white point.";
+        }
+        const auto written = g_capture.write(captureDir, about);
 
         if (!written.empty())
-            LOG_INFO("DLSS-NR wrote matched before/after frames to {}", written);
+            LOG_INFO("DLSS-NR wrote {} to {}", dump ? "an edit cache dump" : "matched before/after frames", written);
     }
 
     // Paper white, and nothing else. The frame is divided by this and encoded, and the soft knee
@@ -4570,7 +4604,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     reuseFrame.edgeCompression = spatial; // the two do not run together; Reuse detail says so in the menu
     // A Tune step pins the white point (calibrationPinned); a Measure detail run copies and measures without pinning,
     // and measures Reuse bottleneck as it runs.
-    reuseFrame.blocked = calibrationPinned || g_nr.heldActive;
+    // A capture shows the model on every frame: before/after are a control, and an edit cache dump measures carrying
+    // the model's real answers
+    reuseFrame.blocked = calibrationPinned || g_nr.heldActive || g_capture.isActive();
     reuseFrame.frameNumber = frame.SubmissionEpoch != 0 ? frame.SubmissionEpoch : g_frames;
     {
         // The motion size is left out on purpose: saved vectors are uv displacements, so a render-size change does not
@@ -5109,9 +5145,36 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         // own.
         if (g_capture.isActive())
         {
-            g_capture.record(cmdList, device, g_nr.colorCopy,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, target,
-                             targetState);
+            std::vector<capture::Source> sources {
+                { "before", g_nr.colorCopy, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                { "after", target, targetState },
+            };
+            std::string note;
+
+            if (g_captureIsDump)
+            {
+                // The guides as the pass reads them, in NON_PIXEL_SHADER_RESOURCE here (ReadableGuide's contract,
+                // still bound for this frame's passes)
+                sources.push_back({ "motion", motionIn, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE });
+                const bool withDepth = depthIn != nullptr && DumpableDepth(depthIn->GetDesc().Format);
+                if (withDepth)
+                    sources.push_back({ "depth", depthIn, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE });
+
+                char text[512];
+                std::snprintf(text, sizeof(text),
+                              "mvScale %.6f %.6f motion %ux%u at %u %u depth %ux%u at %u %u inverted %d dumped %d "
+                              "linearHdr %d curve %u white %.6f reset %d work %ux%u epoch %llu",
+                              g_nr.guideMvScaleX, g_nr.guideMvScaleY, (unsigned) motionWidth, (unsigned) motionHeight,
+                              (unsigned) motionBaseX, (unsigned) motionBaseY, (unsigned) guideWidth,
+                              (unsigned) guideHeight, (unsigned) depthBaseX, (unsigned) depthBaseY,
+                              g_nr.guideDepthInverted ? 1 : 0, withDepth ? 1 : 0, isHdrBuffer ? 1 : 0,
+                              encodeParams.ReversibleMode, encodeParams.WhitePoint, g_nr.reset ? 1 : 0, workWidth,
+                              workHeight, (unsigned long long) (frame.SubmissionEpoch != 0 ? frame.SubmissionEpoch
+                                                                                           : g_frames));
+                note = text;
+            }
+
+            g_capture.record(cmdList, device, sources, note);
 
             if (g_capture.readyToWrite() && g_captureWriteAtFrame == 0)
                 g_captureWriteAtFrame = g_frames + 8;
@@ -5900,8 +5963,19 @@ std::optional<double> LastGpuTime() { return g_lastGpuTime; }
 
 void RequestCapture(unsigned int frames)
 {
+    if (g_capture.isActive())
+        return;
     ClearCaptureDirectory();
+    g_captureIsDump = false;
     g_capture.request(frames);
+}
+
+void RequestCacheDump(unsigned int frames)
+{
+    if (g_capture.isActive())
+        return;
+    g_captureIsDump = true;
+    g_capture.request(frames, capture::kMaxDumpFrames);
 }
 
 bool CaptureInProgress() { return g_capture.isActive(); }

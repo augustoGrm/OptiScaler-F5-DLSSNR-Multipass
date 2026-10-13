@@ -310,6 +310,9 @@ std::optional<double> LastGpuTime();
 // Writes a run of consecutive frames, each as the upscaler produced it and again after the model's edit.
 // The pair is a control: same frames, same run, one variable.
 void RequestCapture(unsigned int frames);
+// An edit cache dump: a capture that also copies the game's motion vectors and depth (dlssnr-cachedump beside
+// OptiScaler; the trigger file dlssnr-cachedump.trigger asks for one too)
+void RequestCacheDump(unsigned int frames);
 bool CaptureInProgress();
 
 void Shutdown();
