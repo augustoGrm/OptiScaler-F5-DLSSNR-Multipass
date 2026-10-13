@@ -490,7 +490,8 @@ static void RecordGameDlssgRequest(const sl::DLSSGOptions& options)
     const auto next = FGFollowGame::FromGame(options.mode == sl::DLSSGMode::eOff, options.numFramesToGenerate);
     const auto previous = state.dlssgInputGameRequest.exchange(next);
 
-    if (next == previous)
+    // While off, games keep resending their menu's multiplier (Witcher 3 alternates 2x/4x): nothing to report
+    if (next == previous || (!next.enabled && !previous.enabled))
         return;
 
     const bool follows = Config::Instance()->FGFollowsGame();
