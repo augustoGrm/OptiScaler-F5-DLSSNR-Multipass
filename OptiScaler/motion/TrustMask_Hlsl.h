@@ -23,6 +23,9 @@ cbuffer P : register(b0)
     uint debugView;      // 0 the mask, 1 depth, 2 revealed, 3 flow consistency, 4 luma, 5 out of the picture (no memory)
     uint depthBoth;      // this frame and the one before both had depth: the depth checks have two real depths to compare
     uint sceneCutEnabled; // the scene-cut flag (CutFlag, t7) is there to be read
+    uint guideSurface;    // GuideMotion: each picture pixel takes the motion of the flow texels on its own surface (t2, t3)
+    float uncoverReach;   // Uncover: how far out (flow pixels) the surface's motion is gathered from
+    uint2 padding;
 };
 
 SamplerState Linear : register(s0);
@@ -203,7 +206,132 @@ void GuideDepth(uint3 id : SV_DispatchThreadID)
     OutFloat[id.xy] = value;
 }
 
+// Whether the content at flow pixel p, moving by motion (picture pixels, towards the previous frame), lay behind a
+// surface clearly nearer than `here` a frame ago: last frame's proxy (DepthBefore, t3) at any of the four texels
+// around the spot (one gather).
+bool HiddenBefore(int2 p, float2 motion, float here)
+{
+    const float2 uv = (float2(p) + 0.5 + motion / fullPerFlow) / float2(size);
+    const float4 before = DepthBefore.GatherRed(Linear, uv);
+    const float nearestBefore = min(min(before.x, before.y), min(before.z, before.w));
+    return (here - nearestBefore) / here > revealTolerance;
+}
+
+// Background just uncovered (at the flow's size, before the guide is enlarged from it): where a nearer thing moved off
+// it, or it moved out from under a nearer thing (the trailing side of a camera turn around a character), what this
+// pixel shows was hidden a frame ago, so the match found something else, often far off. Its motion is that of the
+// surface it is on, and that motion is the one thing that leads back under the nearer surface.
+//
+// Only pixels with something clearly nearer within uncoverReach go on (depth reads at 24 places: eight directions, a
+// quarter, half and all of the reach). The flow is then gathered at 16 places (eight directions, half and all of the
+// reach: the farther, the likelier past the strip) on this pixel's surface by depth (DepthNow, t2: this frame's
+// proxy). Of those that lead back under a nearer surface (HiddenBefore), the one most others agree with (the farthest
+// counting twice) is the surface's motion, and the pixel takes it, unless under a quarter of the gathered weight
+// agrees: along a long outline many places lie in the uncovered strip too, and their wrong answers can agree with
+// each other. Where none leads back under a nearer surface the pixel was not hidden and keeps its flow, as it does
+// where nothing nearer is around at all (most of the picture).
+[numthreads(8, 8, 1)]
+void Uncover(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= size.x || id.y >= size.y)
+        return;
+
+    const int2 p = int2(id.xy);
+    const int2 hi = int2(size) - 1;
+    const float4 own = Flow.Load(int3(p, 0));
+    const float here = DepthNow.Load(int3(p, 0));
+
+    if (here >= kSky)
+    {
+        OutFlow[id.xy] = own;
+        return;
+    }
+
+    static const int2 kDirections[8] = { int2(1, 0), int2(-1, 0), int2(0, 1), int2(0, -1),
+                                         int2(1, 1), int2(-1, 1), int2(1, -1), int2(-1, -1) };
+
+    // First only whether anything clearly nearer is around (depth reads alone): most pixels leave here.
+    bool nearer = false;
+
+    [unroll] for (int s0 = 0; s0 < 3; ++s0)
+    {
+        const float distance = uncoverReach * (float) (1 << s0) / 4.0; // a quarter, half and all of the reach
+        [unroll] for (int d0 = 0; d0 < 8; ++d0)
+        {
+            const int2 q = clamp(p + int2(round(float2(kDirections[d0]) * distance)), 0, hi);
+            nearer = nearer || (here - DepthNow.Load(int3(q, 0))) / here > revealTolerance;
+        }
+    }
+
+    if (!nearer)
+    {
+        OutFlow[id.xy] = own;
+        return;
+    }
+
+    // The flow on this surface at half and all of the reach (weight 0: another surface), and which of those lead back
+    // under a nearer surface. Fixed places, so the lists stay in registers.
+    float2 found[16];
+    float weight[16];
+    bool leads[16];
+    bool any = false;
+    float weights = 0.0;
+
+    [unroll] for (int k = 0; k < 16; ++k)
+    {
+        const float distance = uncoverReach * (k < 8 ? 0.5 : 1.0);
+        const int2 q = clamp(p + int2(round(float2(kDirections[k & 7]) * distance)), 0, hi);
+        const float z = DepthNow.Load(int3(q, 0));
+        const bool same = abs(z - here) / max(min(z, here), 1e-6) < 0.05;
+
+        found[k] = same ? Flow.Load(int3(q, 0)).xy : 0.0;
+        weight[k] = same ? (k < 8 ? 1.0 : 2.0) : 0.0;
+        leads[k] = same && HiddenBefore(p, found[k], here);
+        weights += weight[k];
+        any = any || leads[k];
+    }
+
+    if (!any)
+    {
+        OutFlow[id.xy] = own;
+        return;
+    }
+
+    // Of those that lead back under a nearer surface, the one most agree with; under a quarter of the weight is not
+    // the surface's.
+    float2 surface = own.xy;
+    float bestSupport = 0.25 * weights;
+    bool hidden = false;
+
+    [unroll] for (int i = 0; i < 16; ++i)
+    {
+        if (!leads[i])
+            continue;
+
+        float support = 0.0;
+        [unroll] for (int j = 0; j < 16; ++j)
+            support += abs(found[i].x - found[j].x) + abs(found[i].y - found[j].y) <= 1.5 ? weight[j] : 0.0;
+
+        if (support > bestSupport)
+        {
+            bestSupport = support;
+            surface = found[i];
+            hidden = true;
+        }
+    }
+
+    OutFlow[id.xy] = hidden ? float4(surface, own.z, own.w) : own;
+}
+
 // The flow enlarged to the picture's size; its values are already in picture pixels.
+//
+// A flow texel covers 2x2 picture pixels, and a plain bilinear read mixes the motion of the texels around a pixel: at
+// the outline of a thing that moves differently from what is behind it, a band of pixels gets a motion between the two,
+// which a frame generator draws as a see-through or haloed edge. With guideSurface each of the four texels counts by
+// its bilinear weight and by how near its depth (DepthBefore, t3: this frame's depth proxy at the flow's size) is to
+// this pixel's (DepthNow, t2: the guide depth at the picture's size, raw), measured against the nearest of the four, so
+// the pixel takes its own surface's motion and a pixel whose surface no texel has takes the nearest surface's (joint
+// bilateral upsampling).
 [numthreads(8, 8, 1)]
 void GuideMotion(uint3 id : SV_DispatchThreadID)
 {
@@ -211,7 +339,55 @@ void GuideMotion(uint3 id : SV_DispatchThreadID)
         return;
 
     float2 uv = (float2(id.xy) + 0.5) / float2(size);
-    OutFlow[id.xy] = float4(Flow.SampleLevel(Linear, uv, 0).xy, 0.0, 0.0);
+
+    if (guideSurface == 0)
+    {
+        OutFlow[id.xy] = float4(Flow.SampleLevel(Linear, uv, 0).xy, 0.0, 0.0);
+        return;
+    }
+
+    uint flowWidth, flowHeight;
+    Flow.GetDimensions(flowWidth, flowHeight);
+    const int2 flowHi = int2(flowWidth, flowHeight) - 1;
+
+    // This pixel's distance, as the depth proxy has it (larger is farther).
+    const float raw = DepthNow.Load(int3(id.xy, 0));
+    const float here = min(1.0 / max(reversed != 0 ? raw : 1.0 - raw, 1e-6), 1e6);
+
+    const float2 f = uv * float2(flowWidth, flowHeight) - 0.5;
+    const int2 f0 = int2(floor(f));
+    const float2 t = f - float2(f0);
+
+    float2 motion[4];
+    float bilinear[4], apart[4];
+    float closest = 1e30;
+
+    [unroll] for (int k = 0; k < 4; ++k)
+    {
+        const int2 o = int2(k & 1, k >> 1);
+        const int2 q = clamp(f0 + o, 0, flowHi);
+        const float z = DepthBefore.Load(int3(q, 0));
+        const float rel = abs(z - here) / max(min(z, here), 1e-6);
+
+        motion[k] = Flow.Load(int3(q, 0)).xy;
+        bilinear[k] = (o.x != 0 ? t.x : 1.0 - t.x) * (o.y != 0 ? t.y : 1.0 - t.y);
+        apart[k] = rel * rel;
+        closest = min(closest, apart[k]);
+    }
+
+    float2 sum = 0.0;
+    float total = 0.0;
+
+    [unroll] for (int k2 = 0; k2 < 4; ++k2)
+    {
+        // The small floor keeps a texel the pixel sits exactly beside (bilinear weight 0) in the running when it is the
+        // only one on the pixel's surface.
+        const float w = (bilinear[k2] + 1e-3) * exp(-(apart[k2] - closest) / 0.01);
+        sum += w * motion[k2];
+        total += w;
+    }
+
+    OutFlow[id.xy] = float4(sum / total, 0.0, 0.0);
 }
 
 [numthreads(8, 8, 1)]
