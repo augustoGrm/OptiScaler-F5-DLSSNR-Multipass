@@ -256,9 +256,10 @@ bool Tearing(IDXGIFactory2* factory)
 }
 
 // What a D3D11 game's bridge does when its swapchain goes (Dx11wDx12SC::Release), for the D3D12 swapchain of a Vulkan game.
-void LetGoOfOutput(Bridge& bridge, IDXGISwapChain4* output)
+void LetGoOfOutput(Bridge& bridge, ComPtr<IDXGISwapChain4>& reference)
 {
     auto& state = State::Instance();
+    IDXGISwapChain4* output = reference.Get(); // compared with the state below; not used once the reference is let go
     HWND window = bridge.window;
 
     if (auto* device = bridge.device12; device != nullptr && g_outputDevice.compare_exchange_strong(device, nullptr))
@@ -293,12 +294,19 @@ void LetGoOfOutput(Bridge& bridge, IDXGISwapChain4* output)
     }
 
     auto fg = state.currentFG;
+    const bool releaseFg = fg != nullptr && fg->Mutex.getOwner() != 1 && fg->SwapchainContext() != nullptr;
 
-    if (fg != nullptr && fg->Mutex.getOwner() != 1 && fg->SwapchainContext() != nullptr)
-    {
+    if (releaseFg)
         fg->Deactivate();
+
+    // Intel: XeFG's swapchain context is destroyed only once every reference to its swapchain is gone (else
+    // xefgSwapChainDestroy fails with POINTER_STILL_IN_USE and the context leaks), as the D3D11 bridge does
+    // (Dx11wDx12SC::Release): the bridge's own goes first.
+    reference.Reset();
+    output = nullptr;
+
+    if (releaseFg)
         fg->ReleaseSwapchain(window);
-    }
 
     // The private device and queue were made current for frame generation (the make function below): they must not stay
     // so once the swapchain is gone, whatever uses the state next would reach a device that is about to be released.
@@ -463,7 +471,7 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
         return true;
     };
 
-    const native::ReleaseOutputFn release = [self](IDXGISwapChain4* output) { LetGoOfOutput(*self, output); };
+    const native::ReleaseOutputFn release = [self](ComPtr<IDXGISwapChain4>& output) { LetGoOfOutput(*self, output); };
 
     return bridge.core.Create(target, in, make, release, why);
 }
@@ -626,7 +634,23 @@ bool OnCreateSwapchain(VkInstance instance, VkPhysicalDevice physical, VkDevice 
         g_bridge = std::move(bridge);
     }
 
-    if (!g_bridge->core.Patch(in, out, why))
+    bool patched = g_bridge->core.Patch(in, out, why);
+
+    // The hidden surface can stop answering while the bridge waits for the game's next swapchain (Batman: Arkham Knight on
+    // dxvk, after it left exclusive full screen and dxvk set the display modes back): with no game swapchain on it, a new
+    // hidden window and surface are made and the swapchain is tried once more, the D3D12 swapchain kept.
+    if (!patched && g_bridge->swapchains.empty())
+    {
+        std::string remade;
+        LOG_INFO("Vulkan bridge: {}; making the hidden window and surface again", why);
+
+        if (g_bridge->core.RemakeSurface(remade))
+            patched = g_bridge->core.Patch(in, out, why);
+        else
+            why += "; making them again failed: " + remade;
+    }
+
+    if (!patched)
     {
         LogOnce("not bridged: " + why);
         Retire(g_bridge);

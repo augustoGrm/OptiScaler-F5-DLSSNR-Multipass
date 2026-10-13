@@ -49,8 +49,10 @@ struct BridgeTarget
 // goes through frame generation here; the test makes a plain one.
 using MakeOutputFn = std::function<bool(DXGI_SWAP_CHAIN_DESC& desc, Microsoft::WRL::ComPtr<IDXGISwapChain4>& out,
                                         std::string& why)>;
-// Called with the D3D12 swapchain just before the bridge lets go of it (frame generation's bookkeeping goes here).
-using ReleaseOutputFn = std::function<void(IDXGISwapChain4* output)>;
+// Called with the bridge's reference to the D3D12 swapchain when the bridge lets go of it (frame generation's bookkeeping
+// goes here). It may release the reference itself, and must before frame generation destroys a swapchain of its own:
+// XeFG's destroy fails while any reference is left (POINTER_STILL_IN_USE). Released after the call otherwise.
+using ReleaseOutputFn = std::function<void(Microsoft::WRL::ComPtr<IDXGISwapChain4>& output)>;
 
 class VkPresentBridgeCore
 {
@@ -76,6 +78,11 @@ class VkPresentBridgeCore
     // composite alpha, IMMEDIATE else MAILBOX else FIFO, and a format and colour space the hidden surface offers (the
     // game's format always; its colour space when offered, else any). False when the hidden surface cannot carry it.
     bool Patch(const VkSwapchainCreateInfoKHR& game, VkSwapchainCreateInfoKHR* out, std::string& why) const;
+
+    // A new hidden window and surface at the current size, the D3D12 swapchain kept: for a hidden surface that stopped
+    // answering (its capabilities query fails after the game left exclusive full screen on dxvk). Only while no game
+    // swapchain lives on the old surface. False (nothing hidden left) when the new one cannot be made.
+    bool RemakeSurface(std::string& why);
 
     // After the producer, on the D3D12 queue: waits for `waitValue` on `waitFence` (the shared fence: the copy into
     // `source` is done) and for `afterValue` on `afterFence` (the producer's own done point; null: none), copies `source`
@@ -125,6 +132,7 @@ class VkPresentBridgeCore
     uint64_t LastCopyValue() const { return _copyValue; }
 
   private:
+    bool MakeSurface(std::string& why); // the hidden window and its surface, at _width x _height
     bool MakeOutput(const VkSwapchainCreateInfoKHR& game, std::string& why);
     bool MakeRing(std::string& why);
     void SetHiddenSize(uint32_t width, uint32_t height);
