@@ -49,12 +49,12 @@ int main()
         CHECK(std::strcmp(Resolve(kAuto, false, false).reason, "HDR flag off") == 0);
     }
 
-    // A forced choice is used whatever the game says.
+    // A forced choice is used whatever the game says (Linear HDR only where the format can hold it; see below).
     {
         for (bool flag : { false, true })
             for (bool canHold : { false, true })
             {
-                CHECK(Resolve(1, flag, canHold).encoding == Encoding::LinearHdr);
+                CHECK(Resolve(1, flag, canHold).encoding == (canHold ? Encoding::LinearHdr : Encoding::Srgb));
                 CHECK(Resolve(2, flag, canHold).encoding == Encoding::Srgb);
                 CHECK(Resolve(3, flag, canHold).encoding == Encoding::Gamma22);
                 CHECK(Resolve(4, flag, canHold).encoding == Encoding::Pq);
@@ -66,16 +66,29 @@ int main()
         CHECK(!Resolve(3, true, true).LinearHdr());
     }
 
-    // Mismatches are flagged, never refused: linear HDR in a format that cannot hold it, PQ in a float format.
+    // Linear HDR forced on a format that cannot hold it is refused: the frame is read as Auto reads it (tone-mapped
+    // sRGB, since the format already rules linear HDR out), and the choice says so. Reading gamma values as linear light
+    // made the Automatic white point swing 0.15x-12x (Call to Arms, audit HC9).
+    for (bool flag : { false, true })
     {
-        CHECK(Resolve(1, false, false).mismatch);
-        CHECK(!Resolve(1, false, true).mismatch);
-        CHECK(Resolve(4, false, true).mismatch);
+        const auto refused = Resolve(1, flag, false);
+        CHECK(refused.refused && !refused.mismatch && !refused.automatic);
+        CHECK(refused.encoding == Encoding::Srgb && !refused.LinearHdr());
+        CHECK(!Resolve(1, flag, true).refused && Resolve(1, flag, true).encoding == Encoding::LinearHdr);
+    }
+
+    // PQ in a float format is unusual but possible, so it is flagged and still applied.
+    {
+        CHECK(Resolve(4, false, true).mismatch && !Resolve(4, false, true).refused);
+        CHECK(Resolve(4, false, true).encoding == Encoding::Pq);
         CHECK(!Resolve(4, false, false).mismatch);
         // Tone-mapped values in a float buffer are ordinary (the FP16-with-gamma case), not a mismatch.
         CHECK(!Resolve(2, false, true).mismatch);
         CHECK(!Resolve(3, false, true).mismatch);
-        CHECK(Resolve(1, false, false).encoding == Encoding::LinearHdr); // still applied
+        // Nothing else is ever refused.
+        for (uint32_t setting = 0; setting < kSettingCount; ++setting)
+            for (bool canHold : { false, true })
+                CHECK(Resolve(setting, true, canHold).refused == (setting == 1 && !canHold));
     }
 
     // An out-of-range ini value behaves as Auto rather than as some other choice.
@@ -119,9 +132,13 @@ int main()
         // Forced PQ on Finished Picture is decoded by its own conversion pass: nothing left for the shared pass.
         CHECK(ResolveFinished(4, true, Screen::Sdr, false, true).shaderConversion == 0);
 
-        // Forced linear HDR and PQ pick their paths; the unusual format is applied with a warning.
+        // Forced linear HDR on a UNORM screen is refused (an 8/10-bit screen is not scRGB): the SDR path, as Auto.
         const auto linearOnUnorm = ResolveFinished(1, true, Screen::Sdr, false, true);
-        CHECK(linearOnUnorm.supported && linearOnUnorm.screen == Screen::Scrgb && linearOnUnorm.choice.mismatch);
+        CHECK(linearOnUnorm.supported && linearOnUnorm.screen == Screen::Sdr && linearOnUnorm.choice.refused);
+        CHECK(linearOnUnorm.shaderConversion == 0);
+        const auto linearOnFp16 = ResolveFinished(1, true, Screen::Sdr, true, false);
+        CHECK(linearOnFp16.supported && linearOnFp16.screen == Screen::Scrgb && !linearOnFp16.choice.refused);
+        // Forced PQ on an FP16 screen is applied with a warning.
         const auto pqOnFp16 = ResolveFinished(4, true, Screen::Scrgb, true, false);
         CHECK(pqOnFp16.supported && pqOnFp16.screen == Screen::Pq && pqOnFp16.choice.mismatch);
         CHECK(!ResolveFinished(4, true, Screen::Sdr, false, true).choice.mismatch);
@@ -153,6 +170,9 @@ int main()
         CHECK(std::strlen(MismatchWarning(Resolve(4, false, false))) == 0);
         CHECK(std::strlen(MismatchWarning(Resolve(4, false, true))) > 0);
         CHECK(std::strlen(MismatchWarning(Resolve(1, false, false))) > 0);
+        CHECK(std::strlen(MismatchWarning(Resolve(1, false, true))) == 0);
+        CHECK(Describe(Resolve(1, true, false), "B8G8R8A8_UNORM") ==
+              "Forced: Linear HDR refused (the format cannot hold it), read as Tone-mapped sRGB; B8G8R8A8_UNORM");
         CHECK(std::strlen(MismatchWarning(Resolve(kAuto, true, false))) == 0);
     }
 

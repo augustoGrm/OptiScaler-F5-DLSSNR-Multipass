@@ -3131,7 +3131,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
     }
 
     // How the game's colour is decoded (DlssNr_ColourEncoding.h). Auto trusts the game; a forced choice is applied
-    // even when the format looks wrong for it, and the line under the combo says so.
+    // even when the format looks unusual for it, and the line under the combo says so -- except Linear HDR on a format
+    // that cannot hold it, which is refused (read as Tone-mapped sRGB), also said under the combo.
     {
         static const char* encodingNames[] = { "Auto", "Linear HDR", "Tone-mapped sRGB", "Tone-mapped gamma 2.2",
                                                "PQ (HDR10)" };
@@ -3145,7 +3146,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
             LOG_INFO("DLSS-NR colour encoding set to {}", encodingNames[encoding]);
         }
         HelpMarker("How NR reads the game's colour. Auto: trust the game (default). Pick another only if the picture "
-                   "looks washed out, too dark or banded.");
+                   "looks washed out, too dark or banded. Linear HDR needs a float buffer; on an 8/10-bit one it is "
+                   "ignored.");
 
         const auto status = DlssNr::ReadColourEncodingStatus();
         // The line and the warning are wrapped and the warning comes and goes with the detected format: a fixed slot.
