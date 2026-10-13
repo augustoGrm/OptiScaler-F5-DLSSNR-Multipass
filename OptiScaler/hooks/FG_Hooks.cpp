@@ -828,7 +828,43 @@ HRESULT FGHooks::hkResizeTarget(IDXGISwapChain* This, const DXGI_MODE_DESC* pNew
 {
     if (Config::Instance()->FGXeFGForceBorderless.value_or_default())
     {
-        LOG_DEBUG("Skipping resize target.");
+        // The display mode is not changed (borderless), but the game asked for a new size and expects its window to
+        // follow: games on the blt model take the new size from the window (WM_SIZE) or call ResizeBuffers after it.
+        // Dropping the call left the window, and so the picture, at the old size while the game drew at the new one.
+        DXGI_SWAP_CHAIN_DESC desc {};
+        HWND hwnd = (This != nullptr && SUCCEEDED(This->GetDesc(&desc))) ? desc.OutputWindow : nullptr;
+
+        if (hwnd != nullptr && IsWindow(hwnd) && pNewTargetParameters != nullptr && pNewTargetParameters->Width > 0 &&
+            pNewTargetParameters->Height > 0)
+        {
+            const Util::MonitorInfo info = Util::GetMonitorInfoForWindow(hwnd);
+            const int width = info.width > 0 ? std::min<int>((int) pNewTargetParameters->Width, info.width)
+                                             : (int) pNewTargetParameters->Width;
+            const int height = info.height > 0 ? std::min<int>((int) pNewTargetParameters->Height, info.height)
+                                               : (int) pNewTargetParameters->Height;
+
+            RECT client {};
+            GetClientRect(hwnd, &client);
+
+            LOG_INFO("ResizeTarget {}x{} requested, borderless: window client {}x{} -> {}x{} on monitor {}x{}",
+                     pNewTargetParameters->Width, pNewTargetParameters->Height, client.right - client.left,
+                     client.bottom - client.top, width, height, info.width, info.height);
+
+            if (client.right - client.left != width || client.bottom - client.top != height)
+            {
+                SetWindowLongPtr(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
+                SetWindowLongPtr(hwnd, GWL_EXSTYLE, WS_EX_APPWINDOW);
+
+                // Centred on the monitor; a size equal to the monitor covers it
+                SetWindowPos(hwnd, HWND_TOP, info.x + (info.width - width) / 2, info.y + (info.height - height) / 2,
+                             width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+            }
+        }
+        else
+        {
+            LOG_DEBUG("Skipping resize target.");
+        }
+
         return S_OK;
     }
 
@@ -1446,7 +1482,9 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         state.activeFgOutput != FGOutput::NoFG &&
         (!IdentifyGpu::getPrimaryGpu().usesDxvk || VkPresentBridge::DxvkThroughVulkan()) && !XellHooks::canLimit())
     {
-        FrameLimit::sleep(fg != nullptr ? fg->IsActive() && !fg->IsPaused() : false);
+        // Shown frames per rendered one only while it generates (native::lowlatency::ShownPerRendered)
+        FrameLimit::sleep(native::lowlatency::ShownPerRendered(fg != nullptr && fg->IsGenerating(),
+                                                               fg != nullptr ? fg->GetInterpolatedFrameCount() : 0));
     }
 
     if ((config->SimulateWaitableObject.value_or_default() ||

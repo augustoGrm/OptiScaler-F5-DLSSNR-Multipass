@@ -706,6 +706,39 @@ try
         // At q = 3: this frame moves to work pixel 5, where the saved displacement is 2/8 = 4 work pixels.
         expect(Near(out.at(3, 3).r, 2.0f + 4.0f), "Compose: vectors over both frames add, across a render-size change");
         expect(Near(out.at(W - 1, 3).r, 2.0f), "Compose: off-screen history keeps this frame's vector");
+
+        // Every 3rd frame: a second reused frame adds its own displacement to the saved one where it leads (raw 1 at
+        // full size = 1 work pixel = 1/W), so the full frame after it composes back over all three frames.
+        gpu.newer = true; // a mode the reference shader does not have
+        const auto frameR2 = Fill([](unsigned, unsigned) { return Px { 1, 0, 0, 0 }; });
+        const auto accumulated =
+            gpu.Run(Base(DlssNrDetailReuse_AccumulateMotion), { frameR2, frameR2, frameR2, frameR2, saved });
+        // At work pixel 4: moves to 5, where the saved displacement is 2/8 of the width.
+        expect(Near(accumulated.at(4, 3).r, 1.0f / W + 2.0f / (W / 2)) && Near(accumulated.at(4, 3).g, 0),
+               "AccumulateMotion: this frame's displacement plus the saved one where it leads");
+        expect(Near(accumulated.at(W - 1, 3).r, 1.0f / W), "AccumulateMotion: off screen keeps this frame's own");
+        const auto composed3 = gpu.Run(Base(DlssNrDetailReuse_Compose), { frameB, frameB, frameB, frameB, accumulated });
+        // At q = 2: this frame moves 2 to work pixel 4, where the two frames before add 1 + 4 work pixels.
+        expect(Near(composed3.at(2, 3).r, 2.0f + 1.0f + 4.0f), "Compose: over three frames after an accumulated save");
+
+        // A saved displacement that is not a number, or one that would take the sum off the whole screen, is left out:
+        // this frame's own stands in
+        Img bad = saved;
+        bad.px[3 * W + 5] = { std::numeric_limits<float>::quiet_NaN(), 0, 0, 0 };
+        bad.px[3 * W + 9] = { 1.5f, 0, 0, 0 };
+        const auto guarded =
+            gpu.Run(Base(DlssNrDetailReuse_AccumulateMotion), { frameR2, frameR2, frameR2, frameR2, bad });
+        expect(Near(guarded.at(4, 3).r, 1.0f / W) && Near(guarded.at(8, 3).r, 1.0f / W),
+               "AccumulateMotion: a NaN or off-screen sum keeps this frame's own displacement");
+
+        // CaptureShown writes the detail and leaves u1 (colour and depth) alone
+        const auto shownAnswer = Fill([](unsigned, unsigned) { return Px { 0.7f, 0.7f, 0.7f, 1 }; });
+        const auto shownInput = Fill([](unsigned, unsigned) { return Px { 0.5f, 0.5f, 0.5f, 1 }; });
+        Img untouched;
+        const auto shown = gpu.Run(Base(DlssNrDetailReuse_CaptureShown), { shownInput, shownAnswer }, &untouched);
+        expect(Near(shown.at(3, 3).r, 0.2f) && shown.at(3, 3).a == 1.0f, "CaptureShown: answer - input, valid");
+        expect(untouched.at(3, 3).r == 0.0f && untouched.at(3, 3).a == 0.0f, "CaptureShown: u1 left alone");
+        gpu.newer = false;
     }
 
     // Fill: pixels whose moved detail was dropped take the trusted detail of neighbours on the same surface.

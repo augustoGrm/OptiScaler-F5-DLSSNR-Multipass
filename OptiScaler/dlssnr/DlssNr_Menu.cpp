@@ -40,6 +40,7 @@
 #include "DlssNr_GameDefaults.h"
 #include "DlssNr_NativeMode.h"
 #include "DlssNr_LutStatus.h"
+#include "DlssNrDetailReuseHost.h"
 
 #include <string>
 #include <vector>
@@ -1411,16 +1412,59 @@ static void EdgeCompressionDrawText(const EdgeCompressionLine& line)
     ImGui::PopStyleColor();
 }
 
-// The "Reuse detail between frames" checkbox and its help, on the NR Options page; the Optical F5Low page shows its
-// state and links here. Returns whether it is on.
+// "Reuse detail" on the NR Options page: off, every other frame or every 3rd frame (DetailReuse, DetailReuseInterval),
+// and the spread of the model's frames. The Optical F5Low page shows the state and links here. The edit cache
+// (EditCache) is not offered here: it is set in the ini only, and shown here when it is. Returns whether reuse is on
+// (its fine-tuning follows on the page).
 static bool RenderDetailReuseToggle(Config* config)
 {
     bool detailReuse = config->DlssNrDetailReuse.value_or_default();
-    if (ImGui::Checkbox("Reuse detail between frames (experimental)", &detailReuse))
+    const unsigned int interval = std::clamp(config->DlssNrDetailReuseInterval.value_or_default(), 2u, 3u);
+    int choice = !detailReuse ? 0 : interval == 3 ? 2 : 1;
+    const char* choices[] = { "Off", "Every other frame", "Every 3rd frame" };
+    if (ImGui::Combo("Reuse detail (experimental)", &choice, choices, IM_ARRAYSIZE(choices)))
+    {
+        detailReuse = choice != 0;
         config->DlssNrDetailReuse = detailReuse;
-    HelpMarker("Runs the model every other frame and moves its last result onto the frame between. About halves NR's "
-               "GPU cost. Detail can pop where things move or appear; best with 1 pass. Not with NR before SR. "
-               "Fine-tune under Debug.");
+        if (choice != 0)
+            config->DlssNrDetailReuseInterval = choice == 2 ? 3u : 2u;
+    }
+    HelpMarker("Runs the model on fewer frames and moves its last detail onto the frames between, for a lower NR GPU "
+               "cost: half the frames run the model at every other frame, a third at every 3rd frame (detail trails a "
+               "little more on motion). Detail can pop where things move or appear; best with 1 pass. Not with NR "
+               "before SR. Fine-tune under Debug.");
+
+    if (detailReuse)
+    {
+        // 0 = Auto: none at every other frame (as it shipped), over 3 at every 3rd frame (DlssNrDetailReuse::SpreadFor)
+        // Never longer than the interval (DlssNrDetailReuse::SpreadFor): no "over 3" at every other frame
+        const unsigned int every = choice == 2 ? 3u : 2u;
+        int spread = (int) std::min(config->DlssNrDetailReuseSpread.value_or_default(), every);
+        char autoLabel[48];
+        const unsigned int autoSpread = DlssNrDetailReuse::SpreadFor(every, 0);
+        std::snprintf(autoLabel, sizeof(autoLabel), autoSpread > 1 ? "Auto (over %u frames)" : "Auto (off)",
+                      autoSpread);
+        const char* spreads[] = { autoLabel, "Off", "Over 2 frames", "Over 3 frames" };
+        if (ImGui::Combo("Smooth the model's frames", &spread, spreads, (int) every + 1))
+            config->DlssNrDetailReuseSpread = (uint32_t) spread;
+        HelpMarker("Each time the model runs, its new detail differs a little from the moved old one, and the light "
+                   "can pulse at that rate (more at every 3rd frame). Smoothed, the model's frame and the frames after "
+                   "it blend from what was shown toward the new detail. Only what is shown is blended, so trails do "
+                   "not build up.");
+    }
+
+    // The edit cache: ini only (EditCache=true), not offered here
+    if (config->DlssNrEditCache.value_or_default())
+    {
+        const DlssNr::EditCacheInfo status = DlssNr::EditCacheStatus();
+        if (status.running)
+            ImGui::TextDisabled("Edit cache (set in the ini): on, the model ran on %.0f%% of frames",
+                                status.modelShare * 100.0f);
+        else if (status.standsAside != nullptr)
+            ImGui::TextDisabled("Edit cache (set in the ini): every frame runs the model (%s)", status.standsAside);
+        else
+            ImGui::TextDisabled("Edit cache (set in the ini): not running");
+    }
     return detailReuse;
 }
 
@@ -1461,102 +1505,19 @@ static void RenderSceneCutToggle(Config* config)
                             status.silent);
 }
 
-// Optical F5Low's own Reflex calls (native/NativeLowLatency.h): the switch, the method in use and, where the driver
-// reports it, the measured latency. Never touches the fakenvapi settings; it only points to them.
-static void RenderLowLatencySection(Config* config)
+// Optical F5Low's own Reflex calls (native/NativeLowLatency.h): only the state here; the Input and Output choices, Boost
+// and the details are on the Framerate page. The status is the one that page shows (native::lowlatency::ReasonText).
+static void RenderLowLatencySection()
 {
-    if (!ImGui::TreeNodeEx("Low latency##nativelowlatency", ImGuiTreeNodeFlags_DefaultOpen))
-        return;
-
-    using native::lowlatency::CapOwner;
-    using native::lowlatency::Decision;
-    using native::lowlatency::Setting;
-
-    // Off / On / On + Boost. On is the ini's auto or true (any game without Reflex, not only Optical F5Low): the last
-    // one seen comes back after Off. Off keeps the Boost choice for the next On.
-    static const char* modeNames[] = { "Off", "On", "On + Boost" };
-    static Setting lastOn = Setting::Auto;
-    const auto setting = config->DlssNrNativeLowLatency.value_or_default();
-
-    if (setting != Setting::Off)
-        lastOn = setting;
-
-    int mode = setting == Setting::Off ? 0 : (config->DlssNrNativeLowLatencyBoost.value_or_default() ? 2 : 1);
-
-    if (ImGui::Combo("Lower the game's latency##nativelowlatency", &mode, modeNames, IM_ARRAYSIZE(modeNames)))
-    {
-        if (mode == 0)
-        {
-            config->DlssNrNativeLowLatency = Setting::Off;
-        }
-        else
-        {
-            if (setting == Setting::Off)
-                config->DlssNrNativeLowLatency = lastOn;
-
-            config->DlssNrNativeLowLatencyBoost = mode == 2;
-        }
-    }
-
-    HelpMarker("Makes the latency calls the game doesn't: Reflex on NVIDIA, Anti-Lag 2 / XeLL / LatencyFlex on other "
-               "cards. Steps aside if the game uses Reflex itself.\n"
-               "With XeFG it also runs without an Optical F5Low mode: XeFG always uses XeLL, and XeLL needs these "
-               "calls. A game's own Reflex then goes to XeLL, which stays on even if Reflex is off in the game's "
-               "menu (fakenvapi's Force Reflex: Force Disable turns it off).\n"
-               "On + Boost: the GPU keeps its clocks up. A little lower latency, a little more power. NVIDIA Reflex "
-               "only; the others ignore it.");
-
     const auto status = native::lowlatency::GetStatus();
 
-    // Run with no path yet: the first frame, before the first Reflex call went out
-    const char* reason = status.decision == Decision::Run
-                             ? (status.path[0] != '\0' ? status.path : "Starting")
-                             : native::lowlatency::DecisionText(status.decision, status.gameReflexFeedsXell,
-                                                                status.forceReflexDisabled);
+    ImGui::SeparatorText("Low latency");
+    ImGui::TextWrapped("Low latency: %s, %s", native::lowlatency::StatusLabel(status.decision),
+                       native::lowlatency::ReasonText(status));
+    HelpMarker("Keeps the game's render queue short. Which method and who makes the calls is set on the Framerate page.");
 
-    ImGui::TextWrapped("Status: [%s]: %s", native::lowlatency::StatusLabel(status.decision), reason);
-
-    if (status.decision == Decision::Run && status.hasLatency)
-    {
-        // Through fakenvapi there are no GPU times: the frame's simulation start to its present's end
-        if (status.latencyEstimated)
-            ImGui::Text("Simulation to present (estimated from frame markers): %.1f ms", status.latencyMs);
-        else
-            ImGui::Text("Measured latency: %.1f ms", status.latencyMs);
-    }
-
-    // On NVIDIA and AMD XeLL does nothing while XeFG generates no frames (paused, off, exclusive full screen, or
-    // fakenvapi's own XeLL with no XeFG)
-    if (status.decision == Decision::Run && status.xellIdle)
-        ImGui::TextDisabled("XeLL does nothing on this GPU while XeFG generates no frames.");
-
-    // Who keeps the frame cap while we run: one wait per frame (NativeLowLatencyRule.h PlanCap)
-    if (const float cap = config->FramerateLimit.value_or_default();
-        status.decision == Decision::Run && status.path[0] != '\0' && cap > 0.0f)
-    {
-        ImGui::TextDisabled("Frame cap %.0f fps: kept by %s", cap,
-                            status.capOwner == CapOwner::Limiter ? "OptiScaler's limiter" : status.path);
-    }
-
-    // XeFG cannot run without XeLL (Intel), so a card that has real Reflex gets XeLL with it: say what gives Reflex.
-    // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
-    static const auto gpu = IdentifyGpu::getPrimaryGpu();
-
-    if (gpu.vendorId == VendorId::Nvidia && !fakenvapi::isUsingAsMainNvapi() &&
-        State::Instance().activeFgOutput == FGOutput::XeFG)
-    {
-        // DLSS frame generation: RTX 40 (Ada) and later
-        const bool dlssFrameGeneration = gpu.nvidiaArchInfo.architecture_id >= NV_GPU_ARCHITECTURE_AD100;
-        ImGui::TextWrapped(dlssFrameGeneration ? "XeFG always uses XeLL. For NVIDIA Reflex, use DLSS FG or FSR FG."
-                                               : "XeFG always uses XeLL. For NVIDIA Reflex, use FSR FG.");
-    }
-    else if (fakenvapi::isUsingAsMainNvapi() || State::Instance().activeFgOutput == FGOutput::XeFG ||
-             status.decision == Decision::ForceReflexDisabled || status.decision == Decision::ForceXell)
-    {
-        ImGui::TextWrapped("How it lowers latency is set in the fakenvapi settings.");
-    }
-
-    ImGui::TreePop();
+    if (ImGui::SmallButton("Set on the Framerate page##f5lowlatency"))
+        MenuPages::RequestPage(MenuPages::Page::Framerate);
 }
 
 // Optical F5Low: NR for a game that makes no upscaler call of its own (the native modes). The mode selector sits at the
@@ -1574,7 +1535,7 @@ static void RenderF5LowPage(Config* config, const NrCommon& nr)
     bool finishedPicture = nr.finishedPicture;
     RenderNativeMode(config, nr.enabled, finishedPicture);
 
-    RenderLowLatencySection(config);
+    RenderLowLatencySection();
 
     // Detail reuse on Optical F5Low's motion: shown here because this is where its saving matters most (NR on the whole
     // finished picture). Only its state: the checkbox and its fine-tuning live on the NR Options page.
@@ -1592,8 +1553,8 @@ static void RenderF5LowPage(Config* config, const NrCommon& nr)
         else
             ImGui::TextUnformatted("Reuse detail between frames: On");
     }
-    HelpMarker("Runs the model every other frame to about halve NR's cost; with Optical F5Low it skips detail where "
-               "the motion can't be trusted. Set on the NR Options page.");
+    HelpMarker("Runs the model every other frame (or every 3rd) to cut NR's cost by about half (or two thirds); with "
+               "Optical F5Low it skips detail where the motion can't be trusted. Set on the NR Options page.");
     if (ImGui::SmallButton("Set in NR Options##f5lowdetailreuse"))
         MenuPages::RequestPage(MenuPages::Page::NrOptions);
 
@@ -1755,6 +1716,44 @@ static void RenderExposureSection(Config* config, float menuResScale)
     ImGui::SeparatorText("NR Exposure");
     ImGui::TextDisabled("HDR input settings. Adjust the brightness range presented to NR.");
 
+    // Whether these controls act on the frame NR last ran on (shaders/dlssnr/DlssNr_ExposureState.h). They pick the
+    // white point that divides a linear HDR frame; a tone-mapped frame reaches the model as it is, and a display HDR
+    // frame (HDR10, scRGB, forced PQ) is put at its paper white instead. Shown greyed rather than hidden, so the values
+    // stay visible and come back as they were on a linear HDR frame. Highlight guard, below, acts in every case.
+    const auto encodingStatus = DlssNr::ReadColourEncodingStatus();
+    const auto exposureState = encodingStatus.seen ? encodingStatus.exposureState : DlssNrExposureState::State::LinearHdr;
+    const bool exposureActs = exposureState == DlssNrExposureState::State::LinearHdr;
+
+    if (exposureState == DlssNrExposureState::State::ToneMapped)
+    {
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: the game's picture is already tone mapped.");
+        HelpMarker("NR gets this picture as it is, with no exposure applied, so the settings below change nothing. "
+                   "Colour encoding (NR Output) says how the picture was read.");
+    }
+    else if (exposureState == DlssNrExposureState::State::DisplayPinned)
+    {
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: HDR10/scRGB picture. NR's white is the paper "
+                                                            "white below.");
+        HelpMarker("An HDR10 or scRGB picture is already in screen brightness, so NR takes its white from the game's "
+                   "HDR paper white, not from an exposure. The greyed settings change nothing.");
+
+        // The one brightness control that acts here (DlssNr_ExposureState.h PinnedWhitePoint).
+        float nits = DlssNrExposureState::PaperWhiteNits(config->DlssNrDisplayPaperWhiteNits.value_or_default());
+
+        if (ImGui::SliderFloat("Game's HDR paper white", &nits, DlssNrExposureState::kMinPaperWhiteNits,
+                               DlssNrExposureState::kMaxPaperWhiteNits, "%.0f nits", ImGuiSliderFlags_Logarithmic))
+            config->DlssNrDisplayPaperWhiteNits = DlssNrExposureState::PaperWhiteNits(nits);
+
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset##displaypaperwhite"))
+            config->DlssNrDisplayPaperWhiteNits = DlssNrExposureState::kReferenceWhiteNits;
+
+        HelpMarker("Set it to the game's own HDR paper white (or UI brightness) setting. Higher: darker input to NR. "
+                   "Default 203 nits, the HDR reference white.");
+    }
+
+    ImGui::BeginDisabled(!exposureActs);
+
     {
     // Logarithmic, because the useful range is not linear. A quarter to 240: the low end because
     // a frame the game already tone mapped wants roughly 1, the high end because there is no
@@ -1860,6 +1859,12 @@ static void RenderExposureSection(Config* config, float menuResScale)
                 }
                 else
                     ImGui::TextDisabled("Calculating automatic exposure...");
+            }
+            else if (source == 2 && vk)
+            {
+                // The scan watches D3D12 resource creation only; the Vulkan path resolves source 2 to Paper white.
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f),
+                                   "Scanned exposure is DirectX 12 only. Using Paper white.");
             }
             else if (source == 2)
             {
@@ -2232,9 +2237,11 @@ static void RenderExposureSection(Config* config, float menuResScale)
         if (ImGui::SmallButton("Reset##paperwhite"))
             config->DlssNrWhitePointScale = 1.0f;
 
-    HelpMarker("Brightness reference for NR's input. Higher: darker input. Lower: brighter input. Change it if NR "
-               "loses detail or shifts colours.");
+    HelpMarker("Brightness reference for NR's input (linear HDR pictures). Higher: darker input. Lower: brighter "
+               "input. Change it if NR loses detail or shifts colours.");
     }
+
+    ImGui::EndDisabled();
 
     // Highlight guard, directly under the white point / trim -- it bounds the model's edit and
     // belongs with the exposure controls it works alongside.
@@ -3117,6 +3124,42 @@ static void RenderInputPage(Config* config, float menuResScale, const NrCommon& 
         HelpMarker("Filter used to reduce NR output when Model resolution exceeds 100%.\nSharper filters may introduce ringing around edges.");
     }
 
+    // Experimental input style (Config.h DlssNrInputStyle): restyle the picture the model is shown.
+    {
+        static const char* styleNames[] = { "Off", "Watercolour", "Structure hint", "Smooth canvas" };
+        int style = (int) std::min(config->DlssNrInputStyle.value_or_default(), 3u);
+
+        if (ImGui::Combo("Input style (experimental)", &style, styleNames, IM_ARRAYSIZE(styleNames)))
+            config->DlssNrInputStyle = (uint32_t) style;
+
+        HelpMarker("A/B test: restyle the picture NR is shown before it runs. The game's own picture is not changed.\n"
+                   "Watercolour flattens texture into washes and keeps edges (can look blocky).\nStructure hint raises "
+                   "local contrast (brightness only) so NR has more structure to follow; high strength blurs with a "
+                   "composed curve.\nSmooth canvas shows NR skin like an untextured old-game surface: pores and fine "
+                   "shading flattened, contours kept, so NR paints its own skin detail.\nWith a composed curve only "
+                   "what NR paints differently shows; with a replace curve you see NR's painting as it is (Restore "
+                   "Sharpness is off while a style is on, or it would put the game's texture back).\nNo effect above "
+                   "100% Model resolution.");
+
+        if (style != 0)
+        {
+            // Watercolour and smooth canvas are a blend (0..1); the structure hint's boost goes to 3x.
+            const float most = style == 2 ? 3.0f : 1.0f;
+            float strength = std::min(config->DlssNrInputStyleStrength.value_or_default(), most);
+
+            if (ImGui::SliderFloat("Input style strength", &strength, 0.0f, most, "%.2f"))
+                config->DlssNrInputStyleStrength = strength;
+
+            bool facesOnly = config->DlssNrInputStyleFacesOnly.value_or_default();
+
+            if (ImGui::Checkbox("Faces only (skin colours)##inputstyle", &facesOnly))
+                config->DlssNrInputStyleFacesOnly = facesOnly;
+
+            HelpMarker("Apply the input style only where the colour looks like skin (the same colour test as Skin "
+                       "protection; warm materials can match too, coloured light can hide skin).");
+        }
+    }
+
     RenderEdgeCompression(config, menuResScale, nr);
 
     RenderLutSection(config);
@@ -3188,7 +3231,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
     }
 
     // How the game's colour is decoded (DlssNr_ColourEncoding.h). Auto trusts the game; a forced choice is applied
-    // even when the format looks wrong for it, and the line under the combo says so.
+    // even when the format looks unusual for it, and the line under the combo says so -- except Linear HDR on a format
+    // that cannot hold it, which is refused (read as Tone-mapped sRGB), also said under the combo.
     {
         static const char* encodingNames[] = { "Auto", "Linear HDR", "Tone-mapped sRGB", "Tone-mapped gamma 2.2",
                                                "PQ (HDR10)" };
@@ -3202,7 +3246,8 @@ static void RenderOutputPage(Config* config, float menuResScale, const NrCommon&
             LOG_INFO("DLSS-NR colour encoding set to {}", encodingNames[encoding]);
         }
         HelpMarker("How NR reads the game's colour. Auto: trust the game (default). Pick another only if the picture "
-                   "looks washed out, too dark or banded.");
+                   "looks washed out, too dark or banded. Linear HDR needs a float buffer; on an 8/10-bit one it is "
+                   "ignored.");
 
         const auto status = DlssNr::ReadColourEncodingStatus();
         // The line and the warning are wrapped and the warning comes and goes with the detected format: a fixed slot.

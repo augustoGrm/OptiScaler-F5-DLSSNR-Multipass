@@ -252,6 +252,10 @@ class State
     bool rtssReflexInjection = false;
     bool fakenvapiReloadLowLatency = false;
     UINT64 reflexFrameId = 0;
+    // XeFG's last Present Id and whether it was the frame markers' ID (the FPS overlay's Reflex timings show both)
+    // Written on XeFG's present thread, read by the menu
+    std::atomic<uint32_t> xefgPresentId { 0 };
+    std::atomic<bool> xefgPresentIdFollowsMarkers { false };
     UINT64 frameCount = 0;
     // Vulkan presents (the vkQueuePresentKHR hook, installed with the overlay). frameCount counts DXGI presents only.
     std::atomic<UINT64> vulkanPresentCount { 0 };
@@ -326,8 +330,6 @@ class State
 
     // Vulkan stuff
     bool vulkanCreatingSC = false;
-    bool creatingD3DDevice = false;
-    bool vulkanSkipHooks = false;
     VkInstance VulkanInstance = nullptr;
 
     // Framegraph
@@ -542,18 +544,21 @@ class ScopedSkipHeapCapture
     ~ScopedSkipHeapCapture() { State::Instance().skipHeapCapture = previousState; }
 };
 
+// Per thread, like ScopedCreatingD3DDevice: OptiScaler's own Vulkan work (and the dxvk device a GPU check or Anti-Lag 2
+// makes) runs on the thread that sets this, while the game's swapchains and devices are made on its own threads. One
+// process-wide flag skipped the game's hooks whenever the two overlapped, and a scope that finished out of order left it
+// set (or cleared an outer scope's) for good.
 class ScopedSkipVulkanHooks
 {
   private:
-    bool previousState;
+    inline static thread_local int depth = 0;
 
   public:
-    ScopedSkipVulkanHooks()
-    {
-        previousState = State::Instance().vulkanSkipHooks;
-        State::Instance().vulkanSkipHooks = true;
-    }
-    ~ScopedSkipVulkanHooks() { State::Instance().vulkanSkipHooks = previousState; }
+    ScopedSkipVulkanHooks() { ++depth; }
+    ~ScopedSkipVulkanHooks() { --depth; }
+
+    // This thread skips OptiScaler's Vulkan hooks
+    static bool Active() { return depth > 0; }
 };
 
 class ScopedVulkanCreatingSC
@@ -570,16 +575,18 @@ class ScopedVulkanCreatingSC
     ~ScopedVulkanCreatingSC() { State::Instance().vulkanCreatingSC = previousState; }
 };
 
+// Per thread: dxvk and vkd3d-proton make their Vulkan instance and device on the thread that creates the D3D device.
+// One process-wide flag was left set when two threads' creations overlapped and finished out of order (the later one
+// restored the earlier one's "set"), and the game's own Vulkan device then went without OptiScaler's extensions.
 class ScopedCreatingD3DDevice
 {
   private:
-    bool previousState;
+    inline static thread_local int depth = 0;
 
   public:
-    ScopedCreatingD3DDevice()
-    {
-        previousState = State::Instance().creatingD3DDevice;
-        State::Instance().creatingD3DDevice = true;
-    }
-    ~ScopedCreatingD3DDevice() { State::Instance().creatingD3DDevice = previousState; }
+    ScopedCreatingD3DDevice() { ++depth; }
+    ~ScopedCreatingD3DDevice() { --depth; }
+
+    // This thread is inside a D3D device creation
+    static bool Active() { return depth > 0; }
 };

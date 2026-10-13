@@ -25,6 +25,69 @@ static int fails = 0;
         }                                                                                                              \
     } while (0)
 
+// dxvk with the Vulkan bridge, as a sequence: the game's Present of frame f pushes its entry (id 100 + f, the site chosen
+// then), dxvk presents frame f `lag` game frames later and pops. Each frame must be paired exactly once (at the game's
+// Present for a GamePresent entry, at dxvk's for a VulkanPresent one or when nothing was queued) and a GamePresent frame
+// must reach XeFG with its own ID.
+struct SeqResult
+{
+    int pairs[64] = {};
+    uint32_t idSeen[64] = {};
+};
+
+// `siteOf(f)`: the site the game's Present picks for frame f. `failed(f)`: its real Present did not return S_OK (undone).
+template <class SiteFn, class FailFn> SeqResult RunSeq(int frames, int lag, SiteFn siteOf, FailFn failed)
+{
+    SeqResult r;
+    FrameLedger led;
+    auto dxvkPresent = [&](int frame)
+    {
+        FrameLedger::Entry e;
+        const bool popped = led.Pop(&e);
+
+        if (!popped || e.site == SleepSite::VulkanPresent)
+            ++r.pairs[frame];
+
+        r.idSeen[frame] = popped && e.site == SleepSite::GamePresent ? e.frameId : 0;
+    };
+
+    int next = 0; // the next frame dxvk presents (a failed frame is never presented)
+    auto skipFailed = [&] { while (next < frames && failed(next)) ++next; };
+
+    for (int f = 0; f < frames; ++f)
+    {
+        const auto site = siteOf(f);
+        const auto seq = led.Push(100 + f, site);
+
+        if (site == SleepSite::GamePresent)
+            ++r.pairs[f];
+
+        if (failed(f))
+            CHECK(led.Undo(seq));
+
+        // dxvk is `lag` frames behind
+        skipFailed();
+
+        if (f - lag >= 0 && next <= f - lag)
+        {
+            dxvkPresent(next++);
+            skipFailed();
+        }
+    }
+
+    while (true)
+    {
+        skipFailed();
+
+        if (next >= frames)
+            break;
+
+        dxvkPresent(next++);
+    }
+
+    return r;
+}
+
 int main()
 {
     Inputs in;
@@ -61,6 +124,40 @@ int main()
         x.gameRunsXell = false;
         x.forceXell = true;
         CHECK(Decide(x) == Decision::ForceXell);
+    }
+
+    // FSR FG generating (D3D12, or D3D11 through the bridge), no Optical F5Low mode: Auto runs us; Off, the game's own
+    // Reflex and fakenvapi's Force Disable still win
+    {
+        Inputs f;
+        f.fsrFgRunning = true;
+        CHECK(Decide(f) == Decision::Run);
+        CHECK(RunReason(f) == RunsFor::FsrFg);
+        f.setting = Setting::Off;
+        CHECK(Decide(f) == Decision::SettingOff);
+        f.setting = Setting::Auto;
+        f.gameCallsReflex = true;
+        CHECK(Decide(f) == Decision::GameRunsReflex);
+        f.gameCallsReflex = false;
+        f.forceReflexDisabled = true;
+        CHECK(Decide(f) == Decision::ForceReflexDisabled);
+        f.forceReflexDisabled = false;
+
+        // FSR FG paused or off: Auto stops again
+        f.fsrFgRunning = false;
+        CHECK(Decide(f) == Decision::NoF5Low);
+
+        // What it runs for: an Optical F5Low mode first, then XeFG, then FSR FG; On with nothing keeps the F5Low name
+        Inputs r;
+        r.fsrFgRunning = true;
+        r.f5lowRunning = true;
+        CHECK(RunReason(r) == RunsFor::F5Low);
+        r.f5lowRunning = false;
+        r.xefgRunning = true;
+        CHECK(RunReason(r) == RunsFor::Xefg);
+        Inputs on;
+        on.setting = Setting::On;
+        CHECK(RunReason(on) == RunsFor::F5Low);
     }
 
     // The game's own Reflex: ours never runs, in either setting
@@ -288,6 +385,16 @@ int main()
         CHECK(VkSleepFrame(sleepFails, calls) == VkSleepResult::SleepFailed);
         CHECK(waitCalls == 0);
     }
+
+    // Frames shown per rendered one: 1 + generated only while frame generation generates (waiting for frame data or
+    // paused it shows the game's frames alone), so XeFG 3x and 4x divide the cap by 3 and 4, not by a fixed 2
+    CHECK(ShownPerRendered(true, 1) == 2);
+    CHECK(ShownPerRendered(true, 2) == 3);
+    CHECK(ShownPerRendered(true, 3) == 4);
+    CHECK(ShownPerRendered(false, 1) == 1);
+    CHECK(ShownPerRendered(false, 3) == 1);
+    CHECK(CapPerRenderedFrame(120.0f, ShownPerRendered(true, 3)) == 30.0f);
+    CHECK(CapPerRenderedFrame(50.0f, ShownPerRendered(false, 1)) == 50.0f);
 
     // The frame cap while we run (PlanCap): one waiter per frame
     {
@@ -680,6 +787,713 @@ int main()
         x.xefgRunning = true;
         x.gameCallsReflex = true;
         CHECK(Decide(x) == Decision::GameRunsReflex);
+    }
+
+    // Framerate page: the Input choice (Auto / Game / OptiScaler / Off) and what each means
+    {
+        // Mapping to the setting our own low latency uses, and whether the game's Reflex is sent low latency off
+        CHECK(RuleForInput(Input::Auto).setting == Setting::Auto && !RuleForInput(Input::Auto).blockGameLowLatency);
+        CHECK(RuleForInput(Input::Game).setting == Setting::Off && !RuleForInput(Input::Game).blockGameLowLatency);
+        CHECK(RuleForInput(Input::OptiScaler).setting == Setting::On &&
+              !RuleForInput(Input::OptiScaler).blockGameLowLatency);
+        CHECK(RuleForInput(Input::Off).setting == Setting::Off && RuleForInput(Input::Off).blockGameLowLatency);
+
+        // Off sends the game's Reflex low latency off, unless DLSS frame generation needs Reflex
+        CHECK(BlocksGameLowLatency(Input::Off, false));
+        CHECK(!BlocksGameLowLatency(Input::Off, true));
+        CHECK(!BlocksGameLowLatency(Input::Game, false));
+        CHECK(!BlocksGameLowLatency(Input::Auto, false));
+        CHECK(!BlocksGameLowLatency(Input::OptiScaler, false));
+
+        // Ini words: the new key, and the old [DlssNr] NativeLowLatency one
+        for (auto input : { Input::Auto, Input::Game, Input::OptiScaler, Input::Off })
+        {
+            Input back = Input::Auto;
+            CHECK(InputFromIniText(InputIniText(input), &back) && back == input);
+        }
+
+        Input parsed = Input::Auto;
+        CHECK(!InputFromIniText("", &parsed));
+        CHECK(!InputFromIniText(nullptr, &parsed));
+        CHECK(!InputFromIniText("true", &parsed));
+        CHECK(!InputFromIniText("banana", &parsed));
+
+        CHECK(InputFromLegacyText("auto", &parsed) && parsed == Input::Auto);
+        CHECK(InputFromLegacyText("true", &parsed) && parsed == Input::OptiScaler);
+        CHECK(InputFromLegacyText("false", &parsed) && parsed == Input::Game);
+        CHECK(!InputFromLegacyText("game", &parsed));
+        CHECK(!InputFromLegacyText(nullptr, &parsed));
+
+        // The old key an older DLL reads: Off and Game both write false (neither makes calls of ours)
+        CHECK(std::strcmp(LegacySettingText(Input::Auto), "auto") == 0);
+        CHECK(std::strcmp(LegacySettingText(Input::OptiScaler), "true") == 0);
+        CHECK(std::strcmp(LegacySettingText(Input::Game), "false") == 0);
+        CHECK(std::strcmp(LegacySettingText(Input::Off), "false") == 0);
+
+        // New key wins; a bad new key falls back to the old one; neither: Auto
+        CHECK(InputFromIniValues(true, "off", "true") == Input::Off);
+        CHECK(InputFromIniValues(true, "game", nullptr) == Input::Game);
+        CHECK(InputFromIniValues(false, nullptr, "true") == Input::OptiScaler);
+        CHECK(InputFromIniValues(false, nullptr, "false") == Input::Game);
+        CHECK(InputFromIniValues(true, "banana", "false") == Input::Game);
+        CHECK(InputFromIniValues(false, nullptr, nullptr) == Input::Auto);
+        CHECK(InputFromIniValues(true, "", "") == Input::Auto);
+        // An explicit auto is a choice: the old key does not override it
+        CHECK(InputFromIniValues(true, "auto", "false") == Input::Auto);
+        CHECK(InputFromIniValues(true, "auto", "true") == Input::Auto);
+        // The key is there but holds nothing readable: the old key still counts
+        CHECK(InputFromIniValues(true, nullptr, "false") == Input::Game);
+
+        // Decide: Game stands us down with its own answer, Off with its own, both before anything else
+        Inputs g;
+        g.f5lowRunning = true;
+        g.setting = RuleForInput(Input::Game).setting;
+        g.blockGameLowLatency = RuleForInput(Input::Game).blockGameLowLatency;
+        CHECK(Decide(g) == Decision::SettingOff);
+
+        Inputs o;
+        o.f5lowRunning = true;
+        o.gameCallsReflex = true;
+        o.setting = RuleForInput(Input::Off).setting;
+        o.blockGameLowLatency = RuleForInput(Input::Off).blockGameLowLatency;
+        CHECK(Decide(o) == Decision::LowLatencyOff);
+
+        // Off kept back by DLSS frame generation: no block, the plain switched-off answer
+        o.blockGameLowLatency = BlocksGameLowLatency(Input::Off, true);
+        CHECK(Decide(o) == Decision::SettingOff);
+
+        CHECK(std::strcmp(StatusLabel(Decision::LowLatencyOff), "Off") == 0);
+        CHECK(DecisionText(Decision::LowLatencyOff)[0] != '\0');
+        CHECK(std::strcmp(DecisionText(Decision::LowLatencyOff), DecisionText(Decision::SettingOff)) != 0);
+
+        // OptiScaler runs in any game without Reflex; Auto needs something to run for
+        Inputs w;
+        w.setting = RuleForInput(Input::OptiScaler).setting;
+        CHECK(Decide(w) == Decision::Run);
+        w.setting = RuleForInput(Input::Auto).setting;
+        CHECK(Decide(w) == Decision::NoF5Low);
+    }
+
+    // Framerate page: "Active: <input> -> <output>" names who makes the calls, from the same Decision the code uses
+    {
+        CHECK(std::strcmp(ActiveInputText(Decision::Run, false), "OptiScaler") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::LowLatencyOff, true), "Off") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::FrameGenerationOwnsReflex, true), "Frame generation") == 0);
+
+        // The game's Reflex is what runs when it makes calls, whatever the decision says about us
+        CHECK(std::strcmp(ActiveInputText(Decision::GameRunsReflex, true), "Game") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::NoF5Low, true), "Game") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::SettingOff, true), "Game") == 0);
+
+        // Nobody makes calls
+        CHECK(std::strcmp(ActiveInputText(Decision::NoF5Low, false), "None") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::SettingOff, false), "None") == 0);
+
+        // The game runs XeLL of its own (no Reflex calls): that is who lowers latency, not nothing
+        CHECK(std::strcmp(ActiveInputText(Decision::GameRunsXell, false, true, false), "Game") == 0);
+        // DLSS FG runs Reflex whatever the Input says (Game, or Off kept for it)
+        CHECK(std::strcmp(ActiveInputText(Decision::SettingOff, false, false, true), "Frame generation") == 0);
+        CHECK(std::strcmp(ActiveInputText(Decision::NoF5Low, false, false, true), "Frame generation") == 0);
+        // Input Off with nothing needing Reflex is still Off
+        CHECK(std::strcmp(ActiveInputText(Decision::LowLatencyOff, false, false, false), "Off") == 0);
+        // The game's own Reflex calls still count first
+        CHECK(std::strcmp(ActiveInputText(Decision::SettingOff, true, false, true), "Game") == 0);
+
+        // The reason for Input Game, or Off kept by DLSS FG, does not claim the Input is Game
+        CHECK(std::strstr(DecisionText(Decision::SettingOff), "Input is Game:") == nullptr);
+        CHECK(DecisionText(Decision::SettingOff)[0] != '\0');
+    }
+
+    // Framerate page: the Output choice
+    {
+        OutputInputs real; // NVIDIA, real nvapi, no XeFG
+        real.nvidiaGpu = true;
+        CHECK(OutputAvailability(Output::Auto, real).available);
+        CHECK(OutputAvailability(Output::XeLL, real).available);
+        CHECK(!OutputAvailability(Output::LatencyFlex, real).available);
+        CHECK(OutputAvailability(Output::LatencyFlex, real).why[0] != '\0');
+
+        OutputInputs fake;
+        fake.fakenvapiMain = true;
+        CHECK(OutputAvailability(Output::LatencyFlex, fake).available);
+
+        // XeFG always uses XeLL: Auto and LatencyFlex are out, XeLL is the locked answer
+        OutputInputs xefg;
+        xefg.fakenvapiMain = true;
+        xefg.xefgOutput = true;
+        CHECK(!OutputAvailability(Output::LatencyFlex, xefg).available);
+        CHECK(!OutputAvailability(Output::Auto, xefg).available);
+        CHECK(OutputAvailability(Output::XeLL, xefg).available);
+        CHECK(OutputLocked(xefg));
+        CHECK(!OutputLocked(real));
+        CHECK(OutputShown(xefg, false, false) == Output::XeLL);
+
+        // What the combo shows from the two fakenvapi flags
+        CHECK(OutputShown(real, false, false) == Output::Auto);
+        CHECK(OutputShown(real, true, false) == Output::XeLL);
+        CHECK(OutputShown(fake, false, true) == Output::LatencyFlex);
+        // LatencyFlex forced in the ini on the real nvapi (fakenvapi is not the nvapi): that entry is not offered, so Auto
+        // shows, not a greyed LatencyFlex
+        CHECK(OutputShown(real, false, true) == Output::Auto);
+        CHECK(OutputShown(fake, true, true) == Output::XeLL);
+
+        // Boost: only with real Reflex as the output, and only while OptiScaler makes the calls
+        CHECK(BoostAvailable(Input::Auto, real, false));
+        CHECK(BoostAvailable(Input::OptiScaler, real, false));
+        CHECK(!BoostAvailable(Input::Game, real, false));
+        CHECK(!BoostAvailable(Input::Off, real, false));
+        CHECK(!BoostAvailable(Input::Auto, fake, false));
+        CHECK(!BoostAvailable(Input::Auto, xefg, false));
+        CHECK(!BoostAvailable(Input::Auto, real, true)); // Force XeLL
+    }
+
+    // Off: the game's sleep mode goes out with low latency off, no boost, no interval (OptiScaler's limiter keeps the cap)
+    {
+        using namespace native::xefgreflex;
+
+        SleepMode game;
+        game.lowLatency = true;
+        game.boost = true;
+        game.minimumIntervalUs = 8333;
+        game.useMarkersToOptimize = true;
+
+        for (const bool xefgOutput : { false, true })
+        {
+            const auto off = SleepModeForOutput(game, 16666, xefgOutput, false, true);
+            CHECK(!off.lowLatency && !off.boost && off.minimumIntervalUs == 0);
+            CHECK(off.useMarkersToOptimize); // not ours to change
+        }
+
+        // Not blocked: as before (cap in, XeFG keeps low latency on)
+        const auto plain = SleepModeForOutput(game, 16666, false, false, false);
+        CHECK(plain.lowLatency && plain.boost && plain.minimumIntervalUs == 16666);
+        const auto xefgOn = SleepModeForOutput(game, 0, true, false, false);
+        CHECK(xefgOn.lowLatency && xefgOn.minimumIntervalUs == 8333);
+
+        // Off and Force Disable together: still off
+        CHECK(!SleepModeForOutput(game, 0, true, true, true).lowLatency);
+    }
+
+    // XeFG with NVIDIA Reflex or Anti-Lag 2 as the low latency Output ("split"): XeLL keeps its context and the frame
+    // markers with its low latency off, the driver's Reflex (or Anti-Lag 2 / Anti-Lag Vk through fakenvapi) lowers latency
+    {
+        using namespace native::xefgreflex;
+
+        // [XeFG] LowLatencyOutput
+        XefgLatency lat = XefgLatency::XeLL;
+        CHECK(XefgLatencyFromIniText("reflex", &lat) && lat == XefgLatency::Reflex);
+        CHECK(XefgLatencyFromIniText("antilag2", &lat) && lat == XefgLatency::AntiLag2);
+        CHECK(XefgLatencyFromIniText("xell", &lat) && lat == XefgLatency::XeLL);
+        lat = XefgLatency::AntiLag2;
+        CHECK(!XefgLatencyFromIniText("bogus", &lat) && lat == XefgLatency::AntiLag2); // left alone
+        CHECK(!XefgLatencyFromIniText(nullptr, &lat) && lat == XefgLatency::AntiLag2);
+        CHECK(!XefgLatencyFromIniText("", &lat));
+        for (const auto each : { XefgLatency::XeLL, XefgLatency::Reflex, XefgLatency::AntiLag2 })
+        {
+            XefgLatency back = XefgLatency::XeLL;
+            CHECK(XefgLatencyFromIniText(XefgLatencyIniText(each), &back) && back == each);
+        }
+
+        // Which entries a setup has
+        OutputInputs nvidia; // real nvapi, XeFG, Reflex asked for
+        nvidia.nvidiaGpu = true;
+        nvidia.xefgOutput = true;
+        nvidia.xefgLatency = XefgLatency::Reflex;
+        OutputInputs amd; // fakenvapi on an AMD card
+        amd.xefgOutput = true;
+        amd.fakenvapiMain = true;
+        amd.amdGpu = true;
+        amd.xefgLatency = XefgLatency::AntiLag2;
+        OutputInputs intel; // fakenvapi, no AMD card: only XeLL
+        intel.xefgOutput = true;
+        intel.fakenvapiMain = true;
+        intel.xefgLatency = XefgLatency::Reflex;
+
+        CHECK(XefgLatencyAvailable(XefgLatency::XeLL, nvidia) && XefgLatencyAvailable(XefgLatency::XeLL, intel));
+        CHECK(XefgLatencyAvailable(XefgLatency::Reflex, nvidia));
+        CHECK(!XefgLatencyAvailable(XefgLatency::AntiLag2, nvidia));
+        CHECK(!XefgLatencyAvailable(XefgLatency::Reflex, amd));
+        CHECK(XefgLatencyAvailable(XefgLatency::AntiLag2, amd));
+        CHECK(!XefgLatencyAvailable(XefgLatency::Reflex, intel) && !XefgLatencyAvailable(XefgLatency::AntiLag2, intel));
+
+        CHECK(OutputAvailability(Output::XeLL, nvidia).available);
+        CHECK(OutputAvailability(Output::Reflex, nvidia).available);
+        CHECK(!OutputAvailability(Output::AntiLag2, nvidia).available);
+        CHECK(OutputAvailability(Output::AntiLag2, nvidia).why[0] != '\0');
+        CHECK(OutputAvailability(Output::AntiLag2, amd).available);
+        CHECK(!OutputAvailability(Output::Reflex, amd).available && OutputAvailability(Output::Reflex, amd).why[0] != '\0');
+        CHECK(!OutputAvailability(Output::Reflex, intel).available && !OutputAvailability(Output::AntiLag2, intel).available);
+        CHECK(!OutputAvailability(Output::Auto, nvidia).available && !OutputAvailability(Output::LatencyFlex, nvidia).available);
+
+        // Reflex is the driver's and needs an NVIDIA card: real nvapi on an AMD or Intel card (no fakenvapi) has none
+        for (const bool amdCard : { true, false })
+        {
+            OutputInputs other; // real nvapi file present, but the card is AMD or Intel
+            other.xefgOutput = true;
+            other.amdGpu = amdCard;
+            other.xefgLatency = XefgLatency::Reflex;
+            CHECK(!XefgLatencyAvailable(XefgLatency::Reflex, other));
+            CHECK(!OutputAvailability(Output::Reflex, other).available);
+            CHECK(OutputShown(other, false, false) == Output::XeLL);
+            CHECK(EffectiveXefgLatency(other, false, false) == XefgLatency::XeLL);
+            CHECK(!BoostAvailable(Input::Auto, other, false));
+            CHECK(OutputLocked(other)); // no Reflex, and no fakenvapi for Anti-Lag 2: XeLL is the one choice
+            other.xefgOutput = false; // without XeFG the same card still has no Reflex boost
+            CHECK(!BoostAvailable(Input::Auto, other, false));
+        }
+
+        // Anti-Lag 2 that failed to start (a second context fakenvapi could not make): not available, with its own reason
+        {
+            OutputInputs failed = amd;
+            failed.antiLag2Failed = true;
+            CHECK(!XefgLatencyAvailable(XefgLatency::AntiLag2, failed));
+            CHECK(!OutputAvailability(Output::AntiLag2, failed).available);
+            CHECK(std::strstr(OutputAvailability(Output::AntiLag2, failed).why, "could not start") != nullptr);
+            CHECK(OutputShown(failed, false, false) == Output::XeLL);
+            CHECK(EffectiveXefgLatency(failed, false, false) == XefgLatency::XeLL);
+            CHECK(OutputLocked(failed));
+            // ... the other reasons keep their own words
+            CHECK(std::strstr(OutputAvailability(Output::AntiLag2, nvidia).why, "could not start") == nullptr);
+        }
+
+        // Without XeFG the two are not offered
+        OutputInputs plain;
+        CHECK(!OutputAvailability(Output::Reflex, plain).available && OutputAvailability(Output::Reflex, plain).why[0] != '\0');
+        CHECK(!OutputAvailability(Output::AntiLag2, plain).available);
+
+        // Locked only when XeLL is the one choice
+        CHECK(!OutputLocked(nvidia) && !OutputLocked(amd));
+        CHECK(OutputLocked(intel));
+
+        // What the combo shows
+        CHECK(OutputShown(nvidia, false, false) == Output::Reflex);
+        CHECK(OutputShown(amd, false, false) == Output::AntiLag2);
+        CHECK(OutputShown(intel, false, false) == Output::XeLL); // asked for Reflex, not available
+        nvidia.xefgLatency = XefgLatency::XeLL;
+        CHECK(OutputShown(nvidia, false, false) == Output::XeLL);
+        nvidia.xefgLatency = XefgLatency::AntiLag2; // not available on NVIDIA
+        CHECK(OutputShown(nvidia, false, false) == Output::XeLL);
+        nvidia.xefgLatency = XefgLatency::Reflex;
+
+        // Boost is Reflex's: with XeFG only when Reflex is the output
+        CHECK(BoostAvailable(Input::Auto, nvidia, false));
+        CHECK(BoostAvailable(Input::OptiScaler, nvidia, false));
+        CHECK(!BoostAvailable(Input::Game, nvidia, false));
+        CHECK(!BoostAvailable(Input::Off, nvidia, false));
+        CHECK(!BoostAvailable(Input::Auto, amd, false));
+        CHECK(!BoostAvailable(Input::Auto, intel, false));
+        nvidia.xefgLatency = XefgLatency::XeLL;
+        CHECK(!BoostAvailable(Input::Auto, nvidia, false));
+        nvidia.xefgLatency = XefgLatency::Reflex;
+        // Force Reflex set in the fakenvapi settings keeps XeLL (nothing sends Boost then), whatever the choice shows
+        CHECK(!BoostAvailable(Input::Auto, nvidia, false, true));
+        CHECK(BoostAvailable(Input::Auto, nvidia, false, false));
+
+        // The side in force: the choice if the setup has it, XeLL for everything else. Input Off and Force Disable win.
+        CHECK(EffectiveXefgLatency(nvidia, false, false) == XefgLatency::Reflex);
+        CHECK(EffectiveXefgLatency(amd, false, false) == XefgLatency::AntiLag2);
+        CHECK(EffectiveXefgLatency(intel, false, false) == XefgLatency::XeLL);
+        CHECK(EffectiveXefgLatency(nvidia, true, false) == XefgLatency::XeLL); // Input Off
+        CHECK(EffectiveXefgLatency(nvidia, false, true) == XefgLatency::XeLL); // Force Disable
+        CHECK(EffectiveXefgLatency(amd, true, true) == XefgLatency::XeLL);
+        OutputInputs notXefg = nvidia;
+        notXefg.xefgOutput = false;
+        CHECK(EffectiveXefgLatency(notXefg, false, false) == XefgLatency::XeLL);
+        OutputInputs xellChosen = nvidia;
+        xellChosen.xefgLatency = XefgLatency::XeLL;
+        CHECK(EffectiveXefgLatency(xellChosen, false, false) == XefgLatency::XeLL);
+
+        // Routing per call. XeLL keeps what it had: everything, driver nothing.
+        for (const auto call : { Call::SetSleepMode, Call::Sleep, Call::Marker, Call::GetLatency })
+        {
+            const auto r = RouteFor(XefgLatency::XeLL, call);
+            CHECK(r.xell && !r.driver);
+        }
+
+        for (const auto side : { XefgLatency::Reflex, XefgLatency::AntiLag2 })
+        {
+            // The mode goes to both (XeLL's with low latency off), the Sleep to the driver alone (XeLL never sleeps),
+            // markers to both (XeLL's frame ID bookkeeping), the latency report from the driver
+            auto r = RouteFor(side, Call::SetSleepMode);
+            CHECK(r.xell && r.driver);
+            r = RouteFor(side, Call::Sleep);
+            CHECK(!r.xell && r.driver);
+            r = RouteFor(side, Call::Marker);
+            CHECK(r.xell && r.driver);
+            r = RouteFor(side, Call::GetLatency);
+            CHECK(!r.xell && r.driver);
+        }
+
+        // The two sleep modes
+        SleepMode game;
+        game.lowLatency = true;
+        game.boost = true;
+        game.minimumIntervalUs = 8333;
+        game.useMarkersToOptimize = true;
+
+        const auto xellMode = XellSleepModeInSplit(game);
+        CHECK(!xellMode.lowLatency && !xellMode.boost && xellMode.minimumIntervalUs == 0);
+        CHECK(xellMode.useMarkersToOptimize);
+
+        // The driver's: the game's own (Reflex off in its menu stays off), the cap in place of its interval
+        auto driverMode = DriverSleepModeInSplit(game, 0);
+        CHECK(driverMode.lowLatency && driverMode.boost && driverMode.minimumIntervalUs == 8333);
+        driverMode = DriverSleepModeInSplit(game, 16667);
+        CHECK(driverMode.lowLatency && driverMode.minimumIntervalUs == 16667);
+        SleepMode gameOff;
+        driverMode = DriverSleepModeInSplit(gameOff, 0);
+        CHECK(!driverMode.lowLatency && driverMode.minimumIntervalUs == 0);
+
+        // Methods: the three that carry XeFG's frame IDs, the two that leave the sleeping to the driver or Anti-Lag 2
+        CHECK(MethodWithXefg(XefgLatency::XeLL) == Method::XellWithXefg);
+        CHECK(MethodWithXefg(XefgLatency::Reflex) == Method::RealReflexWithXefg);
+        CHECK(MethodWithXefg(XefgLatency::AntiLag2) == Method::FakenvapiWithXefg);
+        CHECK(CarriesXefgFrameIds(Method::XellWithXefg) && CarriesXefgFrameIds(Method::RealReflexWithXefg) &&
+              CarriesXefgFrameIds(Method::FakenvapiWithXefg));
+        CHECK(!CarriesXefgFrameIds(Method::RealReflex) && !CarriesXefgFrameIds(Method::Fakenvapi));
+        CHECK(!LatencySplitFromXell(Method::XellWithXefg) && LatencySplitFromXell(Method::RealReflexWithXefg) &&
+              LatencySplitFromXell(Method::FakenvapiWithXefg));
+        CHECK(!LatencySplitFromXell(Method::RealReflex));
+
+        // The frame cap: the driver (or Anti-Lag 2) paces the game's own frames, so the shown-frame cap is divided by the
+        // frames XeFG shows per rendered one. XeLL being idle (XeFG paused) does not hand the cap away: it never held it.
+        for (const auto method : { Method::RealReflexWithXefg, Method::FakenvapiWithXefg })
+        {
+            CapInputs cap;
+            cap.running = true;
+            cap.method = method;
+            cap.capFps = 120.0f;
+            cap.xefgGenerating = true;
+            cap.shownPerRendered = 2;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 16667);
+            cap.shownPerRendered = 4;
+            CHECK(PlanCap(cap).minimumIntervalUs == 33333);
+            cap.shownPerRendered = 0; // never divides by nothing
+            CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+            cap.xefgGenerating = false; // XeFG paused: shown frames are rendered ones
+            cap.shownPerRendered = 1;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 8333);
+            CHECK(!XellIdle(cap));
+            cap.capFps = 0.0f;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 0);
+            cap.running = false;
+            CHECK(PlanCap(cap).owner == CapOwner::NotOurs);
+        }
+
+        // NVIDIA Reflex beside XeFG on the D3D11-to-D3D12 bridge: the limiter keeps the cap, the driver did not hold the
+        // interval it accepted (Assetto Corsa). On D3D12 (NBA 2K27) and the Vulkan bridge (RDR2) the driver holds it, with
+        // the cap divided by the frames XeFG shows per rendered one.
+        {
+            CapInputs cap;
+            cap.running = true;
+            cap.method = Method::RealReflexWithXefg;
+            cap.capFps = 60.0f;
+            cap.xefgGenerating = true;
+            cap.shownPerRendered = 2;
+            cap.limiterBeforeSleep = true; // D3D12 and the D3D11 bridge alike: not what decides it
+            cap.d3d11Bridge = true;
+            CHECK(PlanCap(cap).owner == CapOwner::Limiter && PlanCap(cap).minimumIntervalUs == 0);
+            cap.d3d11Bridge = false;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 33333);
+            cap.limiterBeforeSleep = false; // the Vulkan bridge
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 33333);
+            // Anti-Lag 2 keeps its own cap everywhere
+            cap.method = Method::FakenvapiWithXefg;
+            cap.d3d11Bridge = true;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 33333);
+            cap.d3d11Bridge = false;
+            CHECK(PlanCap(cap).owner == CapOwner::LowLatency && PlanCap(cap).minimumIntervalUs == 33333);
+        }
+
+        // The one rule both the plan for our calls and ReflexHooks::update (the game's own Reflex) take
+        CHECK(SplitLimiterKeepsCap(XefgLatency::Reflex, true));
+        CHECK(!SplitLimiterKeepsCap(XefgLatency::Reflex, false));
+        CHECK(!SplitLimiterKeepsCap(XefgLatency::AntiLag2, true));
+        CHECK(!SplitLimiterKeepsCap(XefgLatency::AntiLag2, false));
+        CHECK(!SplitLimiterKeepsCap(XefgLatency::XeLL, true));
+
+        // XeLL as the output: as before
+        CapInputs xellCap;
+        xellCap.running = true;
+        xellCap.method = Method::XellWithXefg;
+        xellCap.capFps = 120.0f;
+        xellCap.xefgGenerating = true;
+        xellCap.shownPerRendered = 2;
+        CHECK(PlanCap(xellCap).owner == CapOwner::LowLatency && PlanCap(xellCap).minimumIntervalUs == 8333);
+        xellCap.xefgGenerating = false;
+        CHECK(PlanCap(xellCap).owner == CapOwner::Limiter);
+
+        // A bridged Vulkan game with the split: our calls go to the game's VkDevice through the Vulkan surface (the driver's
+        // Reflex, or Anti-Lag Vk, lives there); XeLL on the bridge's device gets the markers through the Vulkan hooks
+        {
+            int vkDevice = 0, bridgeDevice12 = 0, d3dDevice = 0;
+            auto t = PresentTarget(true, true, &vkDevice, &bridgeDevice12, true);
+            CHECK(t.api == Api::Vulkan && t.device == &vkDevice);
+            t = PresentTarget(true, true, &vkDevice, &bridgeDevice12, false);
+            CHECK(t.api == Api::D3D && t.device == &bridgeDevice12);
+            t = PresentTarget(true, false, &vkDevice, &bridgeDevice12, true);
+            CHECK(t.api == Api::Vulkan && t.device == &vkDevice);
+            t = PresentTarget(false, true, &d3dDevice, &bridgeDevice12, true);
+            CHECK(t.api == Api::D3D && t.device == &d3dDevice);
+        }
+
+        // The status reason when the game's Reflex runs: names who lowers latency in the split, as before otherwise
+        CHECK(std::strstr(DecisionText(Decision::GameRunsReflex, true, false, XefgLatency::Reflex), "own Reflex lowers") !=
+              nullptr);
+        CHECK(std::strstr(DecisionText(Decision::GameRunsReflex, true, false, XefgLatency::AntiLag2), "Anti-Lag 2") !=
+              nullptr);
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, true, false, XefgLatency::XeLL),
+                          "The game's Reflex feeds XeFG's XeLL") == 0);
+        CHECK(std::strcmp(DecisionText(Decision::GameRunsReflex, false, false, XefgLatency::XeLL),
+                          "Use the game's own Reflex settings") == 0);
+        CHECK(std::strcmp(DecisionText(Decision::SettingOff, true, false, XefgLatency::Reflex),
+                          DecisionText(Decision::SettingOff)) == 0);
+
+        // Our SetSleepMode goes out again when XeFG's Output changes (the other side has to be told, the old one let go)
+        {
+            SleepModeCall last;
+            last.api = Api::D3D;
+            int device = 0;
+            last.device = &device;
+            last.minimumIntervalUs = 16667;
+            last.xellGeneration = 3;
+            last.side = (uint32_t) XefgLatency::XeLL;
+
+            auto now = last;
+            CHECK(!NeedsSleepModeResend(&last, false, now, false));
+            now.side = (uint32_t) XefgLatency::Reflex;
+            CHECK(NeedsSleepModeResend(&last, false, now, false));
+            now.side = (uint32_t) XefgLatency::AntiLag2;
+            CHECK(NeedsSleepModeResend(&last, false, now, false));
+        }
+
+        // The game's own Reflex cap: per rendered frame
+        CHECK(CapPerRenderedFrame(120.0f, 2) == 60.0f);
+        CHECK(CapPerRenderedFrame(120.0f, 4) == 30.0f);
+        CHECK(CapPerRenderedFrame(120.0f, 1) == 120.0f);
+        CHECK(CapPerRenderedFrame(120.0f, 0) == 120.0f);
+        CHECK(CapPerRenderedFrame(0.0f, 4) == 0.0f);
+    }
+
+    // dxvk through the Vulkan bridge: the pair runs at the game's Present only with the key on; every other game keeps the
+    // Vulkan (or its own D3D) site whatever the key says
+    CHECK(SleepSiteFor(true, true) == SleepSite::GamePresent);
+    CHECK(SleepSiteFor(true, false) == SleepSite::VulkanPresent);
+    CHECK(SleepSiteFor(false, true) == SleepSite::VulkanPresent);
+    CHECK(SleepSiteFor(false, false) == SleepSite::VulkanPresent);
+
+    // The ledger of a dxvk game: a few frames in flight while the site changes, a failed Present, a doubled present, a
+    // minimised game, the bridge going away. Every frame is paired exactly once and a game-site frame keeps its own ID.
+    {
+        constexpr auto none = [](int) { return false; };
+        constexpr auto allVulkan = [](int) { return SleepSite::VulkanPresent; };
+        constexpr auto allGame = [](int) { return SleepSite::GamePresent; };
+
+        for (int lag = 0; lag <= 3; ++lag)
+        {
+            // The site never changes
+            for (const auto r : { RunSeq(20, lag, allVulkan, none), RunSeq(20, lag, allGame, none) })
+            {
+                for (int f = 0; f < 20; ++f)
+                    CHECK(r.pairs[f] == 1);
+            }
+
+            // Vulkan -> game at frame 8, and game -> Vulkan at frame 8: no frame loses its pair or gets two
+            for (const bool toGame : { true, false })
+            {
+                const auto r = RunSeq(
+                    20, lag, [&](int f) { return (f >= 8) == toGame ? SleepSite::GamePresent : SleepSite::VulkanPresent; },
+                    none);
+
+                for (int f = 0; f < 20; ++f)
+                {
+                    CHECK(r.pairs[f] == 1);
+                    const bool gameFrame = (f >= 8) == toGame;
+                    CHECK(r.idSeen[f] == (gameFrame ? 100u + f : 0u));
+                }
+            }
+
+            // Back and forth every frame
+            {
+                const auto r = RunSeq(
+                    24, lag, [](int f) { return f % 2 ? SleepSite::GamePresent : SleepSite::VulkanPresent; }, none);
+
+                for (int f = 0; f < 24; ++f)
+                {
+                    CHECK(r.pairs[f] == 1);
+                    CHECK(r.idSeen[f] == (f % 2 ? 100u + f : 0u));
+                }
+            }
+
+            // Presents that did not go through (occluded, failed): their entries are undone, the rest stay in step
+            {
+                const auto r = RunSeq(20, lag, allGame, [](int f) { return f == 5 || f == 6 || f == 13; });
+
+                for (int f = 0; f < 20; ++f)
+                {
+                    if (f == 5 || f == 6 || f == 13)
+                        continue; // paired at the game's Present, but never presented by dxvk
+                    CHECK(r.pairs[f] == 1);
+                    CHECK(r.idSeen[f] == 100u + f);
+                }
+            }
+        }
+    }
+
+    // Edges of the ledger itself
+    {
+        FrameLedger q;
+        FrameLedger::Entry e;
+
+        // Empty before any pop worked is just the start: no resync, and the caller pairs at the Vulkan present
+        CHECK(!q.Pop(&e));
+        CHECK(!q.TakeResync());
+
+        // Undo of an entry dxvk already popped finds nothing
+        const auto a = q.Push(1, SleepSite::GamePresent);
+        const auto b = q.Push(2, SleepSite::VulkanPresent);
+        CHECK(q.Pop(&e) && e.frameId == 1 && e.site == SleepSite::GamePresent);
+        CHECK(!q.Undo(a));
+        CHECK(q.Undo(b));
+        CHECK(!q.Pop(&e));
+        CHECK(q.TakeResync()); // a pop found nothing after pops had worked
+
+        // A doubled dxvk present has nothing to pop for its second half: unpaired entries are not invented
+        q.Push(3, SleepSite::GamePresent);
+        CHECK(q.Pop(&e) && e.frameId == 3);
+        CHECK(!q.Pop(&e));
+
+        // Minimised: many game presents, no dxvk presents. The oldest are dropped, the newest kSize stay, and it is flagged
+        q.Clear();
+        q.TakeResync();
+
+        for (uint32_t id = 1; id <= 20; ++id)
+            q.Push(id, SleepSite::GamePresent);
+
+        CHECK(q.count == FrameLedger::kSize);
+        CHECK(q.TakeResync());
+        CHECK(!q.TakeResync());
+        CHECK(q.Pop(&e) && e.frameId == 20 - FrameLedger::kSize + 1);
+
+        // The bridge goes away: Clear leaves nothing, and a new bridge's first pop is "the start" again
+        q.Clear();
+        CHECK(!q.Pop(&e));
+        CHECK(!q.TakeResync());
+        q.Push(9, SleepSite::GamePresent);
+        CHECK(q.Pop(&e) && e.frameId == 9);
+    }
+
+    // The game minimised: it presents 20 frames (S_OK) that dxvk never presents, and goes on three seconds later. The
+    // entries left over are too old to be for dxvk's next presents and are dropped, so the ledger is back in step and every
+    // frame dxvk presents after it has its own ID. (Without the age rule the up-to-kSize left over would stay in front for
+    // good.)
+    {
+        FrameLedger led;
+        uint32_t idSeen[40] = {};
+
+        for (int f = 0; f < 20; ++f)
+            led.Push(100 + f, SleepSite::GamePresent, 0, 1000.0 + f * 16.0);
+
+        for (int f = 20; f < 40; ++f)
+        {
+            const double now = 4000.0 + (f - 20) * 16.0;
+            led.Push(100 + f, SleepSite::GamePresent, 0, now);
+
+            if (f - 2 >= 20) // dxvk presents two frames behind the game
+            {
+                FrameLedger::Entry e;
+                idSeen[f - 2] = led.Pop(&e, 0, now) ? e.frameId : 0;
+            }
+        }
+
+        for (int p = 20; p < 38; ++p)
+            CHECK(idSeen[p] == 100u + p);
+
+        CHECK(led.TakeResync());
+    }
+
+    // Frame generation off and on again in place, on the same window: entries pushed for frames dxvk presented unbridged
+    // are left over. They are dropped when the output is made again (a newer generation), and the frames presented after
+    // it get their own IDs.
+    {
+        FrameLedger led;
+        uint32_t idSeen[40] = {};
+        const int lag = 2;
+
+        for (int f = 0; f < 30; ++f)
+        {
+            const uint32_t generation = f < 10 ? 1 : 2;
+            led.Push(100 + f, SleepSite::GamePresent, generation);
+
+            const int p = f - lag; // dxvk presents frame p
+
+            if (p >= 10) // frames before the output was made again are presented unbridged: no pop
+            {
+                FrameLedger::Entry e;
+                idSeen[p] = led.Pop(&e, 2) ? e.frameId : 0;
+            }
+        }
+
+        for (int p = 10; p < 28; ++p)
+            CHECK(idSeen[p] == 100u + p);
+
+        CHECK(led.TakeResync());
+    }
+
+    // An entry's ID is read with the site lock held: the other site's End moves the frame ID on while the game's Present
+    // waits for the lock, and the entry must carry the ID the markers do
+    {
+        FrameLedger led;
+        uint32_t frameId = 7;
+        uint32_t markerId = 0;
+        uint64_t seq = BeginGameSiteFrame(
+            [&]
+            {
+                frameId = 8; // dxvk's thread finished the Vulkan site's End for the older frame first
+                return 0;
+            },
+            [&] { return frameId; }, [&](uint32_t id) { return led.Push(id, SleepSite::GamePresent); },
+            [&] { markerId = frameId; });
+
+        FrameLedger::Entry e;
+        CHECK(seq != 0 && led.Pop(&e));
+        CHECK(e.frameId == markerId);
+        CHECK(e.frameId == 8);
+    }
+
+    // The pair's End never comes (the device went away between Begin and End): not left half way, the frame ID moves on
+    {
+        bool started = true;
+        bool submitted = true;
+        uint64_t frameId = 5;
+        AbandonPair(started, submitted, frameId);
+        CHECK(!started && !submitted && frameId == 6);
+    }
+
+    // What the old design did (the Vulkan present reading the site the game's latest Present chose) is not enough: with the
+    // site changing while frames are in flight, a frame is left unpaired or paired twice. Kept as a check of the check.
+    {
+        const int lag = 2;
+        int pairs[20] = {};
+
+        for (int f = 0; f < 20; ++f) // the game's Present f pairs at the game's Present if its latch is GamePresent
+        {
+            const bool game = f >= 8;
+
+            if (game)
+                ++pairs[f];
+
+            // dxvk presents frame f - lag now and reads the latch of the game's latest Present (f)
+            if (f - lag >= 0 && !game)
+                ++pairs[f - lag];
+        }
+
+        int wrong = 0;
+
+        for (int f = 0; f < 18; ++f)
+            wrong += pairs[f] != 1;
+
+        CHECK(wrong > 0);
     }
 
     printf(fails == 0 ? "nr_native_low_latency_smoke: PASS\n" : "nr_native_low_latency_smoke: %d FAIL\n", fails);

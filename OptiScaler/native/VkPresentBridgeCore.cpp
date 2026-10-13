@@ -24,6 +24,24 @@ LRESULT CALLBACK HiddenProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+// For a hidden surface that stopped working: is its window still there, and is the thread that made it (which owns it,
+// and whose exit destroys it) still running? Tells a window taken down with its thread from a lost display.
+std::string HiddenWindowState(HWND hidden, DWORD madeOn)
+{
+    const bool window = hidden != nullptr && IsWindow(hidden);
+    bool threadRuns = false;
+
+    if (HANDLE thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, madeOn); thread != nullptr)
+    {
+        DWORD code = 0;
+        threadRuns = GetExitCodeThread(thread, &code) && code == STILL_ACTIVE;
+        CloseHandle(thread);
+    }
+
+    return std::format("hidden window {}, made on thread {} ({}), asked on thread {}", window ? "there" : "gone", madeOn,
+                       threadRuns ? "running" : "ended", GetCurrentThreadId());
+}
+
 bool WaitFence(ID3D12Fence* fence, uint64_t value)
 {
     if (fence == nullptr || fence->GetCompletedValue() >= value)
@@ -119,73 +137,8 @@ bool VkPresentBridgeCore::Create(const BridgeTarget& target, const VkSwapchainCr
     _format = game.imageFormat;
     _space = game.imageColorSpace;
 
-    // The hidden window sits on the real window's monitor, so the surface and the real swapchain agree on the display.
-    int x = 0;
-    int y = 0;
-    MONITORINFO monitor {};
-    monitor.cbSize = sizeof(monitor);
-
-    if (GetMonitorInfoW(MonitorFromWindow(target.realWindow, MONITOR_DEFAULTTONEAREST), &monitor))
+    if (!MakeSurface(why))
     {
-        x = monitor.rcMonitor.left;
-        y = monitor.rcMonitor.top;
-    }
-
-    WNDCLASSEXW wc {};
-    wc.cbSize = sizeof(wc);
-    wc.lpfnWndProc = HiddenProc;
-    wc.hInstance = GetModuleHandleW(nullptr);
-    wc.lpszClassName = kHiddenClass;
-
-    if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
-    {
-        why = "could not register the hidden window's class";
-        Release();
-        return false;
-    }
-
-    _hidden = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kHiddenClass, L"", WS_POPUP, x, y, (int) _width,
-                              (int) _height, nullptr, nullptr, wc.hInstance, nullptr);
-
-    if (_hidden == nullptr)
-    {
-        why = "could not make the hidden window";
-        Release();
-        return false;
-    }
-
-    ShowWindow(_hidden, SW_HIDE);
-
-    VkWin32SurfaceCreateInfoKHR surfaceInfo {};
-    surfaceInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
-    surfaceInfo.hinstance = wc.hInstance;
-    surfaceInfo.hwnd = _hidden;
-
-    if (const VkResult result = target.createSurface(target.instance, &surfaceInfo, nullptr, &_surface);
-        result != VK_SUCCESS)
-    {
-        why = std::format("could not make a Vulkan surface on the hidden window ({})", (int) result);
-        _surface = VK_NULL_HANDLE;
-        Release();
-        return false;
-    }
-
-    // A queue family that can present to it.
-    uint32_t families = 0;
-    vkGetPhysicalDeviceQueueFamilyProperties(target.physical, &families, nullptr);
-    bool presentable = false;
-
-    for (uint32_t family = 0; family < families && !presentable; ++family)
-    {
-        VkBool32 supported = VK_FALSE;
-        presentable = vkGetPhysicalDeviceSurfaceSupportKHR(target.physical, family, _surface, &supported) ==
-                          VK_SUCCESS &&
-                      supported == VK_TRUE;
-    }
-
-    if (!presentable)
-    {
-        why = "no queue family can present to the hidden window's surface";
         Release();
         return false;
     }
@@ -206,6 +159,96 @@ bool VkPresentBridgeCore::Create(const BridgeTarget& target, const VkSwapchainCr
     }
 
     return true;
+}
+
+bool VkPresentBridgeCore::MakeSurface(std::string& why)
+{
+    // The hidden window sits on the real window's monitor, so the surface and the real swapchain agree on the display.
+    int x = 0;
+    int y = 0;
+    MONITORINFO monitor {};
+    monitor.cbSize = sizeof(monitor);
+
+    if (GetMonitorInfoW(MonitorFromWindow(_target.realWindow, MONITOR_DEFAULTTONEAREST), &monitor))
+    {
+        x = monitor.rcMonitor.left;
+        y = monitor.rcMonitor.top;
+    }
+
+    WNDCLASSEXW wc {};
+    wc.cbSize = sizeof(wc);
+    wc.lpfnWndProc = HiddenProc;
+    wc.hInstance = GetModuleHandleW(nullptr);
+    wc.lpszClassName = kHiddenClass;
+
+    if (!RegisterClassExW(&wc) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS)
+    {
+        why = "could not register the hidden window's class";
+        return false;
+    }
+
+    _hidden = CreateWindowExW(WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE, kHiddenClass, L"", WS_POPUP, x, y, (int) _width,
+                              (int) _height, nullptr, nullptr, wc.hInstance, nullptr);
+
+    if (_hidden == nullptr)
+    {
+        why = "could not make the hidden window";
+        return false;
+    }
+
+    _hiddenThread = GetCurrentThreadId();
+    ShowWindow(_hidden, SW_HIDE);
+
+    VkWin32SurfaceCreateInfoKHR surfaceInfo {};
+    surfaceInfo.sType = VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR;
+    surfaceInfo.hinstance = wc.hInstance;
+    surfaceInfo.hwnd = _hidden;
+
+    if (const VkResult result = _target.createSurface(_target.instance, &surfaceInfo, nullptr, &_surface);
+        result != VK_SUCCESS)
+    {
+        why = std::format("could not make a Vulkan surface on the hidden window ({})", (int) result);
+        _surface = VK_NULL_HANDLE;
+        return false;
+    }
+
+    // A queue family that can present to it.
+    uint32_t families = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties(_target.physical, &families, nullptr);
+    bool presentable = false;
+
+    for (uint32_t family = 0; family < families && !presentable; ++family)
+    {
+        VkBool32 supported = VK_FALSE;
+        presentable = vkGetPhysicalDeviceSurfaceSupportKHR(_target.physical, family, _surface, &supported) ==
+                          VK_SUCCESS &&
+                      supported == VK_TRUE;
+    }
+
+    if (!presentable)
+    {
+        why = "no queue family can present to the hidden window's surface";
+        return false;
+    }
+
+    return true;
+}
+
+bool VkPresentBridgeCore::RemakeSurface(std::string& why)
+{
+    if (_output == nullptr)
+    {
+        why = "the bridge has no D3D12 swapchain";
+        return false;
+    }
+
+    ReleaseSurface();
+
+    if (MakeSurface(why))
+        return true;
+
+    ReleaseSurface();
+    return false;
 }
 
 bool VkPresentBridgeCore::MakeOutput(const VkSwapchainCreateInfoKHR& game, std::string& why)
@@ -291,9 +334,11 @@ bool VkPresentBridgeCore::Patch(const VkSwapchainCreateInfoKHR& game, VkSwapchai
 
     VkSurfaceCapabilitiesKHR caps {};
 
-    if (vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_target.physical, _surface, &caps) != VK_SUCCESS)
+    if (const VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_target.physical, _surface, &caps);
+        result != VK_SUCCESS)
     {
-        why = "the hidden surface reports no capabilities";
+        why = std::format("the hidden surface reports no capabilities ({}; {})", (int) result,
+                          HiddenWindowState(_hidden, _hiddenThread));
         return false;
     }
 
@@ -586,7 +631,7 @@ void VkPresentBridgeCore::ReleaseOutput()
     DropBackBufferReferences();
 
     if (_release)
-        _release(_output.Get());
+        _release(_output);
 
     _output.Reset();
 }

@@ -62,6 +62,7 @@ const Item kItems[] = {
     { "TrustMask", "TrustMask", TrustMaskHlsl::kSource, "CopyFlow", "" },
     { "TrustMask", "TrustMask", TrustMaskHlsl::kSource, "GuideDepth", "" },
     { "TrustMask", "TrustMask", TrustMaskHlsl::kSource, "GuideMotion", "" },
+    { "TrustMask", "TrustMask", TrustMaskHlsl::kSource, "Uncover", "" },
     { "DepthCopy", "DepthCopy", DepthCopyDx11Hlsl::kConvertSource, "CSMain", "" },
     { "DepthResolve", "DepthResolve", DepthResolveHlsl::kSource, "NearestReversed", "" },
     { "DepthResolve", "DepthResolve", DepthResolveHlsl::kSource, "NearestStandard", "" },

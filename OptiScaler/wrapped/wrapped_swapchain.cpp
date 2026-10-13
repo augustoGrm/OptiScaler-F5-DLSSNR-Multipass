@@ -489,10 +489,31 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     // DXVK check, it's here because of upscaler time calculations
     if (IdentifyGpu::getPrimaryGpu().usesDxvk)
     {
+        // dxvk with the Vulkan bridge: Optical F5Low's low latency (Reflex markers and the Sleep) runs here, on the game's
+        // thread, as it does for a plain D3D11 game (Dx11wDx12SC::Present). The Vulkan present (hkvkQueuePresentKHR) runs on
+        // dxvk's thread and leaves the frames this took to it (native/NativeLowLatency.h DxvkGameScope). Only for the swap
+        // chain on the bridge's window: another one (a launcher, a video) has no Vulkan present of the bridge's to pair
+        // with. Same willPresent rule as the non-dxvk path below: a DXGI_PRESENT_TEST is not a frame.
+        native::lowlatency::DxvkGameScope lowLatencyScope;
+        const auto bridgeWindow = VkPresentBridge::OutputWindow();
+
+        if (willPresent && VkPresentBridge::DxvkThroughVulkan() && bridgeWindow != nullptr && bridgeWindow == hWnd)
+        {
+            lowLatencyScope = native::lowlatency::OnDxvkGamePresentBegin(
+                Config::Instance()->DlssNrNativeLowLatencyDxvkGameThread.value_or_default(), bridgeWindow,
+                VkPresentBridge::OutputGeneration());
+        }
+        else if (willPresent && VkPresentBridge::DxvkThroughVulkan() && bridgeWindow == nullptr)
+        {
+            native::lowlatency::DxvkBridgeDown();
+        }
+
         if (pPresentParameters == nullptr)
             presentResult = pSwapChain->Present(SyncInterval, Flags);
         else
             presentResult = ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
+
+        native::lowlatency::OnDxvkGamePresentEnd(lowLatencyScope, presentResult);
 
         if (presentResult == S_OK)
         {
@@ -551,7 +572,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 #ifdef LOW_LATENCY_INPUTS
         if (State::Instance().activeFgOutput == FGOutput::FSRFG)
         {
-            auto fgIsActive = fg != nullptr && fg->IsActive() && !fg->IsPaused();
+            auto fgIsActive = fg != nullptr && fg->IsGenerating(); // not while it waits for frame data
             InputAntiLag2::injectAl2Context(pSwapChain, fgIsActive);
         }
 #else
@@ -560,7 +581,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             LOG_DEBUG("Calling fakenvapi");
 
             static UINT64 fgPresentFrame = 0;
-            auto fgIsActive = fg != nullptr && fg->IsActive() && !fg->IsPaused();
+            auto fgIsActive = fg != nullptr && fg->IsGenerating(); // not while it waits for frame data
 
             if (State::Instance().fgPresentIsCalled)
             {
@@ -879,7 +900,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present(UINT SyncInterval, UIN
         if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
             State::Instance().activeFgOutput == FGOutput::NoFG &&
             !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
-            FrameLimit::sleep(false);
+            FrameLimit::sleep();
     }
     else
     {
@@ -1248,7 +1269,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present1(UINT SyncInterval, UI
         if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
             State::Instance().activeFgOutput == FGOutput::NoFG &&
             !IdentifyGpu::getPrimaryGpu().usesDxvk && !XellHooks::canLimit())
-            FrameLimit::sleep(false);
+            FrameLimit::sleep();
     }
     else
     {

@@ -161,6 +161,10 @@ struct VkState
     OwnedImage lutScratch;
     bool lutScratchFailed = false;
 
+    // Experimental input style (DlssNrInputStyle): the model's picture restyled, standing in for the model input and the
+    // resolve's proxy. Made on first use at the model picture's size; freed with the other sized images.
+    OwnedImage styled;
+
     uint32_t width = 0;
     uint32_t height = 0;
     uint32_t workWidth = 0;
@@ -186,6 +190,12 @@ struct VkState
     // default on those frames is a flicker, not a fallback.
     float gameExposure = 0.0f;
     float gamePreExposure = 1.0f;
+
+    // Whether the game's exposure image reads cleanly through the courier's layout guess, so the encode, resolve and LUT
+    // may read it live in the shader (DlssNr_ExposureState.h LiveGameGate), as D3D12 does, instead of the host value a
+    // few frames behind. Counted on Game exposure's own readbacks; started over when the source changes.
+    DlssNrExposureState::LiveGameGate gameLiveGate;
+    bool gameLiveSaid = false;
 
     // The exposure's courier: an 8x8 R32_FLOAT image the meter writes, and a ring of host-visible
     // buffers it is copied into. Only texel (0,0) is ever read -- the rest of the grid belongs to the
@@ -473,6 +483,9 @@ void DestroyMeterReadback()
     }
 
     g_vk.meterFrames = 0;
+    // The next meter reads a new image (device rebuilt, or the game's in another layout): prove it again
+    g_vk.gameLiveGate.Reset();
+    g_vk.gameLiveSaid = false;
 }
 
 // A layout transition with the access masks that go with it. Vulkan has no equivalent of D3D12's
@@ -862,6 +875,18 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
             // Believed only if it could be an exposure. A texel read through a layout the game did
             // not leave it in, or a slot the game stopped filling, fails here and the last good
             // value stands. Which exposure it is depends on what wrote the slot.
+            if (g_vk.meterExposureKind[readSlot] == 1u)
+            {
+                const bool wasTrusted = g_vk.gameLiveGate.Trusted();
+                g_vk.gameLiveGate.Count(std::isfinite(measured) && measured > 0.0f);
+                if (wasTrusted && !g_vk.gameLiveGate.Trusted())
+                {
+                    g_vk.gameLiveSaid = false;
+                    LOG_WARN("DLSS-NR Vulkan: the game's exposure stopped reading cleanly; the host value "
+                             "stands until it has read cleanly again");
+                }
+            }
+
             if (std::isfinite(measured) && measured > 0.0f)
             {
                 if (g_vk.meterExposureKind[readSlot] == 1u)
@@ -1238,6 +1263,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
         DestroyImage(g_vk.scratch);
         DestroyImage(g_vk.lutScratch); // recreated at the new size when a LutFile still wants it
         g_vk.lutScratchFailed = false;
+        DestroyImage(g_vk.styled); // recreated at the model picture's size when an input style still wants it
 
         const VkFormat working = VK_FORMAT_R16G16B16A16_SFLOAT;
 
@@ -1382,13 +1408,13 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
                                                             FormatCanHoldLinearHdr(colour->Resource.ImageViewInfo.Format));
     const bool linearHdr = colourChoice.LinearHdr();
     const uint32_t shaderConversion = DlssNrColourEncoding::ShaderConversion(colourChoice.encoding);
-    // Forced PQ is display light: its reference white is 1.0 after the decode, whatever the game's or Automatic's
-    // exposure says (the D3D12 path's ApplyColourEncoding does the same).
+    // Forced PQ is display light: its white is the game's HDR paper white (203 nits = 1.0 after the decode), whatever
+    // the game's or Automatic's exposure says (the D3D12 path's ApplyColourEncoding does the same).
     const bool displayWhite = colourChoice.encoding == DlssNrColourEncoding::Encoding::Pq;
     {
         char colourFormat[32];
         std::snprintf(colourFormat, sizeof(colourFormat), "VkFormat %d", (int) colour->Resource.ImageViewInfo.Format);
-        DlssNr::ReportColourEncoding(colourChoice, colourFormat, "Vulkan");
+        DlssNr::ReportColourEncoding(colourChoice, colourFormat, "Vulkan", false);
     }
 
     // The same rule as the D3D12 path, deliberately spelled the same way: the game divides its frame
@@ -1423,6 +1449,8 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
             pair = false;
         g_vk.pairGameExposure = 0.0f;
         g_vk.pairValidAt = 0;
+        g_vk.gameLiveGate.Reset();
+        g_vk.gameLiveSaid = false;
     }
 
     // Following the game's exposure (DlssNr_FollowGame.h): on (DlssNr_GameDefaults.h), the calibration locked, and a
@@ -1442,7 +1470,8 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     if (requestedWhitePointSource == 1 && g_vk.gameExposure > 1e-6f && !displayWhite)
     {
         // The Trim is the slider, or interpolated from the Trim anchors at this base white point when
-        // there are any. Resolved here on the CPU: this backend has no live exposure path in the shader.
+        // there are any. Resolved here on the CPU from the host readback; once the game's image reads cleanly the
+        // shader recomputes it from the live image instead (liveGame below), and this value is its fallback.
         // What the Trim multiplies follows the scale (DlssNr_GameScale.h); the points stay keyed by the game's
         // exposure in both scales.
         const float baseWhitePoint = DlssNrGameScale::WhiteBase(cfg.DlssNrGameExposureScale.value_or_default(),
@@ -1472,8 +1501,9 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
 
     if (displayWhite)
     {
-        whitePoint = 1.0f;
-        debugWhitePoint = 1.0f;
+        whitePoint = DlssNrExposureState::PinnedWhitePoint(cfg.DlssNrDisplayPaperWhiteNits.value_or_default(),
+                                                           DlssNrExposureState::kNitsPerPqDecodedUnit);
+        debugWhitePoint = whitePoint;
     }
 
     static bool saidEncoding = false;
@@ -1748,6 +1778,35 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
         }
     }
 
+    // Game exposure read live: the host value is a readback 3-4 frames old, so on a cut the old
+    // white point stood for those frames, a flash or dip D3D12 does not have. Once the game's image has read cleanly
+    // through the courier's layout guess (LiveGameGate), it is bound in the motion slot like Automatic's and the shader
+    // recomputes PreExposure / exposure x the Trim from it, falling back to the host value for an implausible texel. Not
+    // under Native look, whose base is 1 whatever the exposure (DlssNr_GameScale.h), nor on display light.
+    VkImageView liveExposureView = g_vk.autoExposureActive ? g_vk.autoExposure.view : VK_NULL_HANDLE;
+    {
+        const bool gameImage = exposure != nullptr && exposure->Type == NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW &&
+                               exposure->Resource.ImageViewInfo.ImageView != VK_NULL_HANDLE;
+        const bool liveGame =
+            requestedWhitePointSource == 1 && linearHdr && !displayWhite && gameImage &&
+            DlssNrGameScale::ShaderReadsGameExposure(cfg.DlssNrGameExposureScale.value_or_default()) &&
+            g_vk.gameLiveGate.Trusted();
+
+        if (liveGame)
+        {
+            liveExposureView = exposure->Resource.ImageViewInfo.ImageView;
+            encode.UseExposureWhitePoint = 1u;
+            encode.ExposureBaseScale = 1.0f;
+
+            if (!g_vk.gameLiveSaid)
+            {
+                g_vk.gameLiveSaid = true;
+                LOG_INFO("DLSS-NR Vulkan: the game's exposure reads live ({} of {} reads believable)",
+                         g_vk.gameLiveGate.valid, g_vk.gameLiveGate.reads);
+            }
+        }
+    }
+
     // "Tune for this scene" (DlssNr_ExposureCalibrate_Vk.inl), after Automatic's meter so its availability is this
     // frame's: a run's step pins the white point of the encode and resolve (the resolve and the downsample copy the
     // encode's constants), and the live exposure is not recomputed in the shader, so every source holds still for
@@ -1830,11 +1889,15 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
                         lutConstants.ColourIsLinearHdr = linearHdr ? 1u : 0u;
                         // The white point the encode below uses (Tune's pinned value included), so linear HDR lands
                         // in the LUT's 0-1 domain where the model's proxy puts it; the Trim alone would leave a game
-                        // whose frame is scaled by its exposure far above white.
-                        lutConstants.Trim = encode.WhitePoint;
+                        // whose frame is scaled by its exposure far above white. With the encode's live fields and
+                        // image, so where the encode recomputes it this frame the LUT does too.
+                        CopyLiveWhitePoint(lutConstants, encode);
+                        if (liveExposureView == VK_NULL_HANDLE)
+                            lutConstants.UseGameExposure = lutConstants.UseExposureWhitePoint = 0u;
 
                         graded = g_vk.lutPass->Dispatch(cmdBuffer, colour->Resource.ImageViewInfo.ImageView,
-                                                        encodeSourceLayout, g_vk.lutScratch.view, lutConstants);
+                                                        encodeSourceLayout, g_vk.lutScratch.view, lutConstants,
+                                                        liveExposureView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                     }
                 }
 
@@ -1877,7 +1940,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     // upscaler's output, a storage image the upscaler has just written, so GENERAL is what it is.
     // Inert on the only hardware this model runs on, wrong everywhere it is read.
     if (!g_vk.pass->Dispatch(cmdBuffer, encode, width, height, encodeSource, VK_NULL_HANDLE, VK_NULL_HANDLE,
-                             g_vk.autoExposureActive ? g_vk.autoExposure.view : VK_NULL_HANDLE,
+                             liveExposureView,
                              g_vk.proxy.view, g_vk.keep.view, encodeSourceLayout))
     {
         Fail("the encode dispatch failed");
@@ -2097,6 +2160,83 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
         mvY *= (float) workHeight / height;
     }
 
+    // Experimental input style (DlssNrInputStyle), as on D3D12: restyle the model's picture once it is final (after the
+    // shrink and the edge packing). It then stands in for the model input and the resolve's proxy (ordinaryProxy below,
+    // and through the edge unpacking), so Composed hands back only what the model painted on top of it. Skipped above
+    // 100% model resolution, where the resolve compares against the full proxy instead.
+    bool inputRestyled = false;
+    {
+        const uint32_t style = cfg.DlssNrInputStyle.value_or_default();
+        const float strength = std::min(cfg.DlssNrInputStyleStrength.value_or_default(), style == 2u ? 3.0f : 1.0f);
+        const bool facesOnly = cfg.DlssNrInputStyleFacesOnly.value_or_default();
+        const bool wanted = style >= 1u && style <= 3u && strength > 0.0f;
+        const char* skip = wanted && workScale > 1.0f ? "model resolution above 100%" : nullptr;
+        bool restyled = false;
+
+        if (wanted && skip == nullptr)
+        {
+            if (g_vk.styled.Valid() && (g_vk.styled.width != modelInput->width ||
+                                        g_vk.styled.height != modelInput->height ||
+                                        g_vk.styled.format != modelInput->format))
+            {
+                // Earlier frames may still read it (a switch of Compress screen edges changes the model picture's size)
+                vkDeviceWaitIdle(device);
+                DestroyImage(g_vk.styled);
+            }
+
+            if (!g_vk.styled.Valid())
+                CreateImage(g_vk.styled, modelInput->width, modelInput->height, modelInput->format, true);
+
+            if (g_vk.styled.Valid())
+            {
+                DlssNrConstants paint = encode;
+                paint.Mode = StyleMode(style);
+                paint.Width = modelInput->width;
+                paint.Height = modelInput->height;
+                paint.TransferStrength = strength;
+                paint.SkinProtection = facesOnly ? 1u : 0u; // the style passes read it as "faces only"
+
+                Transition(cmdBuffer, *modelInput, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+                Transition(cmdBuffer, g_vk.styled, VK_IMAGE_LAYOUT_GENERAL);
+
+                if (g_vk.pass->Dispatch(cmdBuffer, paint, modelInput->width, modelInput->height, modelInput->view,
+                                        VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE, g_vk.styled.view, VK_NULL_HANDLE,
+                                        VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL))
+                {
+                    modelInput = &g_vk.styled;
+                    restyled = true;
+                    inputRestyled = true;
+                }
+                else
+                {
+                    skip = "its dispatch failed";
+                }
+            }
+            else
+            {
+                skip = "its image could not be created";
+            }
+        }
+
+        // Said when it changes, so a log shows each A/B toggle.
+        static int said = -1;
+        const int state = restyled ? (int) style + 10 + (facesOnly ? 10 : 0) : (skip != nullptr ? 2 : 0);
+
+        if (state != said)
+        {
+            said = state;
+
+            if (restyled)
+                LOG_INFO("DLSS-NR Vulkan input style: {} on (strength {:.2f}, {}x{}{}{})", StyleName(style), strength,
+                         modelInput->width, modelInput->height, facesOnly ? ", faces only" : "",
+                         spatial ? ", edge-compressed picture" : "");
+            else if (skip != nullptr)
+                LOG_INFO("DLSS-NR Vulkan input style: skipped ({})", skip);
+            else
+                LOG_INFO("DLSS-NR Vulkan input style: off");
+        }
+    }
+
     OwnedImage* answer = &g_vk.output;
     OwnedImage* input = modelInput;
     int evaluated = 1;
@@ -2290,6 +2430,10 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
 
     DlssNrConstants resolve = encode;
     resolve.Mode = DlssNrMode_Resolve;
+    // Replace's detail injection puts back the game frame's own fine texture, which is what a style removed: off while
+    // the picture was restyled, so Replace shows the model's painting of the restyled picture.
+    if (inputRestyled)
+        resolve.ReplaceDetailStrength = 0.0f;
 
     // Supersampling down-leg (Vulkan). Average the Nx model answer back to native with the chosen
     // filter so the resolve composites a native answer against the native proxy 1:1 -- not the single
@@ -2446,7 +2590,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
         Transition(cmdBuffer, g_vk.preColor, VK_IMAGE_LAYOUT_GENERAL);
     if (!g_vk.pass->Dispatch(cmdBuffer, resolve, width, height, resolveProxy->view, resolveAnswer->view,
                              g_vk.keep.view,
-                             g_vk.autoExposureActive ? g_vk.autoExposure.view : VK_NULL_HANDLE,
+                             liveExposureView,
                              beforeSr ? g_vk.preColor.view : colour->Resource.ImageViewInfo.ImageView,
                              VK_NULL_HANDLE, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL))
     {
@@ -2568,6 +2712,7 @@ void ReleaseNrObjects()
     DestroyImage(g_vk.autoExposureRaw);
     DestroyImage(g_vk.lutScratch);
     g_vk.lutScratchFailed = false;
+    DestroyImage(g_vk.styled);
     g_vk.autoExposureAdapter.Invalidate();
     DestroyMeterReadback();
 
@@ -2622,6 +2767,7 @@ void ShutdownVk(bool deviceAlive)
         g_vk.autoExposureRaw = OwnedImage {};
         g_vk.lutScratch = OwnedImage {};
         g_vk.lutScratchFailed = false;
+        g_vk.styled = OwnedImage {};
         g_vk.autoExposureAdapter.Invalidate();
         CalibrationVkShutdown(false);
         DetailReuseVk::Release(false);
@@ -2643,6 +2789,8 @@ void ShutdownVk(bool deviceAlive)
         g_vk.workHeight = 0;
         g_vk.timedFrames = 0;
         g_vk.meterFrames = 0;
+        g_vk.gameLiveGate.Reset();
+        g_vk.gameLiveSaid = false;
         g_vk.lastGpuTime.reset();
         g_vk.ngxInitialised = false;
         g_vk.floatSlotKnown = false; // the next block is a new one

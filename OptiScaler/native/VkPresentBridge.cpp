@@ -3,6 +3,7 @@
 #include "VkPresentBridge.h"
 #include "VkPresentBridgeCore.h"
 #include "VkDeviceRules.h"
+#include "VkHiddenSurfaceRule.h"
 #include "VkOutputFailureRule.h"
 #include "VkPresentCopyRule.h"
 
@@ -84,6 +85,10 @@ std::atomic<int> g_outputsActive { 0 };
 // ask every frame (hooks/Reflex_Hooks.cpp), the latter while LetGoOfOutput holds the mutex and waits for it. Cleared
 // before frame generation lets go of its swapchain; the device itself lives as long as the bridge.
 std::atomic<ID3D12Device*> g_outputDevice { nullptr };
+// The up output's window (OutputWindow), without the mutex: the game's D3D11 Present asks on every present
+std::atomic<HWND> g_outputWindow { nullptr };
+// Counts the outputs made (OutputGeneration)
+std::atomic<uint32_t> g_outputGeneration { 0 };
 // The up output draws the menu on the game's presents only (MenuOnGamePresents)
 std::atomic<bool> g_menuOnGamePresents { false };
 std::unordered_map<VkSurfaceKHR, HWND> g_windows;
@@ -135,7 +140,7 @@ bool FrameGenerationChosen()
 {
     auto& state = State::Instance();
 
-    if (state.vulkanSkipHooks)
+    if (ScopedSkipVulkanHooks::Active())
         return false;
 
     // A dxvk game's Vulkan swapchain is dxvk's, for its D3D11 one. Bridged only with NativeDxvkVulkan on, where it is
@@ -252,13 +257,17 @@ bool Tearing(IDXGIFactory2* factory)
 }
 
 // What a D3D11 game's bridge does when its swapchain goes (Dx11wDx12SC::Release), for the D3D12 swapchain of a Vulkan game.
-void LetGoOfOutput(Bridge& bridge, IDXGISwapChain4* output)
+void LetGoOfOutput(Bridge& bridge, ComPtr<IDXGISwapChain4>& reference)
 {
     auto& state = State::Instance();
+    IDXGISwapChain4* output = reference.Get(); // compared with the state below; not used once the reference is let go
     HWND window = bridge.window;
 
     if (auto* device = bridge.device12; device != nullptr && g_outputDevice.compare_exchange_strong(device, nullptr))
         g_menuOnGamePresents = false;
+
+    if (HWND ours = window; ours != nullptr)
+        g_outputWindow.compare_exchange_strong(ours, nullptr);
 
     MenuOverlayDx::CleanupRenderTarget(true, window);
 
@@ -286,12 +295,19 @@ void LetGoOfOutput(Bridge& bridge, IDXGISwapChain4* output)
     }
 
     auto fg = state.currentFG;
+    const bool releaseFg = fg != nullptr && fg->Mutex.getOwner() != 1 && fg->SwapchainContext() != nullptr;
 
-    if (fg != nullptr && fg->Mutex.getOwner() != 1 && fg->SwapchainContext() != nullptr)
-    {
+    if (releaseFg)
         fg->Deactivate();
+
+    // Intel: XeFG's swapchain context is destroyed only once every reference to its swapchain is gone (else
+    // xefgSwapChainDestroy fails with POINTER_STILL_IN_USE and the context leaks), as the D3D11 bridge does
+    // (Dx11wDx12SC::Release): the bridge's own goes first.
+    reference.Reset();
+    output = nullptr;
+
+    if (releaseFg)
         fg->ReleaseSwapchain(window);
-    }
 
     // The private device and queue were made current for frame generation (the make function below): they must not stay
     // so once the swapchain is gone, whatever uses the state next would reach a device that is about to be released.
@@ -447,6 +463,8 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
         self->outputRule = native::VkOutputFailureRule {};
         ++g_outputsActive;
         g_outputDevice = self->device12;
+        ++g_outputGeneration;
+        g_outputWindow = self->window;
         g_menuOnGamePresents = systemFactory;
         LOG_INFO("Vulkan bridge: D3D12 swapchain {:X} on window {:X} ({}x{}, format {}, {} buffers, {})",
                  (size_t) out.Get(), (size_t) self->window, desc.BufferDesc.Width, desc.BufferDesc.Height,
@@ -454,7 +472,7 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
         return true;
     };
 
-    const native::ReleaseOutputFn release = [self](IDXGISwapChain4* output) { LetGoOfOutput(*self, output); };
+    const native::ReleaseOutputFn release = [self](ComPtr<IDXGISwapChain4>& output) { LetGoOfOutput(*self, output); };
 
     return bridge.core.Create(target, in, make, release, why);
 }
@@ -617,7 +635,33 @@ bool OnCreateSwapchain(VkInstance instance, VkPhysicalDevice physical, VkDevice 
         g_bridge = std::move(bridge);
     }
 
-    if (!g_bridge->core.Patch(in, out, why))
+    // The hidden surface can stop answering while the bridge waits for the game's next swapchain (Batman: Arkham Knight on
+    // dxvk, after it left exclusive full screen and dxvk set the display modes back): with no game swapchain on it, a new
+    // hidden window and surface are made and the swapchain is tried once more, the D3D12 swapchain kept
+    // (native/VkHiddenSurfaceRule.h).
+    bool patched = false;
+    bool remade = false;
+
+    for (;;)
+    {
+        patched = g_bridge->core.Patch(in, out, why);
+
+        if (native::OnHiddenSurfacePatch(patched, !g_bridge->swapchains.empty(), remade) !=
+            native::HiddenSurfaceStep::Remake)
+            break;
+
+        std::string remakeWhy;
+        LOG_INFO("Vulkan bridge: {}; making the hidden window and surface again", why);
+        remade = true;
+
+        if (!g_bridge->core.RemakeSurface(remakeWhy))
+        {
+            why += "; making them again failed: " + remakeWhy;
+            break;
+        }
+    }
+
+    if (!patched)
     {
         LogOnce("not bridged: " + why);
         Retire(g_bridge);
@@ -768,6 +812,10 @@ bool OutputActive()
 }
 
 ID3D12Device* Device() { return g_outputDevice.load(std::memory_order_acquire); }
+
+HWND OutputWindow() { return g_outputWindow.load(std::memory_order_acquire); }
+
+uint32_t OutputGeneration() { return g_outputGeneration.load(std::memory_order_acquire); }
 
 bool MenuOnGamePresents() { return g_menuOnGamePresents.load(std::memory_order_relaxed); }
 
@@ -966,6 +1014,10 @@ void PresentOutput()
             failures = g_bridge->outputRule.Failures();
         }
     }
+
+    // This present's own reference goes before giving up: retiring has frame generation destroy its swapchain, and XeFG
+    // wants every reference to it gone by then (as the bridge core's own, LetGoOfOutput)
+    output.Reset();
 
     if (giveUp)
     {

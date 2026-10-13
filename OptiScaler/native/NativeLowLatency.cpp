@@ -51,7 +51,7 @@ std::atomic<double> g_frameGenerationPresentAt = 0.0; // last PresentSource::Fra
 std::atomic<Decision> g_decision = Decision::NoF5Low;
 std::atomic<CapOwner> g_capOwner = CapOwner::NotOurs; // PlanCap's answer on the last present we ran on
 std::atomic<bool> g_xellIdle = false;                 // XellIdle on the last present we ran on
-std::atomic<bool> g_forXefgOnly = false;              // Auto runs us for XeFG's XeLL only, no Optical F5Low mode
+std::atomic<RunsFor> g_runsFor = RunsFor::F5Low;      // what Auto runs us for (RunReason): log and menu name it
 // XeLL and XeFG share one frame ID (framegen/xefg/XeFGFrameId.h): the ID of our frame in flight while XeFG runs on our
 // XeLL (0: not)
 std::atomic<uint32_t> g_xellFrameIdForFrameGeneration = 0;
@@ -263,7 +263,9 @@ Inputs GatherInputs(bool deviceAvailable)
     auto& state = State::Instance();
 
     Inputs in;
-    in.setting = config->DlssNrNativeLowLatency.value_or_default();
+    const auto rule = RuleForInput(config->FramerateLowLatencyInput.value_or_default());
+    in.setting = rule.setting;
+    in.blockGameLowLatency = rule.blockGameLowLatency && !FrameGenerationNeedsReflex();
 
     const auto shown = DlssNrNativeMode::FromKeys(
         { config->DlssNrNativeDepthFinder.value_or_default(), config->DlssNrNativeMotion.value_or_default(),
@@ -272,12 +274,20 @@ Inputs GatherInputs(bool deviceAvailable)
     in.f5lowRunning = shown != DlssNrNativeMode::Shown::Off && !GameUpscalerCalledRecently();
     in.xefgRunning = state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr &&
                      state.currentFG->SwapchainContext() != nullptr;
+    // While it is on. Its short pauses (toggles, a changed interpolation count, swap chain remakes, about ten frames) do
+    // not count: stopping and starting again for them would change the sleep mode twice and hand the cap back and forth
+    // (XeFG's check does not look at the pause either). The Vulkan present bridge is left out: FSR FG there is untested
+    // with us.
+    in.fsrFgRunning = state.activeFgOutput == FGOutput::FSRFG && state.currentFG != nullptr &&
+                      state.currentFG->IsActive() &&
+                      (state.swapchainInteropApi == SwapchainInteropApi::None ||
+                       state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12);
 
     in.gameCallsReflex = ReflexHooks::gameCalledReflex();
     in.gameRunsXell = XellHooks::canLimit();
     in.forceReflexDisabled = ForceReflexDisabled();
     in.forceXell = config->ForceXeLL.value_or_default() || state.activeFgInput == FGInput::ForceXeLL;
-    in.otherFrameGenerationOwner = state.externalFrameGeneration || state.activeFgOutput == FGOutput::DLSSG;
+    in.otherFrameGenerationOwner = FrameGenerationNeedsReflex();
     in.apiAvailable = g_table != Table::Missing;
     in.deviceAvailable = deviceAvailable;
     return in;
@@ -287,8 +297,8 @@ Decision Evaluate(Api api, IUnknown* device)
 {
     const auto inputs = GatherInputs(true);
     auto decision = Decide(inputs);
-    // Run for XeFG alone (no Optical F5Low mode): the menu and log say so
-    g_forXefgOnly = !inputs.f5lowRunning && inputs.xefgRunning;
+    // Run for frame generation alone (no Optical F5Low mode): the menu and log say so
+    g_runsFor = RunReason(inputs);
 
     if (decision == Decision::Run && g_table == Table::Unknown)
     {
@@ -358,11 +368,13 @@ const void* GameQueue()
 }
 
 // XeFG's XeLL routing hangs off the D3D entry points (ReflexHooks): a Vulkan game gets it through the bridge's D3D12
-// device, but not through the Vulkan ones
+// device, but not through the Vulkan ones. With Reflex or Anti-Lag 2 as XeFG's Output (XefgSide) XeLL still carries the
+// frame IDs, and a bridged Vulkan game's calls go to its VkDevice (PresentTarget): the Vulkan ones count then too.
 Method CurrentMethod(Api api)
 {
-    if (State::Instance().activeFgOutput == FGOutput::XeFG && api == Api::D3D)
-        return Method::XellWithXefg;
+    if (State::Instance().activeFgOutput == FGOutput::XeFG &&
+        (api == Api::D3D || ReflexHooks::bridgedXellDevice() != nullptr))
+        return MethodWithXefg(XefgSide());
 
     return fakenvapi::isUsingAsMainNvapi() ? Method::Fakenvapi : Method::RealReflex;
 }
@@ -370,8 +382,9 @@ Method CurrentMethod(Api api)
 CapInputs FrameCapInputs(Api api)
 {
     auto& state = State::Instance();
-    const bool fgGenerating =
-        state.currentFG != nullptr && state.currentFG->IsActive() && !state.currentFG->IsPaused();
+    // Generating, not merely on: FSR FG waiting for frame data (FG only with no upscaler call) shows the game's frames
+    // alone, and the cap must not be halved for frames it does not make (IFGFeature::IsGenerating).
+    const bool fgGenerating = state.currentFG != nullptr && state.currentFG->IsGenerating();
 
     CapInputs in;
     in.running = true;
@@ -379,21 +392,33 @@ CapInputs FrameCapInputs(Api api)
     in.method = CurrentMethod(api);
     in.fsrFgActive = state.activeFgOutput == FGOutput::FSRFG && fgGenerating;
     in.xefgGenerating = XefgGenerating();
+    in.shownPerRendered = XefgShownPerRendered();
     in.fakenvapiXell = in.method == Method::Fakenvapi && fakenvapi::getCurrentMode() == LowLatencyMode::XeLL;
 
     // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
     static const bool intelGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::Intel;
     in.intelGpu = intelGpu;
     // FGHooks::FGPresent's limiter waits before our OnPresentEnd there; the Vulkan bridge's D3D12 present (and its
-    // limiter) comes after the game's present, our Sleep included. Only read together with fsrFgActive (FGPresent).
+    // limiter) comes after the game's present, our Sleep included. Read with FSR FG on real Reflex; d3d11Bridge is the
+    // separate fact that decides who keeps the cap beside NVIDIA Reflex and XeFG (SplitLimiterKeepsCap).
     in.limiterBeforeSleep = state.swapchainInteropApi != SwapchainInteropApi::VkwDx12;
+    in.d3d11Bridge = state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
     return in;
 }
 
-// Run for XeFG alone (no Optical F5Low mode), the log does not name Optical F5Low
+// Run for frame generation alone (no Optical F5Low mode), the log does not name Optical F5Low
 const char* LogName()
 {
-    return g_forXefgOnly.load() ? "Low latency (feeding XeFG's XeLL)" : "Optical F5Low low latency";
+    switch (g_runsFor.load())
+    {
+    case RunsFor::Xefg:
+        // In the split XeLL only stays for XeFG; Reflex or Anti-Lag 2 is fed
+        return XefgSide() == XefgLatency::XeLL ? "Low latency (feeding XeFG's XeLL)" : "Low latency (for XeFG)";
+    case RunsFor::FsrFg:
+        return "Low latency (for FSR frame generation)";
+    default:
+        return "Optical F5Low low latency";
+    }
 }
 
 std::string CapText(float capFps)
@@ -403,7 +428,16 @@ std::string CapText(float capFps)
 
 const char* PathText(Api api)
 {
-    const bool viaFakenvapi = CurrentMethod(api) != Method::RealReflex;
+    const auto method = CurrentMethod(api);
+
+    // XeFG's XeLL is not the method in the split: it only keeps XeFG running
+    if (method == Method::RealReflexWithXefg)
+        return "NVIDIA Reflex";
+
+    if (method == Method::FakenvapiWithXefg)
+        return "Anti-Lag 2 (through fakenvapi)";
+
+    const bool viaFakenvapi = method != Method::RealReflex;
 
     if (!viaFakenvapi)
         return "NVIDIA Reflex";
@@ -421,6 +455,33 @@ const char* PathText(Api api)
     default:
         return fakenvapi::isUsingAsMainNvapi() ? "fakenvapi (no method active yet)" : "NVIDIA Reflex";
     }
+}
+
+// What lowers latency here, whoever makes the calls (the menu's "Active: <input> -> <output>"). PathText names the method
+// our own calls reach; XeFG, Force XeLL and a game's own XeLL come first because they decide it.
+const char* OutputText(Api api)
+{
+    // With XeFG and Reflex or Anti-Lag 2 as its Output: they lower latency, XeLL stays for XeFG
+    if (State::Instance().activeFgOutput == FGOutput::XeFG)
+    {
+        switch (XefgSide())
+        {
+        case XefgLatency::Reflex:
+            return "NVIDIA Reflex (XeLL stays for XeFG)";
+        case XefgLatency::AntiLag2:
+            return "Anti-Lag 2 (XeLL stays for XeFG)";
+        default:
+            return "XeLL";
+        }
+    }
+
+    if (State::Instance().activeFgInput == FGInput::ForceXeLL)
+        return "XeLL";
+
+    if (XellHooks::canLimit())
+        return "XeLL (the game's)";
+
+    return PathText(api);
 }
 
 void PresentBegin(Api api, IUnknown* device, PresentSource source)
@@ -458,7 +519,11 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     if (decision != Decision::Run)
     {
         const auto reason = [decision]()
-        { return DecisionText(decision, ReflexHooks::gameReflexFeedsXell(), ForceReflexDisabled()); };
+        {
+            const auto side = XefgSide();
+            return DecisionText(decision, ReflexHooks::gameReflexFeedsXell() && side == XefgLatency::XeLL,
+                                ForceReflexDisabled(), side);
+        };
 
         // Once whenever it changes (a running one logs its stop below)
         if (decision != previousDecision && !g_running.load(std::memory_order_relaxed))
@@ -498,9 +563,13 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     call.device = device;
     call.minimumIntervalUs = cap.minimumIntervalUs;
     // Only NVIDIA's Reflex has Boost; sent to XeLL it would only be a needless sleep mode change
-    call.boost = method == Method::RealReflex && Config::Instance()->DlssNrNativeLowLatencyBoost.value_or_default();
-    // XeFG makes a new XeLL context (and sets its sleep mode, with no limit) when its swap chain is made again
-    call.xellGeneration = method == Method::XellWithXefg ? fakenvapi::forcedModeGeneration() : 0;
+    call.boost = (method == Method::RealReflex || method == Method::RealReflexWithXefg) &&
+                 Config::Instance()->DlssNrNativeLowLatencyBoost.value_or_default();
+    // XeFG makes a new XeLL context (and sets its sleep mode, with no limit) when its swap chain is made again; in the
+    // split that one has to be told low latency off again
+    call.xellGeneration = CarriesXefgFrameIds(method) ? fakenvapi::forcedModeGeneration() : 0;
+    // A changed Output sends the mode again, to the new side
+    call.side = CarriesXefgFrameIds(method) ? (uint32_t) XefgSide() : 0;
 
     const auto now = Util::MillisecondsNow();
 
@@ -560,7 +629,7 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
 
     // XeFG takes this ID for the frame it tags next (FrameIdForFrameGeneration)
     ++g_frameId;
-    g_xellFrameIdForFrameGeneration = method == Method::XellWithXefg ? (uint32_t) g_frameId : 0;
+    g_xellFrameIdForFrameGeneration = CarriesXefgFrameIds(method) ? (uint32_t) g_frameId : 0;
     g_submitSent = false;
     g_running = true;
     Marker(api, device, SIMULATION_START);
@@ -585,6 +654,215 @@ void OnPresentBeginVulkan(VkDevice device)
 void OnPresentEndVulkan(VkDevice device)
 {
     PresentEnd(Api::Vulkan, reinterpret_cast<IUnknown*>(device), PresentSource::SwapChain);
+}
+
+namespace
+{
+std::atomic<DWORD> g_dxvkGameThread = 0;   // the thread of the game's D3D11 Present under dxvk (Vulkan bridge)
+std::atomic<DWORD> g_dxvkVulkanThread = 0; // the thread of dxvk's vkQueuePresentKHR
+
+void LogDxvkThreads()
+{
+    const auto game = g_dxvkGameThread.load();
+    const auto vulkan = g_dxvkVulkanThread.load();
+
+    if (game == 0 || vulkan == 0)
+        return;
+
+    if (game == vulkan)
+        LOG_INFO("Low latency (dxvk): the game and dxvk present to Vulkan on the same thread ({})", game);
+    else
+        LOG_INFO("Low latency (dxvk): the game presents on thread {}, dxvk presents to Vulkan on thread {}", game,
+                 vulkan);
+}
+} // namespace
+
+void NoteDxvkGamePresentThread()
+{
+    const auto thread = GetCurrentThreadId();
+
+    if (g_dxvkGameThread.exchange(thread, std::memory_order_relaxed) != thread)
+        LogDxvkThreads();
+}
+
+void NoteDxvkVulkanPresentThread()
+{
+    const auto thread = GetCurrentThreadId();
+
+    if (g_dxvkVulkanThread.exchange(thread, std::memory_order_relaxed) != thread)
+        LogDxvkThreads();
+}
+
+namespace
+{
+// The devices the Vulkan present published, as ONE unit: the bridge's D3D12 device and the game's VkDevice (as a token).
+// Which one the game's Present uses is chosen at the game's Present from the Output of that moment, so a change of
+// XeFG's Output never uses the last frame's choice, and no call goes to the wrong API's device.
+struct DxvkDevices
+{
+    IUnknown* device12 = nullptr;
+    IUnknown* vk = nullptr;
+};
+
+std::mutex g_dxvkDevicesMutex;
+DxvkDevices g_dxvkDevices;
+
+std::mutex g_dxvkLedgerMutex;
+FrameLedger g_dxvkLedger;
+HWND g_dxvkLedgerWindow = nullptr;
+
+// The XeLL frame ID of the frame the Vulkan present in flight is presenting, when the game's Present paired it (else 0)
+std::atomic<uint32_t> g_dxvkBridgeFrameId = 0;
+
+// -1 not decided yet, 0 the Vulkan present runs the pair, 1 the game's Present does: only to log a change
+std::atomic<int> g_dxvkSite = -1;
+
+std::mutex g_dxvkSiteMutex;
+
+DxvkDevices DxvkDevicesNow()
+{
+    std::lock_guard lock(g_dxvkDevicesMutex);
+    return g_dxvkDevices;
+}
+} // namespace
+
+DxvkSiteLock::DxvkSiteLock(bool take) : _held(take)
+{
+    if (_held)
+        g_dxvkSiteMutex.lock();
+}
+
+DxvkSiteLock::~DxvkSiteLock()
+{
+    if (_held)
+        g_dxvkSiteMutex.unlock();
+}
+
+bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12, uint32_t generation)
+{
+    NoteDxvkVulkanPresentThread();
+
+    {
+        std::lock_guard lock(g_dxvkDevicesMutex);
+        g_dxvkDevices = { device12, reinterpret_cast<IUnknown*>(vkDevice) };
+    }
+
+    FrameLedger::Entry entry;
+    bool popped = false;
+    bool resync = false;
+
+    {
+        std::lock_guard lock(g_dxvkLedgerMutex);
+        popped = g_dxvkLedger.Pop(&entry, generation, Util::MillisecondsNow());
+        resync = g_dxvkLedger.TakeResync();
+    }
+
+    static std::atomic<bool> resyncLogged = false;
+
+    if (resync && !resyncLogged.exchange(true))
+    {
+        LOG_WARN("Low latency (dxvk): the game's presents and dxvk's Vulkan presents got out of step (a present without its "
+                 "pair, or the bridge made again); the frame list was trimmed and goes on from here");
+    }
+
+    // Nothing queued: the Vulkan present runs the pair, as it did before the game's Present could
+    g_dxvkBridgeFrameId = popped && entry.site == SleepSite::GamePresent ? entry.frameId : 0;
+    return !popped || entry.site == SleepSite::VulkanPresent;
+}
+
+void DxvkBridgeDown()
+{
+    // The game presents with no output up: what is queued is for frames that dxvk presents unbridged, with no pop
+    std::lock_guard lock(g_dxvkLedgerMutex);
+    g_dxvkLedger.Clear();
+    g_dxvkLedgerWindow = nullptr;
+    g_dxvkBridgeFrameId = 0;
+}
+
+DxvkGameScope OnDxvkGamePresentBegin(bool keyOn, HWND window, uint32_t generation)
+{
+    NoteDxvkGamePresentThread();
+
+    DxvkGameScope scope;
+
+    {
+        // The bridge went away or came back (another window): what is queued belongs to the old one
+        std::lock_guard lock(g_dxvkLedgerMutex);
+
+        if (g_dxvkLedgerWindow != window)
+        {
+            g_dxvkLedger.Clear();
+            g_dxvkLedgerWindow = window;
+            g_dxvkBridgeFrameId = 0;
+        }
+    }
+
+    // The API from the Output now, the same rule as the Vulkan present's (PresentTarget)
+    const auto devices = DxvkDevicesNow();
+    const bool splitOnVulkan = XefgSide() != XefgLatency::XeLL;
+    const auto target = PresentTarget(true, true, devices.vk, devices.device12, splitOnVulkan);
+    const bool gamePresent = SleepSiteFor(true, keyOn) == SleepSite::GamePresent && target.device != nullptr;
+
+    if (g_dxvkSite.exchange(gamePresent ? 1 : 0) != (gamePresent ? 1 : 0))
+    {
+        LOG_INFO("Low latency (dxvk): the Reflex calls run at {}",
+                 gamePresent ? "the game's Present, on the game's thread" : "dxvk's Vulkan present, on dxvk's thread");
+    }
+
+    if (!gamePresent)
+    {
+        std::lock_guard lock(g_dxvkLedgerMutex);
+        scope.seq = g_dxvkLedger.Push(0, SleepSite::VulkanPresent, generation, Util::MillisecondsNow());
+        scope.pushed = true;
+        return scope;
+    }
+
+    scope.began = true;
+    scope.api = target.api;
+    scope.device = const_cast<IUnknown*>(static_cast<const IUnknown*>(target.device));
+    scope.pushed = true;
+
+    // The entry's ID is the one the markers carry (0 when nobody feeds XeLL): XeFG takes it when the bridge presents the
+    // frame. Read under the site lock (NativeLowLatencyRule.h BeginGameSiteFrame).
+    scope.seq = BeginGameSiteFrame([] { return DxvkSiteLock(true); }, [] { return g_xellFrameIdForFrameGeneration.load(); },
+                                   [&](uint32_t id)
+                                   {
+                                       std::lock_guard lock(g_dxvkLedgerMutex);
+                                       return g_dxvkLedger.Push(id, SleepSite::GamePresent, generation, Util::MillisecondsNow());
+                                   },
+                                   [&] { PresentBegin(scope.api, scope.device, PresentSource::SwapChain); });
+    return scope;
+}
+
+void OnDxvkGamePresentEnd(const DxvkGameScope& scope, HRESULT presentResult)
+{
+    if (scope.began)
+    {
+        // dxvk can remake its Vulkan swapchain inside this very Present, and the bridge then lets go of its D3D12 device
+        // (OnDeviceReleased): ending the pair on it would store a device that is gone
+        const auto devices = DxvkDevicesNow();
+        DxvkSiteLock lock(true);
+
+        if (scope.device == devices.device12 || scope.device == devices.vk)
+        {
+            PresentEnd(scope.api, scope.device, PresentSource::SwapChain);
+        }
+        else
+        {
+            // No call to the gone device, but the pair is not left half way and the frame ID moves on (AbandonPair)
+            AbandonPair(g_presentStarted, g_submitSent, g_frameId);
+
+            if (g_xellFrameIdForFrameGeneration.load() != 0)
+                g_xellFrameIdForFrameGeneration = static_cast<uint32_t>(g_frameId);
+        }
+    }
+
+    // Occluded or failed: dxvk presents nothing for this frame
+    if (scope.pushed && presentResult != S_OK)
+    {
+        std::lock_guard lock(g_dxvkLedgerMutex);
+        g_dxvkLedger.Undo(scope.seq);
+    }
 }
 
 void OnFirstSubmit(const void* queue)
@@ -627,6 +905,14 @@ void OnDeviceReleased(IUnknown* device)
     expected = device;
     g_sleepModeDevice.compare_exchange_strong(expected, nullptr);
 
+    // dxvk: the game's Present must not run the pair on it either
+    {
+        std::lock_guard lock(g_dxvkDevicesMutex);
+
+        if (g_dxvkDevices.device12 == device)
+            g_dxvkDevices.device12 = nullptr;
+    }
+
     ReflexHooks::forgetSleepDevice(device);
 }
 
@@ -641,6 +927,13 @@ void OnDeviceReleasedVulkan(VkDevice device)
 
     expected = token;
     g_sleepModeDevice.compare_exchange_strong(expected, nullptr);
+
+    {
+        std::lock_guard lock(g_dxvkDevicesMutex);
+
+        if (g_dxvkDevices.vk == token)
+            g_dxvkDevices.vk = nullptr;
+    }
 
     ReflexHooks::forgetSleepDeviceVulkan(device);
 
@@ -668,6 +961,18 @@ bool Running()
 
 uint32_t FrameIdForFrameGeneration()
 {
+    // dxvk with the pair at the game's Present: the bridge present on dxvk's thread presents a frame the game's thread has
+    // long moved past, and takes the ID that frame's markers carried (its ledger entry, taken before the frame is touched).
+    // The game's own thread (XeFG tags the frame's resources while it renders) and everyone else are in the newest frame,
+    // as before; so is everyone when dxvk presents on the game's own thread.
+    if (const auto bridge = g_dxvkBridgeFrameId.load(); bridge != 0)
+    {
+        const auto thread = GetCurrentThreadId();
+
+        if (thread == g_dxvkVulkanThread.load() && thread != g_dxvkGameThread.load() && Running())
+            return bridge;
+    }
+
     if (const auto ours = g_xellFrameIdForFrameGeneration.load(); ours != 0 && Running())
         return ours;
 
@@ -683,8 +988,9 @@ bool WantsBoostForFrameGeneration()
 bool XefgGenerating()
 {
     auto& state = State::Instance();
-    const bool fgGenerating =
-        state.currentFG != nullptr && state.currentFG->IsActive() && !state.currentFG->IsPaused();
+    // Not while it waits for the game's next frame data (FG only with no upscaler call feeding it): it shows only the
+    // game's frames then, and a cap counted in shown frames would halve the frame rate
+    const bool fgGenerating = state.currentFG != nullptr && state.currentFG->IsGenerating();
 
     // XeFG passes frames through in exclusive full screen (Intel); realExclusiveFullscreen is set after
     // FGXeFGForceBorderless had its say, so it means the real thing
@@ -731,18 +1037,62 @@ void WaitForGameQueueIdle()
     device->Release();
 }
 
+bool FrameGenerationNeedsReflex()
+{
+    return State::Instance().externalFrameGeneration || State::Instance().activeFgOutput == FGOutput::DLSSG;
+}
+
+bool GameLowLatencyBlocked()
+{
+    return BlocksGameLowLatency(Config::Instance()->FramerateLowLatencyInput.value_or_default(),
+                                FrameGenerationNeedsReflex());
+}
+
+OutputInputs CurrentOutputInputs()
+{
+    // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
+    static const auto vendor = IdentifyGpu::getPrimaryGpu().vendorId;
+
+    OutputInputs in;
+    in.fakenvapiMain = fakenvapi::isUsingAsMainNvapi();
+    in.xefgOutput = State::Instance().activeFgOutput == FGOutput::XeFG;
+    in.amdGpu = vendor == VendorId::AMD;
+    in.nvidiaGpu = vendor == VendorId::Nvidia;
+    in.antiLag2Failed = fakenvapi::companionFailed();
+    in.xefgLatency = Config::Instance()->FGXeFGLowLatencyOutput.value_or_default();
+    return in;
+}
+
+XefgLatency XefgSide()
+{
+    // fakenvapi's Force Reflex, either way: it overrides what XeLL does, so it stays the one that lowers latency
+    const bool forceReflexSet = Config::Instance()->FN_ForceReflex.value_or_default() != ForceReflex::InGame;
+    return xefgreflex::EffectiveXefgLatency(CurrentOutputInputs(), GameLowLatencyBlocked(), forceReflexSet);
+}
+
+uint32_t XefgShownPerRendered()
+{
+    const auto fg = State::Instance().currentFG;
+    return ShownPerRendered(XefgGenerating() && fg != nullptr, fg != nullptr ? fg->GetInterpolatedFrameCount() : 0);
+}
+
 Status GetStatus()
 {
     Status status;
     status.decision = g_decision.load();
-    status.gameReflexFeedsXell = ReflexHooks::gameReflexFeedsXell();
+    status.xefgSide = XefgSide();
+    // In the split XeLL only keeps XeFG running: the game's Reflex lowers latency on the other side
+    status.gameReflexFeedsXell = ReflexHooks::gameReflexFeedsXell() && status.xefgSide == XefgLatency::XeLL;
     status.forceReflexDisabled = ForceReflexDisabled();
+    status.output = OutputText(g_deviceApi.load());
+    status.offKeptForFrameGeneration =
+        Config::Instance()->FramerateLowLatencyInput.value_or_default() == Input::Off && FrameGenerationNeedsReflex();
 
     if (status.decision != Decision::Run || !g_running.load(std::memory_order_relaxed))
         return status;
 
     status.capOwner = g_capOwner.load();
-    status.forXefgOnly = g_forXefgOnly.load();
+    status.runsFor = g_runsFor.load();
     status.xellIdle = g_xellIdle.load();
 
     const auto api = g_deviceApi.load();
@@ -759,7 +1109,8 @@ Status GetStatus()
         g_hasLatency = false;
 
         // fakenvapi's report has the markers' times only; its GPU end is the last marker's plus 0.1 ms
-        const bool estimated = CurrentMethod(api) != Method::RealReflex;
+        const auto latencyMethod = CurrentMethod(api);
+        const bool estimated = latencyMethod != Method::RealReflex && latencyMethod != Method::RealReflexWithXefg;
         const auto ReadLatency = [](const auto& report, bool estimated)
         {
             const uint64_t end = estimated ? report.presentEndTime : report.gpuRenderEndTime;

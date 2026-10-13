@@ -274,6 +274,19 @@ void NativeDriver::DrawFlowTuning()
     ImGui::SliderInt("Coarse cells as candidates##flowcells", &tune.coarseCells, 1, 9);
     ImGui::Checkbox("Last frame's flow as a candidate##flowhistory", &tune.useHistory);
     ImGui::Checkbox("Match within a surface (uses depth)##flowdepth", &tune.depthMatching);
+
+    auto& guides = _producer->Trust()->Tuning();
+    ImGui::Checkbox("Sharp motion at outlines (uses depth)##flowguidesurface", &guides.guideSurface);
+
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", "Each pixel at the outline of a character or object takes its own surface's motion, "
+                                "not a blend with what's behind it. Frame generation draws fewer see-through edges.");
+    ImGui::Checkbox("Background motion behind moving things (uses depth)##flowuncover", &guides.uncoverBackground);
+
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", "Background that comes out from behind a character (on a camera turn, or as it "
+                                "walks) moves with the background, instead of a guess. Frame generation smears less "
+                                "behind it.");
     ImGui::Checkbox("Match within what looks alike##flowlook", &tune.lookWeights);
 
     if (ImGui::IsItemHovered())

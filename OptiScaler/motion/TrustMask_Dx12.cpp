@@ -10,7 +10,7 @@ namespace
 {
 
 constexpr uint32_t kDescriptorsPerPass = 10; // eight SRVs, two UAVs
-constexpr uint32_t kPassesPerFrame = 6;
+constexpr uint32_t kPassesPerFrame = 7;
 constexpr uint32_t kFramesInFlight = 8;
 constexpr DXGI_FORMAT kFlowFormat = DXGI_FORMAT_R16G16B16A16_FLOAT;
 constexpr DXGI_FORMAT kDepthFormat = DXGI_FORMAT_R32_FLOAT;
@@ -34,7 +34,8 @@ TrustMaskDx12::~TrustMaskDx12()
 {
     ReleaseTextures();
 
-    for (ID3D12PipelineState** pso : { &_depthProxy, &_clearCounter, &_trust, &_copyFlow, &_guideDepthPso, &_guideMotionPso })
+    for (ID3D12PipelineState** pso :
+         { &_depthProxy, &_clearCounter, &_trust, &_copyFlow, &_guideDepthPso, &_guideMotionPso, &_uncoverPso })
         if (*pso != nullptr)
             (*pso)->Release();
 
@@ -120,7 +121,8 @@ bool TrustMaskDx12::Init(ID3D12Device* device)
 
     for (const Entry& entry : { Entry { "DepthProxy", &_depthProxy }, Entry { "ClearCounter", &_clearCounter },
                                 Entry { "Trust", &_trust }, Entry { "CopyFlow", &_copyFlow },
-                                Entry { "GuideDepth", &_guideDepthPso }, Entry { "GuideMotion", &_guideMotionPso } })
+                                Entry { "GuideDepth", &_guideDepthPso }, Entry { "GuideMotion", &_guideMotionPso },
+                                Entry { "Uncover", &_uncoverPso } })
     {
         const auto* code = Compile(entry.name, &_error);
 
@@ -217,7 +219,7 @@ bool TrustMaskDx12::CreateTexture(Tex& tex, uint32_t width, uint32_t height, DXG
 
 void TrustMaskDx12::ReleaseTextures()
 {
-    for (Tex* tex : { &_depth[0], &_depth[1], &_mask[0], &_mask[1], &_flowBefore, &_guideDepth, &_guideMotion })
+    for (Tex* tex : { &_depth[0], &_depth[1], &_mask[0], &_mask[1], &_flowBefore, &_guideFlow, &_guideDepth, &_guideMotion })
     {
         if (tex->resource != nullptr)
             tex->resource->Release();
@@ -244,7 +246,7 @@ bool TrustMaskDx12::EnsureSize(ID3D12Device*, uint32_t width, uint32_t height)
         return true;
 
     // The textures are replaced; the owner has waited for the GPU as it does for any size change.
-    for (Tex* tex : { &_depth[0], &_depth[1], &_mask[0], &_mask[1], &_flowBefore })
+    for (Tex* tex : { &_depth[0], &_depth[1], &_mask[0], &_mask[1], &_flowBefore, &_guideFlow })
     {
         if (tex->resource != nullptr)
             tex->resource->Release();
@@ -261,7 +263,8 @@ bool TrustMaskDx12::EnsureSize(ID3D12Device*, uint32_t width, uint32_t height)
            CreateTexture(_depth[1], width, height, kDepthFormat, L"TrustMask_Depth1") &&
            CreateTexture(_mask[0], width, height, kMaskFormat, L"TrustMask_Mask0") &&
            CreateTexture(_mask[1], width, height, kMaskFormat, L"TrustMask_Mask1") &&
-           CreateTexture(_flowBefore, width, height, kFlowFormat, L"TrustMask_FlowBefore");
+           CreateTexture(_flowBefore, width, height, kFlowFormat, L"TrustMask_FlowBefore") &&
+           CreateTexture(_guideFlow, width, height, kFlowFormat, L"TrustMask_GuideFlow");
 }
 
 void TrustMaskDx12::Transition(ID3D12GraphicsCommandList* list, Tex& tex, D3D12_RESOURCE_STATES state)
@@ -477,6 +480,8 @@ bool TrustMaskDx12::Dispatch(ID3D12GraphicsCommandList* list, const Inputs& in)
     Transition(list, _mask[_maskIndex], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     _haveHistory = true;
     _hadDepth = in.depthCount > 0;
+    // After a Reset the other proxy is another scene's: not a frame before this one.
+    _depthBoth = constants.depthBoth != 0 && constants.hasHistory != 0;
     return true;
 }
 
@@ -538,10 +543,42 @@ bool TrustMaskDx12::BuildGuides(ID3D12GraphicsCommandList* list, const Inputs& i
         _guideDepthValid = false;
     }
 
+    // Background just uncovered takes its surface's motion, at the flow's size, before it is enlarged. Needs this
+    // frame's depth proxy and last frame's (both left by Dispatch, which ran on these inputs); the flow is read in its
+    // combined read state.
+    ID3D12Resource* flow = in.flow;
+
+    if (_settings.uncoverBackground && _uncoverPso != nullptr && _depthBoth && in.depthCount > 0 &&
+        _guideFlow.resource != nullptr && _guideFlow.width == in.flowWidth && _guideFlow.height == in.flowHeight)
     {
-        // The flow sits in its combined read state between frames; the pass reads it as a texture.
-        ID3D12Resource* const srv[8] = { in.flow, in.flow, in.flow, in.flow, in.flow, in.flow, in.flow, in.flow };
-        const DXGI_FORMAT formats[8] = { kFlowFormat, kFlowFormat, kFlowFormat, kFlowFormat,
+        Constants uncover = constants;
+        uncover.sizeX = in.flowWidth;
+        uncover.sizeY = in.flowHeight;
+        uncover.fullPerFlow = in.fullPerFlow;
+        uncover.revealTolerance = _settings.revealTolerance;
+        uncover.uncoverReach = _settings.uncoverReach;
+
+        ID3D12Resource* const srv[8] = { in.flow, in.flow, _depth[_depthIndex].resource, _depth[1 - _depthIndex].resource,
+                                         in.flow, in.flow, in.flow,                       in.flow };
+        const DXGI_FORMAT formats[8] = { kFlowFormat, kFlowFormat, kDepthFormat, kDepthFormat,
+                                         kFlowFormat, kFlowFormat, kFlowFormat, kFlowFormat };
+        Pass(list, _uncoverPso, srv, formats, _guideFlow, kFlowFormat, (in.flowWidth + 7) / 8, (in.flowHeight + 7) / 8,
+             uncover);
+        flow = _guideFlow.resource;
+    }
+
+    {
+        // The flow sits in its combined read state between frames; the pass reads it as a texture. By surface it also
+        // reads the depth guide just written (t2) and this frame's depth proxy at the flow's size (t3, left by Dispatch).
+        const bool surface = _settings.guideSurface && _guideDepthValid && _hadDepth;
+        constants.guideSurface = surface ? 1 : 0;
+
+        ID3D12Resource* const depthHere = surface ? _guideDepth.resource : flow;
+        ID3D12Resource* const depthFlow = surface ? _depth[_depthIndex].resource : flow;
+        const DXGI_FORMAT depthFormat = surface ? kDepthFormat : kFlowFormat;
+
+        ID3D12Resource* const srv[8] = { flow, flow, depthHere, depthFlow, flow, flow, flow, flow };
+        const DXGI_FORMAT formats[8] = { kFlowFormat, kFlowFormat, depthFormat, depthFormat,
                                          kFlowFormat, kFlowFormat, kFlowFormat, kFlowFormat };
         Pass(list, _guideMotionPso, srv, formats, _guideMotion, kFlowFormat, groupsX, groupsY, constants);
     }

@@ -19,6 +19,7 @@
 
 #include "DlssNr_Common.h"
 #include "DlssNr_DetailReuseConstants.h"
+#include "DlssNr_EditCacheConstants.h"
 #include "DlssNr_LutConstants.h"
 #include "DlssNr_Spatial.h"
 
@@ -36,15 +37,18 @@
 // A frame records the meter, its reduce, eye adaptation, the exposure courier, encode, downsample, one clamp per
 // extra model pass, resolve and, during a Tune run, the stats pass: about ten with the default passes. The model
 // layers themselves are NGX evaluates and do not consume this ring; their A/B resources and feature histories are
-// persistent. Reuse detail between frames (DlssNr_DetailReuse.inl) adds up to four more on a full frame (compose,
-// estimate, steady, capture) and four on a reused one (estimate, fill, save motion, capture), which skips the clamps.
+// persistent. Reuse detail between frames (DlssNr_DetailReuse.inl) adds up to six more on a full frame (compose,
+// estimate, coverage, steady or the spread, capture, the spread's shown capture) and seven on a reused one (estimate,
+// coverage, fill, save motion, the spread's estimate and blend, capture), which skips the clamps.
 // Compress screen edges (DlssNr_Spatial.inl) adds three (colour pack, depth + motion pack, unpack), and replaces Reuse
-// detail's, which does not run beside it.
-// Sixty-four slots leave four or more such frames before descriptor/constant reuse; many more passes leave fewer.
-#define DLSSNR_NUM_OF_HEAPS 64
+// detail's, which does not run beside it. The edit cache (DlssNr_EditCache.inl) adds seven on a cached frame (ring,
+// context, carry, three cell levels, apply) and up to five on a refresh (ring, compose, context, capture, a crossfade).
+// Ninety-six slots leave four or more such frames before descriptor/constant reuse; many more passes leave fewer.
+#define DLSSNR_NUM_OF_HEAPS 96
 
 // Goes through the same constant-buffer ring as DlssNrConstants.
 static_assert(sizeof(DlssNrDetailReuseConstants) == sizeof(DlssNrConstants));
+static_assert(sizeof(DlssNrEditCacheConstants) == sizeof(DlssNrConstants));
 static_assert(sizeof(DlssNr::Spatial::Constants) == sizeof(DlssNrConstants));
 
 class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
@@ -90,6 +94,8 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
     // failed to build.
     ID3D12PipelineState* _detailReusePipelineState = nullptr;
     bool _detailReusePipelineFailed = false;
+    ID3D12PipelineState* _editCachePipelineState = nullptr;
+    bool _editCachePipelineFailed = false;
 
     // Compress screen edges (dlssnr_spatial.hlsl): the colour pack / unpack and the depth + motion pack are two
     // pipelines of one shader, built on first use the same way. Not retried once they failed to build.
@@ -197,6 +203,14 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
                              ID3D12Resource* In2, ID3D12Resource* In3, ID3D12Resource* In4, ID3D12Resource* OutTarget,
                              ID3D12Resource* OutSecond, ID3D12Resource* InHistoryDistrust = nullptr);
 
+    // The edit cache (dlssnr_edit_cache.hlsl, DlssNr_EditCache.inl). EditCacheReady builds the PSO on first use;
+    // DispatchEditCache is false (no-op) without it. Same descriptor table shape as DispatchPass (t0-t5, u0-u1); null
+    // inputs get In0 as a stand-in, a null OutSecond gets OutTarget. Dispatches Width x Height threads.
+    bool EditCacheReady();
+    bool DispatchEditCache(ID3D12GraphicsCommandList* InCmdList, const DlssNrEditCacheConstants& InConstants,
+                           unsigned int Width, unsigned int Height, ID3D12Resource* const (&In)[kSrvCount],
+                           ID3D12Resource* OutTarget, ID3D12Resource* OutSecond);
+
     // Compress screen edges (dlssnr_spatial.hlsl, DlssNr_Spatial.h). SpatialReady builds the pipelines on first use and
     // says whether there are any; DispatchSpatial is false (no-op) without them. Same descriptor table shape as
     // DispatchPass; Width x Height threads come from the constants. By mode:
@@ -217,12 +231,14 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
     // (caller-owned, same size and format as InSource). Reparses/reuploads only when LutPath differs from
     // what is already loaded. False and OutTarget untouched when LutPath is empty or fails to parse --
     // LutError() then has the reason -- so an empty setting costs nothing beyond this call's own early-out.
-    // ColourIsLinearHdr/Trim (Review Pass, 2026-10-04 fix): InputEncoding alone cannot tell scene-linear
+    // ColourIsLinearHdr (Review Pass, 2026-10-04 fix): InputEncoding alone cannot tell scene-linear
     // HDR apart from tone-mapped sRGB (both collapse to the same value), so the caller passes
-    // frame.ColourIsLinearHdr directly, and Trim is what to divide linear light by -- the white point the encode
-    // uses for this frame (ResolveWhitePoint), not the Trim on top of it.
+    // frame.ColourIsLinearHdr directly. White carries the encode's white point fields for this frame (its WhitePoint
+    // is what to divide linear light by, not the Trim on top of it) and ExposureTex the live exposure the encode reads,
+    // so the LUT grades for the white the model is shown (DlssNr_LutConstants.h CopyLiveWhitePoint).
     bool DispatchLut(ID3D12GraphicsCommandList* InCmdList, ID3D12Resource* InSource, ID3D12Resource* OutTarget,
                      unsigned int Width, unsigned int Height, float Strength, uint32_t InputEncoding,
-                     bool ColourIsLinearHdr, float Trim, const std::string& LutPath);
+                     bool ColourIsLinearHdr, const DlssNrConstants& White, ID3D12Resource* ExposureTex,
+                     const std::string& LutPath);
     const std::string& LutError() const { return _lutState.error; }
 };

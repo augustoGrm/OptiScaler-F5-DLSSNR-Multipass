@@ -272,8 +272,9 @@ static const QuirkEntry quirkTable[] = {
                 GameQuirk::DisableFSR3Inputs),
 
     // Death Stranding and Directors Cut
-    // no spoof needed for DLSS inputs
-    QUIRK_ENTRY("ds.exe", GameQuirk::DisableDxgiSpoofing, GameQuirk::DisableFSR2Inputs, GameQuirk::DisableFSR3Inputs),
+    // no spoof needed for DLSS inputs; borderless with XeFG instead of exclusive full screen
+    QUIRK_ENTRY("ds.exe", GameQuirk::DisableDxgiSpoofing, GameQuirk::DisableFSR2Inputs, GameQuirk::DisableFSR3Inputs,
+                GameQuirk::ForceBorderlessWhenUsingXeFG),
 
     // Duet Night Abyss
     QUIRK_ENTRY("em-win64-shipping.exe", GameQuirk::DontUseNtDllHooks),

@@ -61,14 +61,14 @@ inline int FrameLimit::combined_sleep(int64_t ns)
     return status;
 }
 
-void FrameLimit::sleep(bool fgActive)
+void FrameLimit::sleep(uint32_t shownPerRendered)
 {
     if (auto fpsCap = Config::Instance()->FramerateLimit.value_or_default(); fpsCap != 0.0f)
     {
         uint64_t min_interval_us = std::clamp((uint64_t) (1'000'000 / fpsCap), 0ULL, 100'000'000ULL);
 
-        if (fgActive)
-            min_interval_us *= 2;
+        if (shownPerRendered > 1)
+            min_interval_us *= shownPerRendered;
 
         static uint64_t previous_frame_time = 0;
         uint64_t current_time = get_timestamp();

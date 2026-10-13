@@ -279,6 +279,11 @@ class Config
     // Full frames: how far the model's new detail is pulled toward the moved previous detail (0..1), so full and
     // reused frames differ less. 0 = off.
     CustomOptional<float> DlssNrDetailReuseSteady { 0.0f };
+    // The model every N frames: 2 (every other frame) or 3 (two reused frames after each full one).
+    CustomOptional<uint32_t> DlssNrDetailReuseInterval { 2 };
+    // Frames the jump of the model's new detail is spread over, on the display only (dlssnr/DlssNrDetailReuse.h):
+    // 0 = auto (every other frame: 1, none, as before; every 3rd frame: 3), 1 = none, 2..3.
+    CustomOptional<uint32_t> DlssNrDetailReuseSpread { 0 };
     // Reused frames: where the moved detail was dropped, how much of the trusted detail of neighbours on the same
     // surface goes in instead (0..1). Stops dropped areas flashing to the un-NR'd image with several passes.
     CustomOptional<float> DlssNrDetailReuseFill { 1.0f };
@@ -310,6 +315,14 @@ class Config
     // moved detail on the cut frame, and the model resets when the answer arrives, a few frames later). 1 by default
     // until in-game counts show how often games leave cuts unflagged and that nothing else reads as one.
     CustomOptional<uint32_t> DlssNrSceneCut { 1 };
+    // Edit cache (dlssnr/DlssNrEditCache.h, shaders/dlssnr/DlssNr_EditCache.inl): run the model one frame in N and show
+    // its last answer, carried along the game's vectors, in between. D3D12, NR after SR only; not together with
+    // DetailReuse (the menu's Reuse detail offers one or the other). Experimental, off by default.
+    CustomOptional<bool> DlssNrEditCache { false };
+    CustomOptional<uint32_t> DlssNrEditCacheInterval { 4 };  // the model every N frames, 2..8
+    CustomOptional<uint32_t> DlssNrEditCacheCrossfade { 0 }; // frames a refresh takes to reach the new answer, 1..8;
+                                                             // 0 = follow the interval (DlssNrEditCache::CrossfadeFor)
+    CustomOptional<uint32_t> DlssNrEditCacheDebug { 0 };     // 1: dropped pixels red, 2: the edit's age
     CustomOptional<bool> DlssNrResidualFgApproxCamera { false }; // forced off, as DlssNrResidualFg
     // Toggles the pass in game. Unbound by default -- a key that does something unexpected is worse
     // than one that does nothing.
@@ -377,6 +390,11 @@ class Config
     // How the NR pass decodes the game's colour. 0 Auto (the game's DLSS HDR flag + the output format, as before),
     // 1 linear HDR, 2 tone-mapped sRGB, 3 tone-mapped gamma 2.2, 4 PQ. Values are DlssNr_ColourEncoding.h's.
     CustomOptional<uint32_t> DlssNrColourEncoding { 0 };
+
+    // The game's HDR paper white in nits, the white NR is given on a display-referred HDR picture (forced PQ, or Finished
+    // Picture on an HDR10 / scRGB screen), where no exposure applies. 203 = ITU-R BT.2408's reference white, the value
+    // used before this existed. Bounded 80..1000 at the point of use (DlssNr_ExposureState.h).
+    CustomOptional<float> DlssNrDisplayPaperWhiteNits { 203.0f };
 
     // LUT-apply epic (dlssnr-lut-apply), Story 2: a .cube file graded onto the
     // NR input image before the model ever sees it. Empty (the default) is the feature not existing -- no
@@ -485,6 +503,19 @@ class Config
     // detail, and had no effect on Replace at all (Replace never reads the proxy). Removed
     // rather than kept as an unclear trade-off; see plans/2026-09-18-dlssnr-enlarge-filter-simplify.md.
     CustomOptional<uint32_t> DlssNrReducedUpscaleMethod { 1 };
+
+    // Experimental input style: how the picture the model is shown is restyled before the model runs.
+    // 0 = off (default), 1 = watercolour (a Kuwahara filter: texture flattened into washes, edges kept),
+    // 2 = structure hint (local contrast raised on luminance, CAS-like, overshoot bounded),
+    // 3 = smooth canvas (a cross bilateral filter: skin like an untextured old-game surface, contours kept).
+    // DlssNrInputStyleStrength: watercolour and smooth canvas blend with the picture as it was (0..1); the structure
+    // hint scales its boost (0..3). DlssNrInputStyleFacesOnly: the style only where the colour looks like skin (the
+    // same colour test as SkinProtection). The resolve compares the answer against the same restyled picture, so
+    // Composed hands back only what the model painted; Replace shows the model's painting as it is. Skipped at model
+    // resolution above 100% and on the deferred path.
+    CustomOptional<uint32_t> DlssNrInputStyle { 0 };
+    CustomOptional<float> DlssNrInputStyleStrength { 1.0f };
+    CustomOptional<bool> DlssNrInputStyleFacesOnly { false };
 
     // Post-SR placement only: derive the working scale from the render:output ratio the upscaler
     // itself already reconstructed detail at, instead of the manual slider above. That output already
@@ -659,16 +690,15 @@ class Config
     // bridge's device, whose evaluate hands frame generation the game's motion vectors, depth and output
     // (upscalers/IFeature_VkwDx12.cpp). No Optical F5Low motion. The Optical F5Low page's "FG only (game's upscaler)" Mode.
     CustomOptional<bool> DlssNrNativeFrameGenerationOnly { false };
-    // NativeLowLatency: OptiScaler calls the Reflex API itself, since a game that makes no upscaler call makes no Reflex
-    // call either, and XeFG's XeLL needs the calls (see native/NativeLowLatency.h). Real Reflex on NVIDIA; fakenvapi
-    // answers elsewhere (Anti-Lag 2, XeLL or LatencyFlex, chosen by the fakenvapi settings). auto: on while an Optical
-    // F5Low mode or XeFG runs; true: also without either, in any game that makes no Reflex call of its own; false: off.
-    // Stands aside the moment the game calls Reflex itself.
-    CustomOptional<native::lowlatency::Setting> DlssNrNativeLowLatency { native::lowlatency::Setting::Auto };
     // NativeLowLatencyBoost: Reflex's Boost with it (the GPU keeps its clocks up between frames), also for DLSS frame
     // generation's Streamline Reflex on an Optical F5Low game. NVIDIA Reflex only: XeLL, Anti-Lag 2 and LatencyFlex
     // ignore it (XeLL: "Boost is not supported as of now").
     CustomOptional<bool> DlssNrNativeLowLatencyBoost { false };
+    // NativeLowLatencyDxvkGameThread: a D3D11 game on dxvk with the Vulkan present bridge runs Optical F5Low's low latency
+    // (markers and Sleep) at the game's own D3D11 Present, on the game's thread, instead of at dxvk's Vulkan present on
+    // dxvk's thread (native/NativeLowLatencyRule.h SleepSite). Read every present (no restart needed after a config
+    // reload). Only dxvk through the Vulkan bridge looks at it.
+    CustomOptional<bool> DlssNrNativeLowLatencyDxvkGameThread { true };
     // AutoExposureAdaptBrighterSeconds / AutoExposureAdaptDarkerSeconds are the menu's "Eye adaptation": how long
     // Automatic takes to follow a scene getting brighter / darker, as a time constant in seconds; 0 = at once. Faster to
     // brighter, as in Unreal and Unity HDRP. See shaders/dlssnr/DlssNr_ExposureAdapt.h.
@@ -772,8 +802,10 @@ class Config
 
 
 
-    // Multiplies the (auto or manual) white point before the encode: what the model considers "white".
-    // Higher means highlights sit lower on the curve and the model treats them as less extreme.
+    // The manual white point (WhitePointSource 0, and the fallback while Game exposure has no reading yet): what the
+    // model considers "white" on a linear HDR frame. Higher means highlights sit lower on the curve and the model
+    // treats them as less extreme. Not applied to a tone-mapped frame (passed through as it is) or to display HDR
+    // (white at the paper white); there it only scales the debug views.
     CustomOptional<float> DlssNrWhitePointScale { 1.0f };
 
 
@@ -1150,6 +1182,10 @@ class Config
     CustomOptional<bool> FGXeFGHighResMV { false };
     CustomOptional<bool> FGXeFGDebugView { false };
     CustomOptional<bool> FGXeFGForceBorderless { false };
+    // [XeFG] LowLatencyOutput, what lowers latency with XeFG (native/NativeLowLatencyRule.h XefgLatency): xell (default),
+    // reflex (NVIDIA, real nvapi) or antilag2 (AMD, fakenvapi). XeLL stays in place for XeFG either way, with low latency
+    // off when the other two are chosen. A choice the setup lacks reads as xell.
+    CustomOptional<native::lowlatency::XefgLatency> FGXeFGLowLatencyOutput { native::lowlatency::XefgLatency::XeLL };
 
     // DLSSG
     CustomOptional<int> FGDLSSGInterpolationCount { 1 }; // For Opti's own SL instance
@@ -1193,6 +1229,13 @@ class Config
 
     // Framerate
     CustomOptional<float> FramerateLimit { 0.0f };
+    // [Framerate] LowLatencyInput, the Framerate page's low latency "Input" (native/NativeLowLatencyRule.h): OptiScaler
+    // calls the Reflex API itself, since a game that makes no upscaler call makes no Reflex call either, and XeFG's XeLL
+    // needs the calls (native/NativeLowLatency.h). auto: the game's own Reflex when it makes the calls, else ours while
+    // an Optical F5Low mode, XeFG or FSR FG runs; game: only the game's; optiscaler: ours in any game without Reflex;
+    // off: no low latency, the game's Reflex is sent with it off. The old [DlssNr] NativeLowLatency is read when this
+    // key is missing (auto, true = optiscaler, false = game) and still written beside it.
+    CustomOptional<native::lowlatency::Input> FramerateLowLatencyInput { native::lowlatency::Input::Auto };
 
     // HDR
     CustomOptional<bool> ForceHDR { false };

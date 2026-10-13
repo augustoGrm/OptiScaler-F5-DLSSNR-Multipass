@@ -9,5 +9,7 @@ class FrameLimit
     static int combined_sleep(int64_t ns);
 
   public:
-    static void sleep(bool fgActive);
+    // The cap counts shown frames: `shownPerRendered` is how many frame generation shows per frame the game renders (1 when
+    // it generates none)
+    static void sleep(uint32_t shownPerRendered = 1);
 };

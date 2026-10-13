@@ -403,16 +403,19 @@ float4 MovedDetail(uint2 p, out float byMotion)
     return moved;
 }
 
-void Capture(uint2 p)
+// colourToo: also the input colour and depth into u1 (CaptureShown leaves u1 alone)
+void Capture(uint2 p, bool colourToo)
 {
     const float4 input = t0.Load(int3(p, 0));
     const float3 answer = t1.Load(int3(p, 0)).rgb;
     const float3 detail = answer - input.rgb;
     const bool valid = Finite3(detail) && Finite3(input.rgb) && all(abs(detail) <= 65504.0);
+    u0[p] = float4(valid ? detail : 0.0, valid ? 1.0 : 0.0);
+    if (!colourToo)
+        return;
     // No depth this frame: t2 stands in with the colour, so save far (0) instead. A next frame with depth then finds
     // its surface nearer than the saved range and distrusts the moved detail for that one frame.
     const float depth = HasDepth() ? GuideDepth(t2, GuideTexel(WorkUv(p), uint2(depthWidth, depthHeight))) : 0.0;
-    u0[p] = float4(valid ? detail : 0.0, valid ? 1.0 : 0.0);
     u1[p] = float4(Finite3(input.rgb) ? input.rgb : 0.0, isfinite(depth) ? depth : 0.0);
 }
 
@@ -579,6 +582,29 @@ void SaveMotion(uint2 p)
     u0[p] = float4(all(isfinite(displacement)) ? displacement : 0.0, 0.0, 0.0);
 }
 
+// The second reused frame in a row (every 3rd frame): this frame's displacement plus the saved one (the reused frame
+// before) where it leads, so the next full frame composes back to the model's last run. Point-sampled, as Compose.
+void AccumulateMotion(uint2 p)
+{
+    const float2 uv = WorkUv(p);
+    const float2 displacement = UvDisplacement(RawMotion(uv));
+    if (!all(isfinite(displacement)))
+    {
+        u0[p] = float4(0.0, 0.0, 0.0, 0.0);
+        return;
+    }
+    float2 sum = displacement;
+    const float2 previousUv = uv + displacement;
+    // Off screen there is no saved displacement: the one frame we know stands in, as Compose does
+    if (all(previousUv >= 0.0) && all(previousUv <= 1.0))
+    {
+        const float2 prior = t4.Load(int3(GuideTexel(previousUv, uint2(workWidth, workHeight)), 0)).rg;
+        if (all(isfinite(prior)) && all(abs(displacement + prior) <= 1.0))
+            sum = displacement + prior;
+    }
+    u0[p] = float4(sum, 0.0, 0.0);
+}
+
 // Motion size: this frame's raw vector plus the saved displacement at the moved position, back in this frame's raw
 // units. Vectors are point-sampled: blending two surfaces' vectors across an edge gives one that belongs to neither.
 void Compose(uint2 q)
@@ -626,9 +652,13 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
     if (p.x >= workWidth || p.y >= workHeight)
         return;
     if (mode == 0)
-        Capture(p);
+        Capture(p, true);
+    else if (mode == 9)
+        Capture(p, false);
     else if (mode == 2)
         SaveMotion(p);
+    else if (mode == 8)
+        AccumulateMotion(p);
     else if (mode == 1)
         Reproject(p);
     else if (mode == 4)

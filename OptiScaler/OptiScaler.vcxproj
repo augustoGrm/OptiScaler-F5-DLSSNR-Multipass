@@ -344,9 +344,14 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="fsr4\FSR4ModelSelection.h" />
     <ClInclude Include="hooks\D3D12_Hooks.h" />
     <ClInclude Include="hooks\DxgiFactory_Hooks.h" />
+    <ClInclude Include="hooks\DxvkOutputs.h" />
     <ClInclude Include="hooks\DxgiSwapchainSizing.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_DeferredSr.inl" />
     <ClInclude Include="shaders\dlssnr\DlssNr_DetailReuse.inl" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_EditCache.inl" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_EditCacheConstants.h" />
+    <ClInclude Include="shaders\dlssnr\precompile\dlssnr_edit_cache_Shader.h" />
+    <ClInclude Include="dlssnr\DlssNrEditCache.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_SceneCut.inl" />
     <ClInclude Include="dlssnr\DlssNrSceneCut.h" />
     <ClInclude Include="dlssnr\DlssNrDetailReuseHost.h" />
@@ -457,6 +462,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="dlssnr\DlssNr_LutStatus.h" />
     <ClInclude Include="dlssnr\DlssNr_LutPack.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_ColourEncoding.h" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_ExposureState.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_ProxyCurve.h" />
     <ClInclude Include="shaders\render_ui\precompile\render_ui_pm_PShader.h" />
     <ClInclude Include="shaders\render_ui\precompile\render_ui_pm_VShader.h" />
@@ -543,12 +549,14 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="native\VirtualUpscalerDriver.h" />
     <ClInclude Include="native\NativeDriver.h" />
     <ClInclude Include="native\XefgReflexRule.h" />
+    <ClInclude Include="native\DriverInitGate.h" />
     <ClInclude Include="native\NativeLowLatency.h" />
     <ClInclude Include="native\NativeLowLatencyRule.h" />
     <ClInclude Include="native\NativeLowLatencyVkSync.h" />
     <ClInclude Include="native\PresentStageTiming.h" />
     <ClInclude Include="native\VkDeviceRules.h" />
     <ClInclude Include="native\VkOutputFailureRule.h" />
+    <ClInclude Include="native\VkHiddenSurfaceRule.h" />
     <ClInclude Include="native\VkPresentCopyRule.h" />
     <ClInclude Include="LogAsyncRule.h" />
     <ClInclude Include="motion\OpticalFlow_Hlsl.h" />
@@ -707,6 +715,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="fsr4\FSR4ModelSelection.cpp" />
     <ClCompile Include="hooks\D3D12_Hooks.cpp" />
     <ClCompile Include="hooks\DxgiFactory_Hooks.cpp" />
+    <ClCompile Include="hooks\DxvkOutputs.cpp" />
     <ClCompile Include="hooks\DxgiFactory_WrappedCalls.cpp" />
     <ClCompile Include="hooks\Dxgi_Hooks.cpp" />
     <ClCompile Include="hooks\FG_Hooks.cpp" />

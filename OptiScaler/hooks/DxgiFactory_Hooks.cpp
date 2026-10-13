@@ -1,6 +1,7 @@
 #include "pch.h"
 #include "DxgiFactory_Hooks.h"
 #include "DxgiSwapchainSizing.h"
+#include "DxvkOutputs.h"
 
 #include "D3D11_Hooks.h"
 #include "D3D12_Hooks.h"
@@ -368,6 +369,23 @@ void DxgiFactoryHooks::HookToFactory(IDXGIFactory* pFactory)
         o_CreateSwapChainForComposition = nullptr;
         o_EnumAdapterByLuid = nullptr;
         o_EnumAdapterByGpuPreference = nullptr;
+    }
+
+    // dxvk's factory: its adapters list the outputs in monitor order, not with the primary display first as Windows'
+    // DXGI does (hooks/DxvkOutputs.h); put right before the game enumerates them.
+    IDXGIVkInteropFactory* dxvkFactory = nullptr;
+
+    if (o_EnumAdapters != nullptr &&
+        SUCCEEDED(real->QueryInterface(__uuidof(IDXGIVkInteropFactory), (void**) &dxvkFactory)) && dxvkFactory != nullptr)
+    {
+        dxvkFactory->Release();
+        IDXGIAdapter* adapter = nullptr;
+
+        if (o_EnumAdapters(real, 0, &adapter) == S_OK && adapter != nullptr)
+        {
+            DxvkOutputs::Hook(adapter);
+            adapter->Release();
+        }
     }
 }
 

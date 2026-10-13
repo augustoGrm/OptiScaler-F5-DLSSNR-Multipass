@@ -264,6 +264,15 @@ bool Config::Reload(std::filesystem::path iniPath)
             FGXeFGHighResMV.set_from_config(readBool("XeFG", "HighResMV"));
             FGXeFGDebugView.set_from_config(readBool("XeFG", "DebugView"));
             FGXeFGForceBorderless.set_from_config(readBool("XeFG", "ForceBorderless"));
+
+            // A word we do not know leaves it unset (xell)
+            if (const auto output = readString("XeFG", "LowLatencyOutput", true); output.has_value())
+            {
+                auto latency = native::lowlatency::XefgLatency::XeLL;
+
+                if (native::lowlatency::XefgLatencyFromIniText(output->c_str(), &latency))
+                    FGXeFGLowLatencyOutput.set_from_config(latency);
+            }
         }
 
         {
@@ -293,6 +302,24 @@ bool Config::Reload(std::filesystem::path iniPath)
         // Framerate
         {
             FramerateLimit.set_from_config(readFloat("Framerate", "FramerateLimit"));
+
+            // The new key if it holds a word we know, else the one from before the Input choice (an ini that has
+            // neither stays unset: Auto, and nothing is held for the config)
+            // (readString reads "auto" as not there; an explicit auto must beat the old key, so the key's presence is
+            // asked of the ini itself)
+            const char* inputRaw = ini.GetValue("Framerate", "LowLatencyInput", nullptr);
+            const bool inputPresent = inputRaw != nullptr;
+            const auto legacy = readString("DlssNr", "NativeLowLatency", true);
+
+            if (inputPresent || legacy.has_value())
+            {
+                std::string inputText = inputRaw != nullptr ? inputRaw : "";
+                std::ranges::transform(inputText, inputText.begin(), [](unsigned char c) { return std::tolower(c); });
+
+                FramerateLowLatencyInput.set_from_config(native::lowlatency::InputFromIniValues(
+                    inputPresent, inputPresent ? inputText.c_str() : nullptr,
+                    legacy.has_value() ? legacy->c_str() : nullptr));
+            }
         }
 
         // FSR Common
@@ -374,6 +401,12 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrDetailReuseDebug.set_from_config(readBool("DlssNr", "DetailReuseDebug"));
             DlssNrDetailReuseSteady.set_from_config(readFloat("DlssNr", "DetailReuseSteady"));
             DlssNrDetailReuseFill.set_from_config(readFloat("DlssNr", "DetailReuseFill"));
+            DlssNrDetailReuseInterval.set_from_config(readUInt("DlssNr", "DetailReuseInterval"));
+            if (DlssNrDetailReuseInterval.has_value())
+                DlssNrDetailReuseInterval = std::clamp(DlssNrDetailReuseInterval.value(), 2u, 3u);
+            DlssNrDetailReuseSpread.set_from_config(readUInt("DlssNr", "DetailReuseSpread"));
+            if (DlssNrDetailReuseSpread.has_value())
+                DlssNrDetailReuseSpread = std::min(DlssNrDetailReuseSpread.value(), 3u);
             DlssNrDetailReuseDepthTolerance.set_from_config(readFloat("DlssNr", "DetailReuseDepthTolerance"));
             DlssNrDetailReuseClipGamma.set_from_config(readFloat("DlssNr", "DetailReuseClipGamma"));
             DlssNrDetailReuseClipFalloff.set_from_config(readFloat("DlssNr", "DetailReuseClipFalloff"));
@@ -383,6 +416,16 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrSceneCut.set_from_config(readUInt("DlssNr", "SceneCut"));
             if (DlssNrSceneCut.value_or_default() > 2u)
                 DlssNrSceneCut = 2u;
+            DlssNrEditCache.set_from_config(readBool("DlssNr", "EditCache"));
+            DlssNrEditCacheInterval.set_from_config(readUInt("DlssNr", "EditCacheInterval"));
+            if (DlssNrEditCacheInterval.has_value())
+                DlssNrEditCacheInterval = std::clamp(DlssNrEditCacheInterval.value(), 2u, 8u);
+            DlssNrEditCacheCrossfade.set_from_config(readUInt("DlssNr", "EditCacheCrossfade"));
+            if (DlssNrEditCacheCrossfade.has_value())
+                DlssNrEditCacheCrossfade = std::min(DlssNrEditCacheCrossfade.value(), 8u); // 0 = follow the interval
+            DlssNrEditCacheDebug.set_from_config(readUInt("DlssNr", "EditCacheDebug"));
+            if (DlssNrEditCacheDebug.value_or_default() > 2u)
+                DlssNrEditCacheDebug = 0u;
             DlssNrDetailReuseMaxDropped.set_from_config(readFloat("DlssNr", "DetailReuseMaxDropped"));
             if (DlssNrDetailReuseMaxDropped.has_value() &&
                 (!std::isfinite(DlssNrDetailReuseMaxDropped.value()) || DlssNrDetailReuseMaxDropped.value() < 0.0f ||
@@ -464,6 +507,13 @@ bool Config::Reload(std::filesystem::path iniPath)
             if (DlssNrReducedUpscaleMethod.has_value() && DlssNrReducedUpscaleMethod.value() > 1u)
                 DlssNrReducedUpscaleMethod = 0u;
             DlssNrModelResolutionAuto.set_from_config(readBool("DlssNr", "ModelResolutionAuto"));
+            DlssNrInputStyle.set_from_config(readUInt("DlssNr", "InputStyle"));
+            if (DlssNrInputStyle.has_value() && DlssNrInputStyle.value() > 3u)
+                DlssNrInputStyle.reset();
+            DlssNrInputStyleStrength.set_from_config(readFloat("DlssNr", "InputStyleStrength"));
+            if (DlssNrInputStyleStrength.has_value())
+                DlssNrInputStyleStrength = std::clamp(DlssNrInputStyleStrength.value(), 0.0f, 3.0f);
+            DlssNrInputStyleFacesOnly.set_from_config(readBool("DlssNr", "InputStyleFacesOnly"));
             DlssNrSpatialCompression.set_from_config(readBool("DlssNr", "SpatialCompression"));
             DlssNrSpatialCenterX.set_from_config(readFloat("DlssNr", "SpatialCenterX"));
             DlssNrSpatialCenterY.set_from_config(readFloat("DlssNr", "SpatialCenterY"));
@@ -500,16 +550,8 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrNativeInput.set_from_config(readBool("DlssNr", "NativeInput"));
             DlssNrNativeUpscaler.set_from_config(readBool("DlssNr", "NativeUpscaler"));
             DlssNrNativeFrameGenerationOnly.set_from_config(readBool("DlssNr", "NativeFrameGenerationOnly"));
-            if (auto lowLatency = readString("DlssNr", "NativeLowLatency", true); lowLatency.has_value())
-            {
-                if (lowLatency.value() == "auto")
-                    DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::Auto);
-                else if (lowLatency.value() == "true")
-                    DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::On);
-                else if (lowLatency.value() == "false")
-                    DlssNrNativeLowLatency.set_from_config(native::lowlatency::Setting::Off);
-            }
             DlssNrNativeLowLatencyBoost.set_from_config(readBool("DlssNr", "NativeLowLatencyBoost"));
+            DlssNrNativeLowLatencyDxvkGameThread.set_from_config(readBool("DlssNr", "NativeLowLatencyDxvkGameThread"));
             DlssNrAutoExposureAdaptBrighterSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptBrighterSeconds"));
             DlssNrAutoExposureAdaptDarkerSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptDarkerSeconds"));
             DlssNrAutoExposureAdaptSeconds.set_from_config(readFloat("DlssNr", "AutoExposureAdaptSeconds"));
@@ -586,6 +628,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrColourEncoding.set_from_config(readUInt("DlssNr", "ColourEncoding"));
             if (DlssNrColourEncoding.value_or_default() > 4u) // not a Colour encoding: back to Auto, saved as auto
                 DlssNrColourEncoding.reset();
+            DlssNrDisplayPaperWhiteNits.set_from_config(readFloat("DlssNr", "DisplayPaperWhiteNits"));
             DlssNrLutFile.set_from_config(readString("DlssNr", "LutFile"));
             DlssNrLutStrength.set_from_config(readFloat("DlssNr", "LutStrength"));
             if (DlssNrLutStrength.has_value() && (!std::isfinite(DlssNrLutStrength.value()) ||
@@ -1312,6 +1355,12 @@ bool Config::SaveIni()
         ini.SetValue("XeFG", "DebugView", GetBoolValue(Instance()->FGXeFGDebugView.value_for_config()).c_str());
         ini.SetValue("XeFG", "ForceBorderless",
                      GetBoolValue(Instance()->FGXeFGForceBorderless.value_for_config()).c_str());
+
+        // Nothing held (never chosen): auto, which reads as xell, so the key is in the file for the player to find
+        if (const auto held = Instance()->FGXeFGLowLatencyOutput.value_for_config(); held.has_value())
+            ini.SetValue("XeFG", "LowLatencyOutput", native::lowlatency::XefgLatencyIniText(held.value()));
+        else
+            ini.SetValue("XeFG", "LowLatencyOutput", "auto");
     }
 
     {
@@ -1393,6 +1442,15 @@ bool Config::SaveIni()
     {
         ini.SetValue("Framerate", "FramerateLimit",
                      GetFloatValue(Instance()->FramerateLimit.value_for_config()).c_str());
+
+        // The new key, and the old [DlssNr] one beside it for a build from before the Input choice
+        auto input = native::lowlatency::Input::Auto;
+
+        if (auto held = Instance()->FramerateLowLatencyInput.value_for_config(); held.has_value())
+            input = held.value();
+
+        ini.SetValue("Framerate", "LowLatencyInput", native::lowlatency::InputIniText(input));
+        ini.SetValue("DlssNr", "NativeLowLatency", native::lowlatency::LegacySettingText(input));
     }
 
     // Output Scaling
@@ -1467,12 +1525,18 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "DetailReuseDebug", GetBoolValue(Instance()->DlssNrDetailReuseDebug.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseSteady", GetFloatValue(Instance()->DlssNrDetailReuseSteady.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseFill", GetFloatValue(Instance()->DlssNrDetailReuseFill.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "DetailReuseInterval", GetIntValue(Instance()->DlssNrDetailReuseInterval.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "DetailReuseSpread", GetIntValue(Instance()->DlssNrDetailReuseSpread.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseDepthTolerance", GetFloatValue(Instance()->DlssNrDetailReuseDepthTolerance.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseClipGamma", GetFloatValue(Instance()->DlssNrDetailReuseClipGamma.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseClipFalloff", GetFloatValue(Instance()->DlssNrDetailReuseClipFalloff.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseSigmaFloor", GetFloatValue(Instance()->DlssNrDetailReuseSigmaFloor.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseWithFG", GetBoolValue(Instance()->DlssNrDetailReuseWithFg.value_for_config()).c_str());
     ini.SetValue("DlssNr", "SceneCut", GetIntValue(Instance()->DlssNrSceneCut.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "EditCache", GetBoolValue(Instance()->DlssNrEditCache.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "EditCacheInterval", GetIntValue(Instance()->DlssNrEditCacheInterval.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "EditCacheCrossfade", GetIntValue(Instance()->DlssNrEditCacheCrossfade.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "EditCacheDebug", GetIntValue(Instance()->DlssNrEditCacheDebug.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseMinFps", GetFloatValue(Instance()->DlssNrDetailReuseMinFps.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseMaxDropped", GetFloatValue(Instance()->DlssNrDetailReuseMaxDropped.value_for_config()).c_str());
     {
@@ -1513,6 +1577,11 @@ bool Config::SaveIni()
                  GetIntValue(Instance()->DlssNrReducedUpscaleMethod.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ModelResolutionAuto",
                  GetBoolValue(Instance()->DlssNrModelResolutionAuto.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "InputStyle", GetIntValue(Instance()->DlssNrInputStyle.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "InputStyleStrength",
+                 GetFloatValue(Instance()->DlssNrInputStyleStrength.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "InputStyleFacesOnly",
+                 GetBoolValue(Instance()->DlssNrInputStyleFacesOnly.value_for_config()).c_str());
     ini.SetValue("DlssNr", "SpatialCompression",
                  GetBoolValue(Instance()->DlssNrSpatialCompression.value_for_config()).c_str());
     ini.SetValue("DlssNr", "SpatialCenterX", GetFloatValue(Instance()->DlssNrSpatialCenterX.value_for_config()).c_str());
@@ -1561,18 +1630,10 @@ bool Config::SaveIni()
                  GetBoolValue(Instance()->DlssNrNativeUpscaler.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeFrameGenerationOnly",
                  GetBoolValue(Instance()->DlssNrNativeFrameGenerationOnly.value_for_config()).c_str());
-    {
-        const char* lowLatency = "auto";
-
-        if (auto held = Instance()->DlssNrNativeLowLatency.value_for_config(); held.has_value())
-            lowLatency = held.value() == native::lowlatency::Setting::On    ? "true"
-                         : held.value() == native::lowlatency::Setting::Off ? "false"
-                                                                            : "auto";
-
-        ini.SetValue("DlssNr", "NativeLowLatency", lowLatency);
-    }
     ini.SetValue("DlssNr", "NativeLowLatencyBoost",
                  GetBoolValue(Instance()->DlssNrNativeLowLatencyBoost.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "NativeLowLatencyDxvkGameThread",
+                 GetBoolValue(Instance()->DlssNrNativeLowLatencyDxvkGameThread.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoExposureAdaptBrighterSeconds",
                  GetFloatValue(Instance()->DlssNrAutoExposureAdaptBrighterSeconds.value_for_config()).c_str());
     ini.SetValue("DlssNr", "AutoExposureAdaptDarkerSeconds",
@@ -1644,6 +1705,8 @@ bool Config::SaveIni()
     }
     ini.SetValue("DlssNr", "ReversibleMode", GetIntValue(Instance()->DlssNrReversibleMode.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ColourEncoding", GetIntValue(Instance()->DlssNrColourEncoding.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "DisplayPaperWhiteNits",
+                 GetFloatValue(Instance()->DlssNrDisplayPaperWhiteNits.value_for_config()).c_str());
     ini.SetValue("DlssNr", "LutFile", Instance()->DlssNrLutFile.value_for_config_or("").c_str());
     ini.SetValue("DlssNr", "LutStrength", GetFloatValue(Instance()->DlssNrLutStrength.value_for_config()).c_str());
     ini.SetValue("DlssNr", "ApplyModel", GetBoolValue(Instance()->DlssNrApplyModel.value_for_config()).c_str());

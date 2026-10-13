@@ -5,9 +5,11 @@
 // Auto is the rule this pass has always used: the frame is linear HDR only when the game's DLSS IsHDR flag is set AND
 // the format can hold linear light (FormatCanHoldLinearHdr); anything else is treated as a tone-mapped sRGB picture.
 // The flag is a statement of intent a game can get wrong in either direction, and "tone-mapped" is not always sRGB,
-// so [DlssNr] ColourEncoding lets the user name the encoding instead. A forced choice is always applied, even when
-// the format looks wrong for it -- a manual override that refuses to override is no use -- and the mismatch is only
-// reported.
+// so [DlssNr] ColourEncoding lets the user name the encoding instead. A forced choice is applied even when the format
+// looks unusual for it, and the mismatch is reported -- with one exception: Linear HDR on a format that cannot hold
+// linear light (8/10-bit UNORM) is refused and the frame read as Auto reads it. Such a frame holds gamma-encoded values
+// whatever the user believes; reading them as linear light darkens and flattens what the model is shown and made the
+// Automatic white point swing 0.15x-12x frame to frame (Call to Arms, 8-bit B8G8R8A8).
 //
 // PQ is decoded to linear light (1.0 = 203 nits, the ITU-R BT.2408 reference white) and then goes through the
 // linear-HDR path, so LinearHdr() is true for it.
@@ -36,7 +38,8 @@ struct Choice
 {
     Encoding encoding = Encoding::Srgb;
     bool automatic = true;
-    bool mismatch = false;       // forced, and the format looks wrong for it
+    bool mismatch = false;       // forced, and the format looks wrong for it (applied anyway)
+    bool refused = false;        // forced Linear HDR on a format that cannot hold it: read as Auto reads it instead
     const char* reason = "";     // why Auto chose what it chose; empty when forced
 
     // Whether the frame reaches the model through the linear-HDR path (white point, proxy curve).
@@ -76,8 +79,16 @@ inline Choice Resolve(uint32_t setting, bool gameSaysHdr, bool formatCanHoldHdr)
 
     choice.encoding = static_cast<Encoding>(setting);
     choice.automatic = false;
-    choice.mismatch = (choice.encoding == Encoding::LinearHdr && !formatCanHoldHdr) ||
-                      (choice.encoding == Encoding::Pq && formatCanHoldHdr);
+
+    // Auto's own outcome on such a format: it cannot be linear HDR, so tone-mapped sRGB.
+    if (choice.encoding == Encoding::LinearHdr && !formatCanHoldHdr)
+    {
+        choice.encoding = Encoding::Srgb;
+        choice.refused = true;
+        return choice;
+    }
+
+    choice.mismatch = choice.encoding == Encoding::Pq && formatCanHoldHdr;
     return choice;
 }
 
@@ -98,7 +109,8 @@ inline bool ShaderConverts(uint32_t shaderConversion)
 // the DLSS flag. The three screen paths it has: SDR (tone-mapped, passed through), scRGB (linear light, 1.0 = 80 nits)
 // and PQ (decoded to linear before the pass). A forced choice picks the path whatever the colour space says, and is
 // allowed on any of the formats those paths handle (8/10-bit UNORM, FP16) -- that is what lets an FP16 buffer holding
-// gamma values through as SDR instead of being refused.
+// gamma values through as SDR instead of being refused. Linear HDR forced on a UNORM screen is refused as Resolve refuses
+// it (an 8/10-bit screen is not scRGB) and takes the SDR path.
 enum class Screen : uint32_t
 {
     Sdr,
@@ -147,11 +159,11 @@ inline FinishedChoice ResolveFinished(uint32_t setting, bool detectedKnown, Scre
 // Shown when a forced choice does not fit the buffer. Empty when it fits.
 inline const char* MismatchWarning(const Choice& choice)
 {
+    if (choice.refused)
+        return "This buffer is not a float format, so it cannot hold linear HDR. Read as Tone-mapped sRGB instead.";
     if (!choice.mismatch)
         return "";
-    return choice.encoding == Encoding::LinearHdr
-               ? "This buffer is not a float format, so it cannot hold linear HDR. Applied anyway."
-               : "This buffer is a float format, which PQ output rarely is. Applied anyway.";
+    return "This buffer is a float format, which PQ output rarely is. Applied anyway.";
 }
 
 // The menu's line: "Auto: Linear HDR (HDR flag on, float format; R16G16B16A16_FLOAT)" or "Forced: PQ (HDR10);
@@ -162,6 +174,9 @@ inline std::string Describe(const Choice& choice, const char* formatName)
     if (choice.automatic)
         std::snprintf(text, sizeof(text), "Auto: %s (%s; %s)", Name(choice.encoding), choice.reason,
                       formatName ? formatName : "");
+    else if (choice.refused)
+        std::snprintf(text, sizeof(text), "Forced: Linear HDR refused (the format cannot hold it), read as %s; %s",
+                      Name(choice.encoding), formatName ? formatName : "");
     else
         std::snprintf(text, sizeof(text), "Forced: %s; %s", Name(choice.encoding), formatName ? formatName : "");
     return text;

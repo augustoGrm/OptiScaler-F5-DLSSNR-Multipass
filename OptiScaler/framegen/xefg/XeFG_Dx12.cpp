@@ -976,6 +976,9 @@ bool XeFG_Dx12::Dispatch()
     }
 
     result = XeFGProxy::SetPresentId()(_swapChainContext, frameId);
+    state.xefgPresentId.store(frameId, std::memory_order_relaxed);
+    state.xefgPresentIdFollowsMarkers.store(framePick.followsXell, std::memory_order_relaxed);
+
     if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
     {
         LOG_ERROR("SetPresentId error: {} ({})", magic_enum::enum_name(result), (UINT) result);
