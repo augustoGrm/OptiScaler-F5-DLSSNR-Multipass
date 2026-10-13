@@ -13,7 +13,8 @@ enum DlssNrDetailReuseMode : uint32_t
                                       //          t5 history distrust (HistoryDistrust) -> u0 answer = input + moved
                                       //          detail * trust
     DlssNrDetailReuse_SaveMotion = 2, // [work]   t3 motion guide -> u0 this frame's vectors as uv displacement
-    DlssNrDetailReuse_Compose = 3,    // [motion] t3 motion guide, t4 saved vectors -> u0 raw vectors over two frames
+    DlssNrDetailReuse_Compose = 3,    // [motion] t3 motion guide, t4 saved vectors -> u0 raw vectors back to the
+                                      //          model's last run (two frames, or three after AccumulateMotion)
     DlssNrDetailReuse_Steady = 4,     // [work]   t0 input, t1 answer, t2 estimate -> u0 steadied answer
     DlssNrDetailReuse_Estimate = 5,   // [work]   as Reproject -> u0 moved detail (rgb) and its trust (a)
     DlssNrDetailReuse_Fill = 6,       // [work]   t0 input, t1 estimate, t4 depth guide -> u0 answer, where dropped
@@ -22,6 +23,12 @@ enum DlssNrDetailReuseMode : uint32_t
                                       //          (sum of 1 - trust, pixels measured, 0, 0). Dispatched over
                                       //          kDlssNrDetailReuseCoverageTiles * 8 in each direction, so there is one
                                       //          8x8 thread group per tile.
+    DlssNrDetailReuse_AccumulateMotion = 8, // [work] t3 motion guide, t4 saved vectors -> u0 this frame's vectors as
+                                            //        uv displacement plus the saved ones where they lead (the second
+                                            //        reused frame in a row, every 3rd frame)
+    DlssNrDetailReuse_CaptureShown = 9,     // [work] t0 input, t1 shown answer -> u0 detail (as Capture, without
+                                            //        the colour and depth: the history Capture of this frame wrote
+                                            //        them)
 };
 
 // The curve a Replace answer is decoded through (dlssnr.hlsl: Neutwo + replace, balanced + replace). None for the

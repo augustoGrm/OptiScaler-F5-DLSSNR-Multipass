@@ -279,6 +279,11 @@ class Config
     // Full frames: how far the model's new detail is pulled toward the moved previous detail (0..1), so full and
     // reused frames differ less. 0 = off.
     CustomOptional<float> DlssNrDetailReuseSteady { 0.0f };
+    // The model every N frames: 2 (every other frame) or 3 (two reused frames after each full one).
+    CustomOptional<uint32_t> DlssNrDetailReuseInterval { 2 };
+    // Frames the jump of the model's new detail is spread over, on the display only (dlssnr/DlssNrDetailReuse.h):
+    // 0 = auto (every other frame: 1, none, as before; every 3rd frame: 3), 1 = none, 2..3.
+    CustomOptional<uint32_t> DlssNrDetailReuseSpread { 0 };
     // Reused frames: where the moved detail was dropped, how much of the trusted detail of neighbours on the same
     // surface goes in instead (0..1). Stops dropped areas flashing to the un-NR'd image with several passes.
     CustomOptional<float> DlssNrDetailReuseFill { 1.0f };
@@ -310,6 +315,14 @@ class Config
     // moved detail on the cut frame, and the model resets when the answer arrives, a few frames later). 1 by default
     // until in-game counts show how often games leave cuts unflagged and that nothing else reads as one.
     CustomOptional<uint32_t> DlssNrSceneCut { 1 };
+    // Edit cache (dlssnr/DlssNrEditCache.h, shaders/dlssnr/DlssNr_EditCache.inl): run the model one frame in N and show
+    // its last answer, carried along the game's vectors, in between. D3D12, NR after SR only; not together with
+    // DetailReuse (the menu's Reuse detail offers one or the other). Experimental, off by default.
+    CustomOptional<bool> DlssNrEditCache { false };
+    CustomOptional<uint32_t> DlssNrEditCacheInterval { 4 };  // the model every N frames, 2..8
+    CustomOptional<uint32_t> DlssNrEditCacheCrossfade { 0 }; // frames a refresh takes to reach the new answer, 1..8;
+                                                             // 0 = follow the interval (DlssNrEditCache::CrossfadeFor)
+    CustomOptional<uint32_t> DlssNrEditCacheDebug { 0 };     // 1: dropped pixels red, 2: the edit's age
     CustomOptional<bool> DlssNrResidualFgApproxCamera { false }; // forced off, as DlssNrResidualFg
     // Toggles the pass in game. Unbound by default -- a key that does something unexpected is worse
     // than one that does nothing.

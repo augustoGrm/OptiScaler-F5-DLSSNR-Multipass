@@ -401,6 +401,12 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrDetailReuseDebug.set_from_config(readBool("DlssNr", "DetailReuseDebug"));
             DlssNrDetailReuseSteady.set_from_config(readFloat("DlssNr", "DetailReuseSteady"));
             DlssNrDetailReuseFill.set_from_config(readFloat("DlssNr", "DetailReuseFill"));
+            DlssNrDetailReuseInterval.set_from_config(readUInt("DlssNr", "DetailReuseInterval"));
+            if (DlssNrDetailReuseInterval.has_value())
+                DlssNrDetailReuseInterval = std::clamp(DlssNrDetailReuseInterval.value(), 2u, 3u);
+            DlssNrDetailReuseSpread.set_from_config(readUInt("DlssNr", "DetailReuseSpread"));
+            if (DlssNrDetailReuseSpread.has_value())
+                DlssNrDetailReuseSpread = std::min(DlssNrDetailReuseSpread.value(), 3u);
             DlssNrDetailReuseDepthTolerance.set_from_config(readFloat("DlssNr", "DetailReuseDepthTolerance"));
             DlssNrDetailReuseClipGamma.set_from_config(readFloat("DlssNr", "DetailReuseClipGamma"));
             DlssNrDetailReuseClipFalloff.set_from_config(readFloat("DlssNr", "DetailReuseClipFalloff"));
@@ -410,6 +416,16 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrSceneCut.set_from_config(readUInt("DlssNr", "SceneCut"));
             if (DlssNrSceneCut.value_or_default() > 2u)
                 DlssNrSceneCut = 2u;
+            DlssNrEditCache.set_from_config(readBool("DlssNr", "EditCache"));
+            DlssNrEditCacheInterval.set_from_config(readUInt("DlssNr", "EditCacheInterval"));
+            if (DlssNrEditCacheInterval.has_value())
+                DlssNrEditCacheInterval = std::clamp(DlssNrEditCacheInterval.value(), 2u, 8u);
+            DlssNrEditCacheCrossfade.set_from_config(readUInt("DlssNr", "EditCacheCrossfade"));
+            if (DlssNrEditCacheCrossfade.has_value())
+                DlssNrEditCacheCrossfade = std::min(DlssNrEditCacheCrossfade.value(), 8u); // 0 = follow the interval
+            DlssNrEditCacheDebug.set_from_config(readUInt("DlssNr", "EditCacheDebug"));
+            if (DlssNrEditCacheDebug.value_or_default() > 2u)
+                DlssNrEditCacheDebug = 0u;
             DlssNrDetailReuseMaxDropped.set_from_config(readFloat("DlssNr", "DetailReuseMaxDropped"));
             if (DlssNrDetailReuseMaxDropped.has_value() &&
                 (!std::isfinite(DlssNrDetailReuseMaxDropped.value()) || DlssNrDetailReuseMaxDropped.value() < 0.0f ||
@@ -1509,12 +1525,18 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "DetailReuseDebug", GetBoolValue(Instance()->DlssNrDetailReuseDebug.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseSteady", GetFloatValue(Instance()->DlssNrDetailReuseSteady.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseFill", GetFloatValue(Instance()->DlssNrDetailReuseFill.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "DetailReuseInterval", GetIntValue(Instance()->DlssNrDetailReuseInterval.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "DetailReuseSpread", GetIntValue(Instance()->DlssNrDetailReuseSpread.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseDepthTolerance", GetFloatValue(Instance()->DlssNrDetailReuseDepthTolerance.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseClipGamma", GetFloatValue(Instance()->DlssNrDetailReuseClipGamma.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseClipFalloff", GetFloatValue(Instance()->DlssNrDetailReuseClipFalloff.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseSigmaFloor", GetFloatValue(Instance()->DlssNrDetailReuseSigmaFloor.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseWithFG", GetBoolValue(Instance()->DlssNrDetailReuseWithFg.value_for_config()).c_str());
     ini.SetValue("DlssNr", "SceneCut", GetIntValue(Instance()->DlssNrSceneCut.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "EditCache", GetBoolValue(Instance()->DlssNrEditCache.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "EditCacheInterval", GetIntValue(Instance()->DlssNrEditCacheInterval.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "EditCacheCrossfade", GetIntValue(Instance()->DlssNrEditCacheCrossfade.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "EditCacheDebug", GetIntValue(Instance()->DlssNrEditCacheDebug.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseMinFps", GetFloatValue(Instance()->DlssNrDetailReuseMinFps.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseMaxDropped", GetFloatValue(Instance()->DlssNrDetailReuseMaxDropped.value_for_config()).c_str());
     {

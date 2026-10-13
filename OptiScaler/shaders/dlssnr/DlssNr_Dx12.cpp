@@ -11,6 +11,7 @@
 #include <dlssnr/ResidualFg.h>
 #include <dlssnr/DlssNrDetailReuse.h>
 #include <dlssnr/DlssNrDetailReuseHost.h>
+#include <dlssnr/DlssNrEditCache.h>
 #include <dlssnr/DlssNrSceneCut.h>
 #include <motion/SceneCut_Dx12.h>
 #include <DirectXMath.h>
@@ -60,6 +61,7 @@
 #include "precompile/dlssnr_finished_color_Shader.h"
 #include "precompile/dlssnr_detail_stats_Shader.h"
 #include "precompile/dlssnr_detail_reuse_Shader.h"
+#include "precompile/dlssnr_edit_cache_Shader.h"
 #include "precompile/dlssnr_spatial_Shader.h"
 #include "precompile/dlssnr_spatial_guides_Shader.h"
 #include "precompile/dlssnr_exposure_adapt_Shader.h"
@@ -569,6 +571,10 @@ std::optional<double> g_lastGpuTime;
 
 // Writes matched before/after frames on request, so comparisons stop depending on video.
 capture::FrameCapture g_capture;
+// The capture running is an edit cache dump (RequestCacheDump): it also copies the game's motion vectors and depth
+// and notes each frame's guide facts, for the offline replay of carrying an edit from frame to frame
+// (DLSS-TOOLS editcache). Written to dlssnr-cachedump beside OptiScaler.
+bool g_captureIsDump = false;
 
 // One capture happens on its own each session, so there is always a fresh sample without anyone having
 // to remember to ask. Started after the scene has had a moment to settle: the first frames after a
@@ -625,6 +631,24 @@ void CheckCaptureTrigger()
         DlssNr::RequestCapture(capture::kMaxFrames);
         LOG_INFO("DLSS-NR capture requested by trigger file");
     }
+
+    const auto dumpTrigger = Util::DllPath().remove_filename() / "dlssnr-cachedump.trigger";
+
+    if (std::filesystem::exists(dumpTrigger, ec))
+    {
+        std::filesystem::remove(dumpTrigger, ec);
+        DlssNr::RequestCacheDump(16);
+        LOG_INFO("DLSS-NR edit cache dump requested by trigger file");
+    }
+}
+
+// Depth formats copied into an edit cache dump: one plane, read back as is. Depth-stencil layouts with a stencil plane
+// (R24_UNORM_X8, R32_FLOAT_X8X24) are left out rather than risk a copy the device rejects; the dump then says so and
+// the replay validates by colour alone.
+bool DumpableDepth(DXGI_FORMAT f)
+{
+    return f == DXGI_FORMAT_R32_FLOAT || f == DXGI_FORMAT_D32_FLOAT || f == DXGI_FORMAT_R16_UNORM ||
+           f == DXGI_FORMAT_D16_UNORM;
 }
 
 // The encoded mean is aimed here. Mid-grey rather than anything brighter: the model has to see both the
@@ -2066,6 +2090,7 @@ void ReportSkipOnce(const char* reason)
 }
 
 #include "DlssNr_DetailReuse.inl"
+#include "DlssNr_EditCache.inl"
 #include "DlssNr_SceneCut.inl"
 #include "DlssNr_Spatial.inl"
 
@@ -2207,6 +2232,8 @@ DlssNr_Dx12::~DlssNr_Dx12()
         _exposureAdaptPipelineState->Release();
     if (_detailReusePipelineState)
         _detailReusePipelineState->Release();
+    if (_editCachePipelineState)
+        _editCachePipelineState->Release();
     if (_spatialPipelineState)
         _spatialPipelineState->Release();
     if (_spatialGuidesPipelineState)
@@ -2649,6 +2676,60 @@ bool DlssNr_Dx12::DispatchDetailReuse(ID3D12GraphicsCommandList* InCmdList,
     InCmdList->SetDescriptorHeaps(_countof(heaps), heaps);
     InCmdList->SetComputeRootSignature(_rootSignature);
     InCmdList->SetPipelineState(_detailReusePipelineState);
+    InCmdList->SetComputeRootDescriptorTable(0, currentHeap.GetTableGPUStart());
+    InCmdList->Dispatch((Width + _numThreadsX - 1) / _numThreadsX, (Height + _numThreadsY - 1) / _numThreadsY, 1);
+
+    return true;
+}
+
+bool DlssNr_Dx12::EditCacheReady()
+{
+    if (!_editCachePipelineState && !_editCachePipelineFailed && _init)
+    {
+        CreateComputePipeline(_device, &_editCachePipelineState, dlssnr_edit_cache_cso, sizeof(dlssnr_edit_cache_cso),
+                              nullptr);
+
+        if (_editCachePipelineState == nullptr)
+        {
+            _editCachePipelineFailed = true;
+            LOG_WARN("DLSS-NR: the edit cache pass could not be built; every frame runs the model");
+        }
+    }
+
+    return _init && _editCachePipelineState != nullptr;
+}
+
+bool DlssNr_Dx12::DispatchEditCache(ID3D12GraphicsCommandList* InCmdList, const DlssNrEditCacheConstants& InConstants,
+                                    unsigned int Width, unsigned int Height, ID3D12Resource* const (&In)[kSrvCount],
+                                    ID3D12Resource* OutTarget, ID3D12Resource* OutSecond)
+{
+    if (!EditCacheReady() || InCmdList == nullptr || _device == nullptr || In[0] == nullptr || OutTarget == nullptr ||
+        Width == 0 || Height == 0)
+        return false;
+
+    const uint32_t slot = _heapIndex;
+    _heapIndex = (_heapIndex + 1) % DLSSNR_NUM_OF_HEAPS;
+
+    FrameDescriptorHeap& currentHeap = _frameHeaps[slot];
+
+    for (uint32_t i = 0; i < kSrvCount; ++i)
+        CreateShaderResourceView(_device, In[i] != nullptr ? In[i] : In[0], currentHeap.GetSrvCPU(i));
+
+    ID3D12Resource* const uavs[kUavCount] = { OutTarget, OutSecond != nullptr ? OutSecond : OutTarget };
+
+    for (uint32_t i = 0; i < kUavCount; ++i)
+        CreateUnorderedAccessView(_device, uavs[i], currentHeap.GetUavCPU(i), 0);
+
+    if (!CreateConstantsBuffer(_device, _constantBuffers[slot], InConstants, currentHeap.GetCbvCPU(0)))
+    {
+        LOG_ERROR("[{0}] Failed to create a constants buffer", _name);
+        return false;
+    }
+
+    ID3D12DescriptorHeap* heaps[] = { currentHeap.GetHeapCSU() };
+    InCmdList->SetDescriptorHeaps(_countof(heaps), heaps);
+    InCmdList->SetComputeRootSignature(_rootSignature);
+    InCmdList->SetPipelineState(_editCachePipelineState);
     InCmdList->SetComputeRootDescriptorTable(0, currentHeap.GetTableGPUStart());
     InCmdList->Dispatch((Width + _numThreadsX - 1) / _numThreadsX, (Height + _numThreadsY - 1) / _numThreadsY, 1);
 
@@ -3533,11 +3614,23 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     if (g_captureWriteAtFrame != 0 && g_frames >= g_captureWriteAtFrame)
     {
         g_captureWriteAtFrame = 0;
-        const auto captureDir = Util::DllPath().remove_filename() / "dlssnr-capture";
-        const auto written = g_capture.write(captureDir);
+        const bool dump = g_captureIsDump;
+        const auto captureDir = Util::DllPath().remove_filename() / (dump ? "dlssnr-cachedump" : "dlssnr-capture");
+        std::string about;
+        if (dump)
+        {
+            std::error_code ec;
+            std::filesystem::remove_all(captureDir, ec); // each dump replaces the last
+            about = "motion_NN.raw is the game's motion vectors as the pass reads them (the frame note's mvScale "
+                    "applies, then the subrect: motion WxH at X Y), depth_NN.raw its depth (depth WxH at X Y, inverted "
+                    "1 = reversed-Z). The model ran on every frame (detail reuse stands aside during a capture). "
+                    "linearHdr 0: before/after are display-encoded (sRGB-like); curve is DlssNrConstants::ReversibleMode; "
+                    "white is the encode's white point.";
+        }
+        const auto written = g_capture.write(captureDir, about);
 
         if (!written.empty())
-            LOG_INFO("DLSS-NR wrote matched before/after frames to {}", written);
+            LOG_INFO("DLSS-NR wrote {} to {}", dump ? "an edit cache dump" : "matched before/after frames", written);
     }
 
     // Paper white, and nothing else. The frame is divided by this and encoded, and the soft knee
@@ -4570,7 +4663,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     reuseFrame.edgeCompression = spatial; // the two do not run together; Reuse detail says so in the menu
     // A Tune step pins the white point (calibrationPinned); a Measure detail run copies and measures without pinning,
     // and measures Reuse bottleneck as it runs.
-    reuseFrame.blocked = calibrationPinned || g_nr.heldActive;
+    // A capture shows the model on every frame: before/after are a control, and an edit cache dump measures carrying
+    // the model's real answers
+    reuseFrame.blocked = calibrationPinned || g_nr.heldActive || g_capture.isActive();
     reuseFrame.frameNumber = frame.SubmissionEpoch != 0 ? frame.SubmissionEpoch : g_frames;
     {
         // The motion size is left out on purpose: saved vectors are uv displacements, so a render-size change does not
@@ -4592,12 +4687,69 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     if (reusePlan.resetModel)
         g_nr.reset = true;
 
+    // The edit cache (DlssNr_EditCache.inl): the model one frame in N, its edit carried along the vectors in between.
+    // Every frame its vectors go into the ring; a refresh runs the model (with the vectors back to its last run) and
+    // becomes the anchor after the resolve; a cached frame skips the model and the resolve, and ApplyCached writes the
+    // output from the carried edit. It stands aside (every frame runs the model) where it cannot run, and never runs
+    // beside Reuse detail (every other frame).
+    EditCache::Frame cacheFrame;
+    cacheFrame.pass = this;
+    cacheFrame.cmdList = cmdList;
+    cacheFrame.device = device;
+    cacheFrame.cfg = &cfg;
+    {
+        auto& ci = cacheFrame.inputs;
+        ci.enabled = cfg.DlssNrEditCache.value_or_default();
+        ci.interval = cfg.DlssNrEditCacheInterval.value_or_default();
+        ci.crossfade = cfg.DlssNrEditCacheCrossfade.value_or_default();
+        ci.detailReuse = cfg.DlssNrDetailReuse.value_or_default();
+        ci.afterUpscale = !frame.BeforeUpscale && !frame.FinishedPicture;
+        ci.targetWritable = targetSupportsUav;
+        ci.workAbove100 = workScale > 1.0f;
+        ci.edgeCompression = spatial;
+        ci.convertedEncoding = frame.InputEncoding != 0;
+        ci.blocked = calibrationPinned || g_nr.heldActive || g_capture.isActive() || CalibrationActive();
+        // The skin mask preview is painted by the resolve: carried, it would be taken for the model's edit
+        ci.debugOrCompare = cfg.DlssNrDebugView.value_or_default() != 0 || cfg.DlssNrCompare.value_or_default() != 0 ||
+                            cfg.DlssNrShowSkinMask.value_or_default();
+        ci.reset = g_nr.reset;
+        ci.revision = reuseFrame.revision;
+        ci.width = width;
+        ci.height = height;
+        ci.motionWidth = motionWidth;
+        ci.motionHeight = motionHeight;
+        ci.clock = reuseFrame.frameNumber;
+    }
+    cacheFrame.motionBaseX = motionBaseX;
+    cacheFrame.motionBaseY = motionBaseY;
+    cacheFrame.motionAllocWidth = (unsigned int) motionDesc.Width;
+    cacheFrame.motionAllocHeight = motionDesc.Height;
+    cacheFrame.depthWidth = guideWidth;
+    cacheFrame.depthHeight = guideHeight;
+    cacheFrame.depthBaseX = depthBaseX;
+    cacheFrame.depthBaseY = depthBaseY;
+    cacheFrame.depthInverted = g_nr.guideDepthInverted;
+    cacheFrame.mvScaleX = g_nr.guideMvScaleX;
+    cacheFrame.mvScaleY = g_nr.guideMvScaleY;
+    cacheFrame.passthrough = !isHdrBuffer;
+    cacheFrame.white = encodeParams.WhitePoint;
+    cacheFrame.frame = g_nr.hdrCopy;
+    cacheFrame.motion = motionIn;
+    cacheFrame.depth = depthIn;
+    const EditCache::Plan cachePlan = EditCache::BeforeModel(cacheFrame);
+    const bool cached = cachePlan.cached;
+    if (cachePlan.resetModel)
+        g_nr.reset = true;
+    ID3D12Resource* const evalMotion = cachePlan.runs ? cachePlan.motion : reusePlan.motion;
+    const unsigned int evalMotionBaseX = cachePlan.runs ? cachePlan.motionBaseX : reusePlan.motionBaseX;
+    const unsigned int evalMotionBaseY = cachePlan.runs ? cachePlan.motionBaseY : reusePlan.motionBaseY;
+
     // The model's own time: the passes alone, so the detail reuse work above counts as surrounding work (and a reused
     // frame's model time is about zero).
     if (g_ngxTime != nullptr)
         g_ngxTime->Start(cmdList);
 
-    for (unsigned int pass = 0; !reused && pass < effectivePasses && result == NVSDK_NGX_Result_Success;
+    for (unsigned int pass = 0; !reused && !cached && pass < effectivePasses && result == NVSDK_NGX_Result_Success;
          ++pass)
     {
         void* const passFeature = pass == 0 ? g_nr.feature : g_nr.passFeature[pass];
@@ -4612,16 +4764,17 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         // every fourth game frame (or never, on the odd parity), so the bottleneck is computed every time. Also in a
         // Vulkan game reaching this through the D3D12 bridge (IFeature_VkwDx12): Reuse bottleneck is off for Vulkan
         // games, as on the native Vulkan path (the reused result flashed in dark scenes there).
-        const bool vitEveryFrame = reusePlan.active || State::Instance().api == Vulkan;
+        // The edit cache likewise: the model runs one frame in N.
+        const bool vitEveryFrame = reusePlan.active || cachePlan.runs || State::Instance().api == Vulkan;
         DlssNrNative::BeginEvaluate(passFeature, passReset,
                                     vitEveryFrame ? 1u : std::clamp(cfg.DlssNrVitEvery.value_or_default(), 1u, 2u),
                                     vitEveryFrame ? 1u : std::clamp(cfg.DlssNrVitEveryPlain.value_or_default(), 1u, 2u),
                                     (long long) (g_nr.successfulDispatches & 0x3FFFFFFFFFFFFFFFull), cmdList,
                                     cfg.DlssNrKernelProfile.value_or_default());
         result = g_nr.evaluate(
-            cmdList, passFeature, g_nr.capabilityParams, passInput, modelDepth, spatial ? modelMotion : reusePlan.motion,
+            cmdList, passFeature, g_nr.capabilityParams, passInput, modelDepth, spatial ? modelMotion : evalMotion,
             passOutput, modelWidth, modelHeight, evalGuideW, evalGuideH, evalMotionW, evalMotionH,
-            evalDepthX, evalDepthY, spatial ? 0u : reusePlan.motionBaseX, spatial ? 0u : reusePlan.motionBaseY,
+            evalDepthX, evalDepthY, spatial ? 0u : evalMotionBaseX, spatial ? 0u : evalMotionBaseY,
             g_nr.guideDepthInverted ? 1 : 0,
             passReset ? 1 : 0, tuning.intensity,
             (int) PassStyle(cfg, pass), tuning.structure,
@@ -4714,6 +4867,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
     // Steady a full frame's answer and save this frame's history (DlssNr_DetailReuse.inl).
     DetailReuse::AfterModel(reuseFrame, reusePlan, result == NVSDK_NGX_Result_Success, finalAnswer);
+    if (cachePlan.runs)
+        EditCache::AfterModel(cacheFrame);
 
     g_nr.reset = false;
 
@@ -4988,7 +5143,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         // Gated on `reduced` (the actual rounded-size flag), not just workScale < 1.0f -- a workScale
         // that rounds back to the native size (e.g. Auto's continuous ratio landing at 0.9998) would
         // otherwise engage SGSR1 at 1:1, wasted work that also isn't guaranteed identity-preserving.
-        if (reduced && workScale < 1.0f && wantsSgsr1Answer)
+        if (!cached && reduced && workScale < 1.0f && wantsSgsr1Answer)
         {
             const float sgsr1EdgeThreshold = 0.300f;
             const float sgsr1EdgeSharpness = 2.00f;
@@ -5061,9 +5216,21 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         }
 
-        DispatchPass(cmdList, resolveParams, resolveProxy, resolveAnswer, resolveOriginal, motionIn,
-                    exposureTex, resolveTarget, nullptr);
+        // A cached frame of the edit cache writes the output from the carried edit instead (the cache runs only where
+        // the output takes a UAV, so resolveTarget is the output there)
+        if (cached)
+            EditCache::ApplyCached(cacheFrame, resolveTarget);
+        else
+            DispatchPass(cmdList, resolveParams, resolveProxy, resolveAnswer, resolveOriginal, motionIn,
+                         exposureTex, resolveTarget, nullptr);
         composed = true;
+
+        // A refresh: the model's output becomes the anchor (and the crossfade's first frame is written)
+        if (cachePlan.runs && cachePlan.refresh && targetSupportsUav)
+        {
+            TransitionTarget(D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+            EditCache::AfterResolve(cacheFrame, target, [&] { TransitionTarget(D3D12_RESOURCE_STATE_UNORDERED_ACCESS); });
+        }
 
         if (!targetSupportsUav)
         {
@@ -5103,15 +5270,45 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             Barrier(cmdList, g_nr.outputNative, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        // On-demand capture works in this path too: the staging copy still holds the frame as the
-        // upscaler produced it, and the edited frame is the output itself. The write happens a few
-        // frames later, once the GPU is certainly past these copies -- this path has no fence of its
-        // own.
+        // On-demand capture works in this path too: hdrCopy still holds the frame as the upscaler produced it
+        // (the encode's untouched copy, the resolve's original), and the edited frame is the output itself. Where
+        // the target takes no UAV the resolve wrote into hdrCopy instead and no original is left: "before" is then
+        // the model's input picture (colorCopy, the encoded proxy), and the note says so. colorCopy was "before"
+        // everywhere until the edit cache dump showed it is the proxy, not the frame. The write happens a few
+        // frames later, once the GPU is certainly past these copies -- this path has no fence of its own.
         if (g_capture.isActive())
         {
-            g_capture.record(cmdList, device, g_nr.colorCopy,
-                             D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, target,
-                             targetState);
+            std::vector<capture::Source> sources {
+                { "before", targetSupportsUav ? g_nr.hdrCopy : g_nr.colorCopy,
+                  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                { "after", target, targetState },
+            };
+            std::string note = targetSupportsUav ? "" : "beforeIsProxy 1";
+
+            if (g_captureIsDump)
+            {
+                // The guides as the pass reads them, in NON_PIXEL_SHADER_RESOURCE here (ReadableGuide's contract,
+                // still bound for this frame's passes)
+                sources.push_back({ "motion", motionIn, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE });
+                const bool withDepth = depthIn != nullptr && DumpableDepth(depthIn->GetDesc().Format);
+                if (withDepth)
+                    sources.push_back({ "depth", depthIn, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE });
+
+                char text[512];
+                std::snprintf(text, sizeof(text),
+                              "mvScale %.6f %.6f motion %ux%u at %u %u depth %ux%u at %u %u inverted %d dumped %d "
+                              "linearHdr %d curve %u white %.6f reset %d work %ux%u epoch %llu",
+                              g_nr.guideMvScaleX, g_nr.guideMvScaleY, (unsigned) motionWidth, (unsigned) motionHeight,
+                              (unsigned) motionBaseX, (unsigned) motionBaseY, (unsigned) guideWidth,
+                              (unsigned) guideHeight, (unsigned) depthBaseX, (unsigned) depthBaseY,
+                              g_nr.guideDepthInverted ? 1 : 0, withDepth ? 1 : 0, isHdrBuffer ? 1 : 0,
+                              encodeParams.ReversibleMode, encodeParams.WhitePoint, g_nr.reset ? 1 : 0, workWidth,
+                              workHeight, (unsigned long long) (frame.SubmissionEpoch != 0 ? frame.SubmissionEpoch
+                                                                                           : g_frames));
+                note = note.empty() ? std::string(text) : note + " " + text;
+            }
+
+            g_capture.record(cmdList, device, sources, note);
 
             if (g_capture.readyToWrite() && g_captureWriteAtFrame == 0)
                 g_captureWriteAtFrame = g_frames + 8;
@@ -5227,6 +5424,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             }
         }
     }
+
+    if (cachePlan.runs)
+        EditCache::EndFrame(cmdList);
 
     // Put the guide clones this frame copied into back where the next frame's copy expects to find them.
     // A clone this frame did not use (no depth, or a typed guide) is still in COPY_DEST.
@@ -5877,6 +6077,8 @@ FollowGameStatus FollowGameExposureStatus()
 // at the end of each BeforeModel.
 DetailReuseInfo DetailReuseStatus() { return DetailReuse::Published(); }
 
+EditCacheInfo EditCacheStatus() { return { EditCache::Running(), EditCache::ModelShare(), EditCache::StandsAside() }; }
+
 // A copy published as each evaluate's scene-cut work ends (DlssNr_SceneCut.inl): the menu never waits for g_nrMutex.
 SceneCutInfo SceneCutStatus() { return SceneCut::Status(); }
 
@@ -5900,8 +6102,19 @@ std::optional<double> LastGpuTime() { return g_lastGpuTime; }
 
 void RequestCapture(unsigned int frames)
 {
+    if (g_capture.isActive())
+        return;
     ClearCaptureDirectory();
+    g_captureIsDump = false;
     g_capture.request(frames);
+}
+
+void RequestCacheDump(unsigned int frames)
+{
+    if (g_capture.isActive())
+        return;
+    g_captureIsDump = true;
+    g_capture.request(frames, capture::kMaxDumpFrames);
 }
 
 bool CaptureInProgress() { return g_capture.isActive(); }
@@ -5948,6 +6161,7 @@ void Shutdown()
     }
 
     DetailReuse::Release();
+    EditCache::Release();
     SceneCut::Release();
 
     if (g_nr.passScratch != nullptr)

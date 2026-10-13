@@ -347,6 +347,10 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="hooks\DxgiSwapchainSizing.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_DeferredSr.inl" />
     <ClInclude Include="shaders\dlssnr\DlssNr_DetailReuse.inl" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_EditCache.inl" />
+    <ClInclude Include="shaders\dlssnr\DlssNr_EditCacheConstants.h" />
+    <ClInclude Include="shaders\dlssnr\precompile\dlssnr_edit_cache_Shader.h" />
+    <ClInclude Include="dlssnr\DlssNrEditCache.h" />
     <ClInclude Include="shaders\dlssnr\DlssNr_SceneCut.inl" />
     <ClInclude Include="dlssnr\DlssNrSceneCut.h" />
     <ClInclude Include="dlssnr\DlssNrDetailReuseHost.h" />
