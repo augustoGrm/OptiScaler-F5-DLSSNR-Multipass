@@ -330,7 +330,6 @@ class State
 
     // Vulkan stuff
     bool vulkanCreatingSC = false;
-    bool vulkanSkipHooks = false;
     VkInstance VulkanInstance = nullptr;
 
     // Framegraph
@@ -545,18 +544,21 @@ class ScopedSkipHeapCapture
     ~ScopedSkipHeapCapture() { State::Instance().skipHeapCapture = previousState; }
 };
 
+// Per thread, like ScopedCreatingD3DDevice: OptiScaler's own Vulkan work (and the dxvk device a GPU check or Anti-Lag 2
+// makes) runs on the thread that sets this, while the game's swapchains and devices are made on its own threads. One
+// process-wide flag skipped the game's hooks whenever the two overlapped, and a scope that finished out of order left it
+// set (or cleared an outer scope's) for good.
 class ScopedSkipVulkanHooks
 {
   private:
-    bool previousState;
+    inline static thread_local int depth = 0;
 
   public:
-    ScopedSkipVulkanHooks()
-    {
-        previousState = State::Instance().vulkanSkipHooks;
-        State::Instance().vulkanSkipHooks = true;
-    }
-    ~ScopedSkipVulkanHooks() { State::Instance().vulkanSkipHooks = previousState; }
+    ScopedSkipVulkanHooks() { ++depth; }
+    ~ScopedSkipVulkanHooks() { --depth; }
+
+    // This thread skips OptiScaler's Vulkan hooks
+    static bool Active() { return depth > 0; }
 };
 
 class ScopedVulkanCreatingSC
