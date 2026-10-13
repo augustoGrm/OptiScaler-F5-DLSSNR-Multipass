@@ -349,7 +349,7 @@ void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue
         screenPq ? Screen::Pq : screenScrgb ? Screen::Scrgb : Screen::Sdr,
         desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT,
         desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || desc.Format == DXGI_FORMAT_R10G10B10A2_UNORM);
-    DlssNr::ReportColourEncoding(screenChoice.choice, DiagFormatName(desc.Format), "finished picture");
+    DlssNr::ReportColourEncoding(screenChoice.choice, DiagFormatName(desc.Format), "finished picture", true);
     if (!screenChoice.supported)
     {
         Late::Cancel();
@@ -598,7 +598,7 @@ bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd,
         // copies take the picture's own format.
         desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM || desc.Format == DXGI_FORMAT_R10G10B10A2_UNORM ||
             desc.Format == DXGI_FORMAT_B8G8R8A8_UNORM);
-    DlssNr::ReportColourEncoding(screenChoice.choice, DiagFormatName(desc.Format), "native input");
+    DlssNr::ReportColourEncoding(screenChoice.choice, DiagFormatName(desc.Format), "native input", true);
     if (!screenChoice.supported)
     {
         Late::Say("This screen colour format is not supported.");

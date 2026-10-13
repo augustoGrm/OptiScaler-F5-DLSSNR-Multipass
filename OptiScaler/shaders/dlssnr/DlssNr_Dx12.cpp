@@ -1592,23 +1592,16 @@ void InvalidateExposureMeter()
     g_nr.meterFrames = 0;
 }
 
-// Turns what the meter saw into the divisor the encode uses, or falls back to the slider.
-//
-// `cut` says the exposure may jump rather than drift, and it is the difference between this working
-// and not. GTA V's character switch pulls the camera up through the sky: a linear HDR buffer's sky is
-// tens of times brighter than the ground, the proxy clips to flat white, and the frame blows out until
-// the camera comes back down. Easing across that at two percent a frame takes three and a half
-// seconds, which is longer than the transition -- so a meter that only eases would lag through the
-// whole thing and fix nothing.
-//
-// So a cut snaps and a drift eases. Walking out of a cave is a drift; a camera cut is not, and
-// pretending otherwise to avoid pumping just moves the failure somewhere more visible.
+// Turns what the meter saw into the divisor the encode uses, or falls back to the slider. Nothing here
+// eases: the game's exposure is taken as it comes, and Automatic's easing is eye adaptation's, on the
+// GPU (DlssNr_ExposureAdapt.h), with a snap on the game's own cut.
 float ResolveWhitePoint(const Config& cfg, bool isHdrBuffer)
 {
     const float slider = cfg.DlssNrWhitePointScale.value_or_default();
 
     // A frame the game already tone mapped is display-referred: white is at 1 by definition and there
-    // is nothing to measure. The slider stays available as a manual exposure on that path.
+    // is nothing to measure. The encode passes such a frame through with no white point at all
+    // (dlssnr.hlsl's passthrough); the slider's value only scales the debug views there (DebugScale).
     if (!isHdrBuffer)
         return slider;
 
@@ -1911,7 +1904,7 @@ void ApplyColourEncoding(DlssNrFrameInfo& frame, uint32_t setting, bool gameSays
     if (choice.encoding == DlssNrColourEncoding::Encoding::Pq)
         frame.WhitePointOverride = 1.0f;
     if (report)
-        DlssNr::ReportColourEncoding(choice, DiagFormatName(format), "");
+        DlssNr::ReportColourEncoding(choice, DiagFormatName(format), "", false);
 }
 
 ID3D12Resource* GetResource(NVSDK_NGX_Parameter* params, const char* a, const char* b)

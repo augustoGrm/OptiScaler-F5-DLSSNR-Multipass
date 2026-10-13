@@ -20,7 +20,8 @@
 // It snaps -- takes the reading at once -- on a cut the game signals (the DLSS reset), and whenever the eased value is
 // stale: the first evaluation, one after evaluations Automatic did not run on (another source, finished picture), and
 // after Invalidate (the meter was discarded). A cut is a new scene, and easing across it would carry the old scene's
-// exposure into the new one for a second, the failure the removed cut-snapping meter in ResolveWhitePoint describes.
+// exposure into the new one for a second (GTA V's character switch pulls the camera up through a sky tens of times
+// brighter than the ground: easing across that lags through the whole transition and blows the frame out).
 // NR switched off counts no evaluations at all; the time that passed meanwhile does the same job (a blend of about 1
 // after a few seconds).
 //

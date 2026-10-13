@@ -1074,6 +1074,11 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         // black-tile rule as below, a different statistic: the log-average of the tiles between two percentiles of
         // brightness. DlssNrExposureMeter::PercentileSceneLuma is the host mirror; change them together. Every lane
         // takes this branch or none does, so the barriers stay uniform.
+        //
+        // DLSSNR_NO_PERCENTILE_METER is for headless tests only: Windows' WARP rasterizer crashes running this shader
+        // with the branch in, whatever mode it is dispatched for, so the WARP tests that do not test the meter leave it
+        // out. The shipped binaries are built without the define.
+#ifndef DLSSNR_NO_PERCENTILE_METER
         if (gExposureTrimAnchorCount == 1u)
         {
             gMeterHistCount[lane] = 0u;
@@ -1148,6 +1153,7 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
             }
             return;
         }
+#endif
 
         float weightedBufferLuma = 0.0;
         float weightedSceneLogLuma = 0.0;

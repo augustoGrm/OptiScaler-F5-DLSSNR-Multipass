@@ -771,8 +771,10 @@ class Config
 
 
 
-    // Multiplies the (auto or manual) white point before the encode: what the model considers "white".
-    // Higher means highlights sit lower on the curve and the model treats them as less extreme.
+    // The manual white point (WhitePointSource 0, and the fallback while Game exposure has no reading yet): what the
+    // model considers "white" on a linear HDR frame. Higher means highlights sit lower on the curve and the model
+    // treats them as less extreme. Not applied to a tone-mapped frame (passed through as it is) or to display HDR
+    // (white at the paper white); there it only scales the debug views.
     CustomOptional<float> DlssNrWhitePointScale { 1.0f };
 
 

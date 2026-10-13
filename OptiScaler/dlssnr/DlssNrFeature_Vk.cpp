@@ -1388,7 +1388,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     {
         char colourFormat[32];
         std::snprintf(colourFormat, sizeof(colourFormat), "VkFormat %d", (int) colour->Resource.ImageViewInfo.Format);
-        DlssNr::ReportColourEncoding(colourChoice, colourFormat, "Vulkan");
+        DlssNr::ReportColourEncoding(colourChoice, colourFormat, "Vulkan", false);
     }
 
     // The same rule as the D3D12 path, deliberately spelled the same way: the game divides its frame

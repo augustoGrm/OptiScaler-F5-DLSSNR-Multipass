@@ -1672,6 +1672,30 @@ static void RenderExposureSection(Config* config, float menuResScale)
     ImGui::SeparatorText("NR Exposure");
     ImGui::TextDisabled("HDR input settings. Adjust the brightness range presented to NR.");
 
+    // Whether these controls act on the frame NR last ran on (shaders/dlssnr/DlssNr_ExposureState.h). They pick the
+    // white point that divides a linear HDR frame; a tone-mapped frame reaches the model as it is, and a display HDR
+    // frame (HDR10, scRGB, forced PQ) is put at its paper white instead. Shown greyed rather than hidden, so the values
+    // stay visible and come back as they were on a linear HDR frame. Highlight guard, below, acts in every case.
+    const auto encodingStatus = DlssNr::ReadColourEncodingStatus();
+    const auto exposureState = encodingStatus.seen ? encodingStatus.exposureState : DlssNrExposureState::State::LinearHdr;
+    const bool exposureActs = exposureState == DlssNrExposureState::State::LinearHdr;
+
+    if (exposureState == DlssNrExposureState::State::ToneMapped)
+    {
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: the game's picture is already tone mapped.");
+        HelpMarker("NR gets this picture as it is, with no exposure applied, so the settings below change nothing. "
+                   "Colour encoding (NR Output) says how the picture was read.");
+    }
+    else if (exposureState == DlssNrExposureState::State::DisplayPinned)
+    {
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: HDR screen picture, white fixed at %.0f nits.",
+                           DlssNrExposureState::kReferenceWhiteNits);
+        HelpMarker("An HDR10 or scRGB picture is already in screen brightness, so NR takes its white from the paper "
+                   "white, not from an exposure. The settings below change nothing.");
+    }
+
+    ImGui::BeginDisabled(!exposureActs);
+
     {
     // Logarithmic, because the useful range is not linear. A quarter to 240: the low end because
     // a frame the game already tone mapped wants roughly 1, the high end because there is no
@@ -2149,9 +2173,11 @@ static void RenderExposureSection(Config* config, float menuResScale)
         if (ImGui::SmallButton("Reset##paperwhite"))
             config->DlssNrWhitePointScale = 1.0f;
 
-    HelpMarker("Brightness reference for NR's input. Higher: darker input. Lower: brighter input. Change it if NR "
-               "loses detail or shifts colours.");
+    HelpMarker("Brightness reference for NR's input (linear HDR pictures). Higher: darker input. Lower: brighter "
+               "input. Change it if NR loses detail or shifts colours.");
     }
+
+    ImGui::EndDisabled();
 
     // Highlight guard, directly under the white point / trim -- it bounds the model's edit and
     // belongs with the exposure controls it works alongside.
