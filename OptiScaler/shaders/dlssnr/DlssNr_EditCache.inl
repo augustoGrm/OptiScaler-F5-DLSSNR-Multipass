@@ -210,9 +210,13 @@ void Say(const Frame& f, const DlssNrEditCache::Step& s)
         else if (s.standsAside != nullptr)
             LOG_INFO("DLSS-NR edit cache: stands aside ({}); every frame runs the model", s.standsAside);
         else
-            LOG_INFO("DLSS-NR edit cache: on, the model every {} frames, crossfade {}",
-                     std::clamp(f.inputs.interval, DlssNrEditCache::kMinInterval, DlssNrEditCache::kMaxInterval),
-                     std::clamp(f.inputs.crossfade, 1u, DlssNrEditCache::kMaxCrossfade));
+        {
+            const uint32_t interval =
+                std::clamp(f.inputs.interval, DlssNrEditCache::kMinInterval, DlssNrEditCache::kMaxInterval);
+            LOG_INFO("DLSS-NR edit cache: on, the model every {} frames, crossfade {}{}", interval,
+                     DlssNrEditCache::CrossfadeFor(interval, f.inputs.crossfade),
+                     f.inputs.crossfade == 0 ? " (follows the interval)" : "");
+        }
     }
     const auto now2 = std::chrono::steady_clock::now();
     if (now2 - shareSince > std::chrono::seconds(1))

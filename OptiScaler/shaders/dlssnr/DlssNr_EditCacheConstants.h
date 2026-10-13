@@ -32,7 +32,8 @@ enum DlssNrEditCacheMode : uint32_t
     //          one level (CellLevel) of the surface fill's grid, each cell from its own pixels
     DlssNrEditCache_Cells = 4,
     // [output] t0 frame, t1 carried edit (rgb, validity a), t2 cell atlas edit, t3 cell atlas luma, t4 fade source,
-    //          t5 ring -> u0 the output, frame x 2^edit, u1 the edit shown (for the next refresh's fade)
+    //          t5 ring -> u0 the output, frame x 2^edit, u1 the edit shown (rgb) and this frame's log luma (a), for
+    //          the next refresh's fade, which blends only where that luma still fits the frame's 3x3 range
     DlssNrEditCache_Apply = 5,
     // [motion] t1 ring -> u0 raw vectors from this frame back to the anchor, in the game's units at the motion
     //          texture's allocation size (the model's own history lands where the scene went on a refresh)

@@ -19,11 +19,24 @@ constexpr uint32_t kMaxCrossfade = 8; // and back to the frame before a refresh
 // frame (one presented in between), 3 or 4 at 3x/4x.
 constexpr unsigned long long kMaxClockStep = 4;
 
+// Crossfade 0 (auto, the default) follows the interval: the shortest crossfade whose step on the refresh frame is no
+// bigger than the model's own frame-to-frame step when it runs every frame (so its light does not pulse), measured
+// offline for each interval (DLSS-TOOLS editcache/cache_sim.py, NBA 2K27 dump). Longer ones only trail more.
+constexpr uint32_t kAutoCrossfade[kMaxInterval + 1] = { 1, 1, 2, 3, 3, 4, 4, 5, 5 };
+
+inline uint32_t CrossfadeFor(uint32_t interval, uint32_t crossfade)
+{
+    if (crossfade == 0)
+        return kAutoCrossfade[interval < kMinInterval ? kMinInterval : interval > kMaxInterval ? kMaxInterval : interval];
+    return crossfade > kMaxCrossfade ? kMaxCrossfade : crossfade;
+}
+
 struct Inputs
 {
     bool enabled = false;       // [DlssNr] EditCache
     uint32_t interval = 4;      // [DlssNr] EditCacheInterval: the model every N frames
-    uint32_t crossfade = 5;     // [DlssNr] EditCacheCrossfade: frames a refresh takes to reach the new answer (1 = at once)
+    uint32_t crossfade = 0;     // [DlssNr] EditCacheCrossfade: frames a refresh takes to reach the new answer (1 = at
+                                // once, 0 = follow the interval: CrossfadeFor)
     bool detailReuse = false;   // Reuse detail (every other frame) is on: the two do not run together
     bool afterUpscale = true;   // NR runs after the upscaler on the game's own frame
     bool targetWritable = true; // the output takes a UAV (the cache writes it in place)
@@ -97,7 +110,7 @@ class Cadence
         }
 
         const uint32_t interval = Clamp(in.interval, kMinInterval, kMaxInterval);
-        const uint32_t crossfade = Clamp(in.crossfade, 1, kMaxCrossfade);
+        const uint32_t crossfade = CrossfadeFor(interval, in.crossfade);
         const bool gap = _seen && (in.clock < _clock || in.clock - _clock > kMaxClockStep);
         const bool changed = _seen && (in.revision != _revision || in.width != _width || in.height != _height ||
                                        in.motionWidth != _motionWidth || in.motionHeight != _motionHeight);

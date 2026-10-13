@@ -11,7 +11,8 @@
 //   6. Apply: a believed pixel shows frame x 2^edit exactly; a dropped one takes the edit of validated pixels of the same
 //      brightness nearby, and none where nothing similar is near.
 //   7. Display-encoded frames: a zero edit gives the frame back (sRGB decoded and encoded again).
-//   8. Crossfade: the shown edit is the fade source carried here, blended toward the new one by FadeWeight.
+//   8. Crossfade: the shown edit is the fade source carried here, blended toward the new one by FadeWeight, only where
+//      the frame it was shown on still matches this one (else the new edit alone).
 //   9. Compose: the vectors back to the anchor in the game's raw units (3 frames of -1 px = -3 px).
 // cl /nologo /std:c++20 /EHsc /W4 /wd4324 tests\nr_edit_cache_shader_smoke.cpp d3d11.lib d3dcompiler.lib
 // nr_edit_cache_shader_smoke.exe OptiScaler\shaders\dlssnr\precompile\dlssnr_edit_cache.hlsl
@@ -427,11 +428,19 @@ try
         expect(worst < 2e-6f, "display-encoded: a zero edit gives the frame back (worst " + std::to_string(worst) + ")");
     }
 
-    // 8. Crossfade: one frame back through a still ring, 20% of the new edit
+    // 8. Crossfade: one frame back through a still ring, 20% of the new edit, where the frame it was shown on (its log
+    //    luma in the fade source's alpha) still matches; a block that was much darker then (uncovered since) takes the
+    //    new edit alone
     {
         const Img frame = Frame(0);
+        const float eps = 1.0f / 512.0f;
         const Img newEdit = Fill([](unsigned, unsigned) { return Px { 0.5f, 0.5f, 0.5f, 1 }; });
-        const Img fadeSource = Fill([](unsigned, unsigned) { return Px { -0.5f, -0.5f, -0.5f, 0 }; });
+        const Img fadeSource = Fill([&](unsigned x, unsigned y)
+                                    {
+                                        const bool uncovered = x >= 20 && x < 24 && y >= 6 && y < 10;
+                                        const float then = uncovered ? 0.02f : Luma(frame.at(x, y));
+                                        return Px { -0.5f, -0.5f, -0.5f, std::log2(then + eps) };
+                                    });
         Img stillRing = Blank(W, H * kDlssNrEditCacheRingSlices);
         auto c = Base(DlssNrEditCache_Apply);
         c.RingSlice = 3;
@@ -441,6 +450,9 @@ try
         Img atlas = Blank(AtlasWidth(c), c.CellCountY0);
         gpu.Run(c, { &frame, &newEdit, &atlas, &atlas, &fadeSource, &stillRing }, out, shown, W, H);
         expect(Near(shown.at(8, 8).r, -0.3f, 1e-5f), "crossfade: the fade source blended toward the new edit by FadeWeight");
+        expect(Near(shown.at(21, 7).r, 0.5f, 1e-5f), "crossfade: where the picture changed since, the new edit alone");
+        expect(Near(shown.at(8, 8).a, std::log2(Luma(frame.at(8, 8)) + eps), 1e-4f),
+               "crossfade: the frame's log luma is kept beside the shown edit");
     }
 
     // 9. Compose: three frames of -1 px are -3 px raw (scale 1), at the motion texture's allocation size

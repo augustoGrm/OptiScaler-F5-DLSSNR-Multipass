@@ -416,7 +416,7 @@ bool Config::Reload(std::filesystem::path iniPath)
                 DlssNrEditCacheInterval = std::clamp(DlssNrEditCacheInterval.value(), 2u, 8u);
             DlssNrEditCacheCrossfade.set_from_config(readUInt("DlssNr", "EditCacheCrossfade"));
             if (DlssNrEditCacheCrossfade.has_value())
-                DlssNrEditCacheCrossfade = std::clamp(DlssNrEditCacheCrossfade.value(), 1u, 8u);
+                DlssNrEditCacheCrossfade = std::min(DlssNrEditCacheCrossfade.value(), 8u); // 0 = follow the interval
             DlssNrEditCacheDebug.set_from_config(readUInt("DlssNr", "EditCacheDebug"));
             if (DlssNrEditCacheDebug.value_or_default() > 2u)
                 DlssNrEditCacheDebug = 0u;

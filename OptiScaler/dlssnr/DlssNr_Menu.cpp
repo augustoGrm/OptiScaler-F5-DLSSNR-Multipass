@@ -40,6 +40,7 @@
 #include "DlssNr_GameDefaults.h"
 #include "DlssNr_NativeMode.h"
 #include "DlssNr_LutStatus.h"
+#include "DlssNrEditCache.h"
 
 #include <string>
 #include <vector>
@@ -1444,11 +1445,16 @@ static bool RenderDetailReuseToggle(Config* config)
         HelpMarker("How often the model runs. Longer saves more GPU time; things moving fast hold the model's last "
                    "result longer.");
 
-        int crossfade = (int) std::clamp(config->DlssNrEditCacheCrossfade.value_or_default(), 1u, 8u);
-        if (ImGui::SliderInt("Crossfade (frames)", &crossfade, 1, 8))
+        // 0 = Auto: the measured best for this interval (DlssNrEditCache::CrossfadeFor), shown in the slider
+        int crossfade = (int) std::min(config->DlssNrEditCacheCrossfade.value_or_default(), 8u);
+        char autoLabel[32];
+        std::snprintf(autoLabel, sizeof(autoLabel), "Auto (%u)",
+                      DlssNrEditCache::CrossfadeFor((uint32_t) interval, 0));
+        if (ImGui::SliderInt("Crossfade (frames)", &crossfade, 0, 8, crossfade == 0 ? autoLabel : "%d"))
             config->DlssNrEditCacheCrossfade = (uint32_t) crossfade;
-        HelpMarker("Frames a new result takes to fade in. 1: at once (the light can pulse each time the model runs); "
-                   "longer: smoother, but a change takes longer to show.");
+        HelpMarker("Frames a new result takes to fade in. Auto: the shortest that keeps the light from pulsing at this "
+                   "N (measured). 1: at once (the light can pulse each time the model runs); longer: smoother, but a "
+                   "change takes longer to show.");
 
         int view = (int) std::min(config->DlssNrEditCacheDebug.value_or_default(), 2u);
         const char* views[] = { "Off", "Dropped pixels (red)", "Age of the result" };

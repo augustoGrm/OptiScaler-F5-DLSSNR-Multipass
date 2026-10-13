@@ -315,7 +315,8 @@ class Config
     // DetailReuse (the menu's Reuse detail offers one or the other). Experimental, off by default.
     CustomOptional<bool> DlssNrEditCache { false };
     CustomOptional<uint32_t> DlssNrEditCacheInterval { 4 };  // the model every N frames, 2..8
-    CustomOptional<uint32_t> DlssNrEditCacheCrossfade { 5 }; // frames a refresh takes to reach the new answer, 1..8
+    CustomOptional<uint32_t> DlssNrEditCacheCrossfade { 0 }; // frames a refresh takes to reach the new answer, 1..8;
+                                                             // 0 = follow the interval (DlssNrEditCache::CrossfadeFor)
     CustomOptional<uint32_t> DlssNrEditCacheDebug { 0 };     // 1: dropped pixels red, 2: the edit's age
     CustomOptional<bool> DlssNrResidualFgApproxCamera { false }; // forced off, as DlssNrResidualFg
     // Toggles the pass in game. Unbound by default -- a key that does something unexpected is worse

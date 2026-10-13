@@ -95,6 +95,32 @@ int main()
         expect(s.fadeSteps == 0 && s.fadeWeight == 1.0f, "crossfade 3: done on the third frame");
     }
 
+    // Crossfade 0 follows the interval: each N gets its measured length, never longer than N; set ones are held to 1..8
+    {
+        for (uint32_t n = kMinInterval; n <= kMaxInterval; ++n)
+        {
+            const uint32_t c = CrossfadeFor(n, 0);
+            expect(c >= 1 && c <= n, "auto crossfade within 1..N at N=" + std::to_string(n));
+            expect(c >= CrossfadeFor(n - 1 < kMinInterval ? kMinInterval : n - 1, 0), "auto crossfade grows with N");
+        }
+        expect(CrossfadeFor(4, 0) == kAutoCrossfade[4] && CrossfadeFor(1, 0) == kAutoCrossfade[2] &&
+                   CrossfadeFor(99, 0) == kAutoCrossfade[8],
+               "auto crossfade: the interval held to 2..8");
+        expect(CrossfadeFor(4, 7) == 7 && CrossfadeFor(4, 99) == kMaxCrossfade, "a set crossfade is kept, held to 8");
+
+        Cadence c;
+        for (int t = 0; t < 4; ++t)
+            c.Next(On(t, 4, 0));
+        const uint32_t len = CrossfadeFor(4, 0);
+        for (uint32_t k = 0; k + 1 < len; ++k)
+        {
+            const Step s = c.Next(On(4 + k, 4, 0));
+            expect(s.fadeSteps == k + 1 && std::abs(s.fadeWeight - float(k + 1) / float(len)) < 1e-6f,
+                   "auto crossfade at N=4, step " + std::to_string(k));
+        }
+        expect(c.Next(On(4 + len - 1, 4, 0)).fadeSteps == 0, "auto crossfade at N=4 done after its length");
+    }
+
     // Starting over: a reset, a clock gap, a settings change, a resize -- a refresh with nothing to fade or compose
     {
         auto check = [](const char* what, auto change)

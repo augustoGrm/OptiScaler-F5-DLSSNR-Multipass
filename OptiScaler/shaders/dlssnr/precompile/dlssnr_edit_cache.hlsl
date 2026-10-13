@@ -359,14 +359,28 @@ void CSMain(uint3 id : SV_DispatchThreadID)
             shown = valid * shown + (1.0 - valid) * fill;
         }
 
-        // Crossfade after a refresh: from what was shown before it, carried here, toward the new answer
+        // Crossfade after a refresh: from what was shown before it, carried here, toward the new answer -- only where
+        // the frame it was shown on (its log luma, kept beside it) still matches this frame's 3x3 range: on ground
+        // uncovered since, the old edit belonged to something else
         if (fadeSteps > 0)
         {
             bool onScreen;
             const float2 fadeUv = Trace(t5, uv, ringSlice, fadeSteps, onScreen);
-            const float3 before = t4.SampleLevel(gLinear, fadeUv, 0).rgb;
-            if (onScreen && all(isfinite(before)))
-                shown = lerp(before, shown, fadeWeight);
+            const float4 before = t4.SampleLevel(gLinear, fadeUv, 0);
+            float lo = 1e30, hi = -1e30;
+            [unroll] for (int dy = -1; dy <= 1; ++dy)
+            {
+                [unroll] for (int dx = -1; dx <= 1; ++dx)
+                {
+                    const int2 p = clamp(int2(id.xy) + int2(dx, dy), int2(0, 0), int2(width, height) - 1);
+                    const float y = LogLuma(ToLight(t0.Load(int3(p, 0)).rgb));
+                    lo = min(lo, y);
+                    hi = max(hi, y);
+                }
+            }
+            const bool held = before.a >= lo - tolerance && before.a <= hi + tolerance;
+            if (onScreen && held && all(isfinite(before)))
+                shown = lerp(before.rgb, shown, fadeWeight);
         }
 
         float3 output = light * exp2(shown);
@@ -375,7 +389,8 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         else if (debugView == 2)
             output = lerp(output, float3(age, 1.0 - age, 0.2) * max(dot(light, kLuma), 0.05), 0.5);
         u0[id.xy] = float4(FromLight(output), frame.a);
-        u1[id.xy] = float4(shown, 0.0);
+        // What was shown, with this frame's log luma for a later crossfade's check
+        u1[id.xy] = float4(shown, LogLuma(light));
         return;
     }
 }
