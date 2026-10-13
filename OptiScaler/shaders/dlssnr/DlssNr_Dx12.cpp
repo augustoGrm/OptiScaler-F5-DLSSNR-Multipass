@@ -5139,17 +5139,20 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             Barrier(cmdList, g_nr.outputNative, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
                     D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
-        // On-demand capture works in this path too: the staging copy still holds the frame as the
-        // upscaler produced it, and the edited frame is the output itself. The write happens a few
-        // frames later, once the GPU is certainly past these copies -- this path has no fence of its
-        // own.
+        // On-demand capture works in this path too: hdrCopy still holds the frame as the upscaler produced it
+        // (the encode's untouched copy, the resolve's original), and the edited frame is the output itself. Where
+        // the target takes no UAV the resolve wrote into hdrCopy instead and no original is left: "before" is then
+        // the model's input picture (colorCopy, the encoded proxy), and the note says so. colorCopy was "before"
+        // everywhere until the edit cache dump showed it is the proxy, not the frame. The write happens a few
+        // frames later, once the GPU is certainly past these copies -- this path has no fence of its own.
         if (g_capture.isActive())
         {
             std::vector<capture::Source> sources {
-                { "before", g_nr.colorCopy, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
+                { "before", targetSupportsUav ? g_nr.hdrCopy : g_nr.colorCopy,
+                  D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE },
                 { "after", target, targetState },
             };
-            std::string note;
+            std::string note = targetSupportsUav ? "" : "beforeIsProxy 1";
 
             if (g_captureIsDump)
             {
@@ -5171,7 +5174,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                               encodeParams.ReversibleMode, encodeParams.WhitePoint, g_nr.reset ? 1 : 0, workWidth,
                               workHeight, (unsigned long long) (frame.SubmissionEpoch != 0 ? frame.SubmissionEpoch
                                                                                            : g_frames));
-                note = text;
+                note = note.empty() ? std::string(text) : note + " " + text;
             }
 
             g_capture.record(cmdList, device, sources, note);

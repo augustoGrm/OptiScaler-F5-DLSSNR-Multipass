@@ -406,7 +406,8 @@ class FrameCapture
             for (unsigned int i = 0; i < captured_ && i < notes_.size(); ++i)
                 if (!notes_[i].empty())
                     std::fprintf(f, "frame %02u %s\n", i, notes_[i].c_str());
-            std::fprintf(f, "\nbefore_NN.raw is the frame as the upscaler produced it.\n");
+            std::fprintf(f, "\nbefore_NN.raw is the frame as the upscaler produced it (a frame noted beforeIsProxy 1: the "
+                            "model's input picture instead).\n");
             std::fprintf(f, "after_NN.raw is the same frame once the model's edit was applied.\n");
             std::fprintf(f, "Consecutive frames, same run, so the pair is a control.\n");
             if (!about.empty())
