@@ -3819,11 +3819,11 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     float exposurePreMul = 0.0f;
 
     // Only with the game's-setting scale: the shader recomputes PreExposure / exposure, and Native look's base is 1
-    // whatever the exposure (DlssNr_GameScale.h), so there the host value, 1 x the Trim, is the white point. Binding the
-    // texture under Native look made the shader put the game's exposure back (NBA 2K27: ~0.4 EV; ai-os HDR audit HC15).
+    // whatever the exposure (DlssNr_GameScale.h), so there the host value, 1 x the Trim, is the white point. Binding
+    // the texture under Native look made the shader put the game's exposure back (NBA 2K27: ~0.4 EV).
     if (cfg.DlssNrWhitePointSource.value_or_default() == 1 && frame.ExposureTexture != nullptr &&
         frame.WhitePointOverride <= 0.0f &&
-        cfg.DlssNrGameExposureScale.value_or_default() != DlssNrGameScale::kAsIs)
+        DlssNrGameScale::ShaderReadsGameExposure(cfg.DlssNrGameExposureScale.value_or_default()))
     {
         exposureTex = (ID3D12Resource*) frame.ExposureTexture;
         useGameExposure = 1;
@@ -3898,7 +3898,7 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                 // and a game whose frame is scaled by its exposure (RDR2: paper white ~1700x) would otherwise be seen
                 // as ~1000x over white -- the whole picture pinned at the top of the curve. With the encode's live
                 // fields and texture, so where the encode recomputes it this frame the LUT does too (it used to take
-                // the host value, 3-4 frames old: ai-os HDR audit HC13).
+                // the host value, 3-4 frames old, made for a different white than the model was shown).
                 DlssNrConstants lutWhite {};
                 fillLiveWhitePoint(lutWhite);
                 const bool graded =

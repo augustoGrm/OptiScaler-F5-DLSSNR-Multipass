@@ -47,6 +47,11 @@ int main()
     Check(AnchorKey(2.0f, 0.5f) == WhiteBase(kWithExposure, 2.0f, 0.5f), "the key equals the with-exposure base");
     Check(AnchorKey(1.0f, 1.3195f) != WhiteBase(kAsIs, 1.0f, 1.3195f), "as is keeps its points off the constant base");
 
+    // The shader's live recomputation is the with-exposure base, so Native look ("as is") must not bind the game's
+    // texture on either backend: it would put the game's exposure back
+    Check(ShaderReadsGameExposure(kWithExposure), "with exposure, the shader reads the game's exposure live");
+    Check(!ShaderReadsGameExposure(kAsIs), "as is (Native look) keeps the host's base 1, no live texture");
+
     if (fails != 0)
         return 1;
 

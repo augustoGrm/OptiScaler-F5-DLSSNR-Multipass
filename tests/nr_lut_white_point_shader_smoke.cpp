@@ -1,5 +1,5 @@
 // Headless shader test: Windows D3D11 WARP runs dlssnr_lut.hlsl, the LUT grade NR's input goes through, and checks the
-// white point it grades for (ai-os HDR audit HC13).
+// white point it grades for: the encode's own, recomputed this frame from the live exposure texture.
 //
 //   1. With no live exposure the pass is bit-identical to the shader before the white point became shared
 //      (dlssnr_lut.hlsl at 7364a7f8): linear HDR, PQ, tone-mapped sRGB and gamma 2.2 frames, at several white points.

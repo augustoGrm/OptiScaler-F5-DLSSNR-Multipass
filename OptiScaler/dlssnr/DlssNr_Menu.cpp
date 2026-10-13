@@ -1688,7 +1688,7 @@ static void RenderExposureSection(Config* config, float menuResScale)
     }
     else if (exposureState == DlssNrExposureState::State::DisplayPinned)
     {
-        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: HDR screen picture. NR's white is the paper "
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: HDR10/scRGB picture. NR's white is the paper "
                                                             "white below.");
         HelpMarker("An HDR10 or scRGB picture is already in screen brightness, so NR takes its white from the game's "
                    "HDR paper white, not from an exposure. The greyed settings change nothing.");

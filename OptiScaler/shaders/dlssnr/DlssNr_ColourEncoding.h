@@ -9,7 +9,7 @@
 // looks unusual for it, and the mismatch is reported -- with one exception: Linear HDR on a format that cannot hold
 // linear light (8/10-bit UNORM) is refused and the frame read as Auto reads it. Such a frame holds gamma-encoded values
 // whatever the user believes; reading them as linear light darkens and flattens what the model is shown and made the
-// Automatic white point swing 0.15x-12x frame to frame (Call to Arms, 8-bit B8G8R8A8; ai-os HDR audit HC9).
+// Automatic white point swing 0.15x-12x frame to frame (Call to Arms, 8-bit B8G8R8A8).
 //
 // PQ is decoded to linear light (1.0 = 203 nits, the ITU-R BT.2408 reference white) and then goes through the
 // linear-HDR path, so LinearHdr() is true for it.

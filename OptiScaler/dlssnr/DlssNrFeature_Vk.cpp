@@ -483,6 +483,9 @@ void DestroyMeterReadback()
     }
 
     g_vk.meterFrames = 0;
+    // The next meter reads a new image (device rebuilt, or the game's in another layout): prove it again
+    g_vk.gameLiveGate.Reset();
+    g_vk.gameLiveSaid = false;
 }
 
 // A layout transition with the access masks that go with it. Vulkan has no equivalent of D3D12's
@@ -873,7 +876,16 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
             // not leave it in, or a slot the game stopped filling, fails here and the last good
             // value stands. Which exposure it is depends on what wrote the slot.
             if (g_vk.meterExposureKind[readSlot] == 1u)
+            {
+                const bool wasTrusted = g_vk.gameLiveGate.Trusted();
                 g_vk.gameLiveGate.Count(std::isfinite(measured) && measured > 0.0f);
+                if (wasTrusted && !g_vk.gameLiveGate.Trusted())
+                {
+                    g_vk.gameLiveSaid = false;
+                    LOG_WARN("DLSS-NR Vulkan: the game's exposure stopped reading cleanly; the host value "
+                             "stands until it has read cleanly again");
+                }
+            }
 
             if (std::isfinite(measured) && measured > 0.0f)
             {
@@ -1458,7 +1470,8 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     if (requestedWhitePointSource == 1 && g_vk.gameExposure > 1e-6f && !displayWhite)
     {
         // The Trim is the slider, or interpolated from the Trim anchors at this base white point when
-        // there are any. Resolved here on the CPU: this backend has no live exposure path in the shader.
+        // there are any. Resolved here on the CPU from the host readback; once the game's image reads cleanly the
+        // shader recomputes it from the live image instead (liveGame below), and this value is its fallback.
         // What the Trim multiplies follows the scale (DlssNr_GameScale.h); the points stay keyed by the game's
         // exposure in both scales.
         const float baseWhitePoint = DlssNrGameScale::WhiteBase(cfg.DlssNrGameExposureScale.value_or_default(),
@@ -1765,7 +1778,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
         }
     }
 
-    // Game exposure read live (ai-os HDR audit HC14): the host value is a readback 3-4 frames old, so on a cut the old
+    // Game exposure read live: the host value is a readback 3-4 frames old, so on a cut the old
     // white point stood for those frames, a flash or dip D3D12 does not have. Once the game's image has read cleanly
     // through the courier's layout guess (LiveGameGate), it is bound in the motion slot like Automatic's and the shader
     // recomputes PreExposure / exposure x the Trim from it, falling back to the host value for an implausible texel. Not
@@ -1774,9 +1787,10 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     {
         const bool gameImage = exposure != nullptr && exposure->Type == NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW &&
                                exposure->Resource.ImageViewInfo.ImageView != VK_NULL_HANDLE;
-        const bool liveGame = requestedWhitePointSource == 1 && linearHdr && !displayWhite && gameImage &&
-                              cfg.DlssNrGameExposureScale.value_or_default() != DlssNrGameScale::kAsIs &&
-                              g_vk.gameLiveGate.Trusted();
+        const bool liveGame =
+            requestedWhitePointSource == 1 && linearHdr && !displayWhite && gameImage &&
+            DlssNrGameScale::ShaderReadsGameExposure(cfg.DlssNrGameExposureScale.value_or_default()) &&
+            g_vk.gameLiveGate.Trusted();
 
         if (liveGame)
         {
@@ -1876,7 +1890,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
                         // The white point the encode below uses (Tune's pinned value included), so linear HDR lands
                         // in the LUT's 0-1 domain where the model's proxy puts it; the Trim alone would leave a game
                         // whose frame is scaled by its exposure far above white. With the encode's live fields and
-                        // image, so where the encode recomputes it this frame the LUT does too (HC13).
+                        // image, so where the encode recomputes it this frame the LUT does too.
                         CopyLiveWhitePoint(lutConstants, encode);
                         if (liveExposureView == VK_NULL_HANDLE)
                             lutConstants.UseGameExposure = lutConstants.UseExposureWhitePoint = 0u;
@@ -2769,6 +2783,8 @@ void ShutdownVk(bool deviceAlive)
         g_vk.workHeight = 0;
         g_vk.timedFrames = 0;
         g_vk.meterFrames = 0;
+        g_vk.gameLiveGate.Reset();
+        g_vk.gameLiveSaid = false;
         g_vk.lastGpuTime.reset();
         g_vk.ngxInitialised = false;
         g_vk.floatSlotKnown = false; // the next block is a new one

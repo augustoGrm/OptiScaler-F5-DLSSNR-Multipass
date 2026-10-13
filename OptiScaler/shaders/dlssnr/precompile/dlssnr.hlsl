@@ -46,7 +46,9 @@ cbuffer Params : register(b0)
     uint  gExposureSourceHeight;
     uint  gMeterCopiesExposure; // meter mode: 1 courier the game's exposure, 0 average every tile pixel
     float gExposureTrim;
-    uint  gUseExposureWhitePoint; // 1 = automatic exposure, read in-shader (t4 on D3D12, the motion slot on Vulkan)
+    uint  gUseExposureWhitePoint; // 1 = white point recomputed in-shader from a live exposure texture: Automatic's
+                                  // (t4 on D3D12, the motion slot on Vulkan), or on Vulkan the game's own image
+                                  // in the motion slot once it reads cleanly (D3D12 has gUseGameExposure for that)
     uint  gExposureTrimAnchorCount;
     uint  gExposureTrimPreview;
     float gExposureTrimAnchorExposure0;
