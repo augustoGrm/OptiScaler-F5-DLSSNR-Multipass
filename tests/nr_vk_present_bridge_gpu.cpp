@@ -7,12 +7,15 @@
 //   - ten resizes (the game's new swapchain with oldSwapchain, the bridge's Resize) leave video memory where it was, and
 //     every size still carries the pattern,
 //   - RealWindowResized sees a window that is not the swapchain's size and stops seeing it after the resize,
+//   - a hidden surface that stops answering (its window destroyed) between two of the game's swapchains is made again
+//     (RemakeSurface) and carries the next swapchain bit for bit,
+//   - the release callback gets the bridge's reference to the D3D12 swapchain once, and may let go of it first,
 //   - the D3D12 debug layer reports no error or warning from the first frame to the last.
 //
 //   vcvars64, then from the repo root:
 //   cl /std:c++20 /EHsc /O2 /Iexternal\vulkan\include tests\nr_vk_present_bridge_gpu.cpp
 //      OptiScaler\native\VkPresentBridgeCore.cpp OptiScaler\native\SharedFrameVk.cpp d3d12.lib dxgi.lib user32.lib
-//      vulkan-1.lib /link /LIBPATH:OptiScaler\library\vulkan
+//      dxguid.lib vulkan-1.lib /link /LIBPATH:OptiScaler\library\vulkan
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -651,6 +654,18 @@ struct Game
         return true;
     }
 
+    // The game destroys its swapchain and makes the next one later (a switch out of exclusive full screen).
+    void DropSwapchain()
+    {
+        vkDeviceWaitIdle(vk.device);
+
+        if (swapchain != VK_NULL_HANDLE)
+            vkDestroySwapchainKHR(vk.device, swapchain, nullptr);
+
+        swapchain = VK_NULL_HANDLE;
+        images.clear();
+    }
+
     void Destroy()
     {
         vkDeviceWaitIdle(vk.device);
@@ -715,7 +730,17 @@ bool RunFormat(Vk& vk, Dx& dx, native::VkInterop& interop, native::SharedFenceVk
     std::string why;
     const auto first = game.Info(kBaseW, kBaseH);
 
-    if (!bridge.Create(target, first, PlainOutput(dx), {}, why))
+    // The glue's release lets go of the bridge's reference itself, before frame generation destroys its swapchain.
+    int releaseCalls = 0;
+    bool releaseHadReference = false;
+    const native::ReleaseOutputFn release = [&](ComPtr<IDXGISwapChain4>& output)
+    {
+        ++releaseCalls;
+        releaseHadReference = output != nullptr;
+        output.Reset();
+    };
+
+    if (!bridge.Create(target, first, PlainOutput(dx), release, why))
     {
         if (why.find("does not offer the swapchain's format") != std::string::npos)
         {
@@ -852,6 +877,39 @@ bool RunFormat(Vk& vk, Dx& dx, native::VkInterop& interop, native::SharedFenceVk
                                               !bridge.ShouldReportOutOfDate());
     }
 
+    // The hidden surface stops answering while the bridge waits for the game's next swapchain (Batman: Arkham Knight on
+    // dxvk, leaving exclusive full screen): here its window is destroyed behind the bridge's back. A new hidden window
+    // and surface carry the next swapchain, the D3D12 swapchain kept, and the frames arrive as before.
+    {
+        const uint32_t w = bridge.Width();
+        const uint32_t h = bridge.Height();
+        game.DropSwapchain();
+        DestroyWindow(bridge.HiddenWindow());
+
+        VkSwapchainCreateInfoKHR lost {};
+        std::string lostWhy;
+
+        if (bridge.Patch(game.Info(w, h), &lost, lostWhy))
+        {
+            printf("  SKIP: this driver still answers for a surface whose window is gone\n");
+        }
+        else
+        {
+            printf("    lost: %s\n", lostWhy.c_str());
+            std::string remadeWhy;
+            const bool remade = bridge.RemakeSurface(remadeWhy) && game.MakeSwapchain(game.Info(w, h), remadeWhy);
+
+            frameError.clear();
+            const auto got = remade ? game.Frame(w, h, 90, frameError) : std::vector<uint8_t> {};
+
+            if (!remadeWhy.empty() || !frameError.empty())
+                printf("    %s %s\n", remadeWhy.c_str(), frameError.c_str());
+
+            ok &= Check("a lost hidden surface is made again and carries the next swapchain bit for bit",
+                        remade && frameError.empty() && game.Matches(got, w, h, 90));
+        }
+    }
+
     game.Destroy();
     dx.WaitIdle();
     const UINT64 end = dx.VideoMemoryUsed();
@@ -861,6 +919,8 @@ bool RunFormat(Vk& vk, Dx& dx, native::VkInterop& interop, native::SharedFenceVk
 
     bridge.Release();
     ok &= Check("the bridge lets go of the swapchain, the surface and the window", !bridge.Created());
+    ok &= Check("the release is called once, with the bridge's reference, which it may let go of first",
+                releaseCalls == 1 && releaseHadReference);
     ok &= Check("no D3D12 debug layer error or warning after the resizes and the release", dx.DebugMessages() == 0);
     DestroyWindow(window);
     return ok;
