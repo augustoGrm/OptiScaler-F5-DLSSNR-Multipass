@@ -68,19 +68,29 @@ struct LiveGameGate
 {
     static constexpr unsigned long long kMinReads = 60;
     static constexpr unsigned long long kMinValidPercent = 95;
+    // This many unbelievable reads in a row start the proof over: the share alone, counted over the whole session,
+    // would take a long good run hundreds of bad reads to fall below 95% (the image moved to another layout, say).
+    static constexpr unsigned long long kMaxBadRun = 8;
 
     unsigned long long reads = 0;
     unsigned long long valid = 0;
+    unsigned long long badRun = 0;
 
     void Count(bool believed)
     {
+        badRun = believed ? 0u : badRun + 1u;
+        if (badRun >= kMaxBadRun)
+        {
+            Reset();
+            return;
+        }
         ++reads;
         valid += believed ? 1u : 0u;
     }
 
     bool Trusted() const { return reads >= kMinReads && valid * 100 >= reads * kMinValidPercent; }
 
-    void Reset() { reads = valid = 0; }
+    void Reset() { reads = valid = badRun = 0; }
 };
 
 // finishedPicture: the choice came from DlssNrColourEncoding::ResolveFinished (the screen), where Linear HDR is

@@ -339,8 +339,9 @@ int wmain(int argc, wchar_t** argv) try
         float worstSignal = 0.0f, worstDown = 0.0f, worstFrame = 0.0f, worstHue = 0.0f, whiteAt = -1.0f;
         // Linear clips each channel at white (as game integrations feed the model), so a saturated colour with a channel
         // over white is shown to the model paler, and the Composed resolve takes its hue from that answer: an unchanged
-        // answer does not give such a pixel back. That is the known Linear trade (audit HC1 in the ai-os HDR skill), not
-        // a regression, so those pixels are measured and printed apart rather than held to the round trip.
+        // answer does not give such a pixel back. That is the known Linear trade, not a regression,
+        // so those pixels are measured apart rather than held to the round trip, and bounded at 0.35 of their peak
+        // (0.316 measured for 2.0 / 0.5 / 0.1) so a change in how Linear treats them still fails.
         float overWhiteShift = 0.0f;
         const auto overWhiteColour = [&](const Pixel& s)
         { return c.mode == 7 && Peak(s) > 1.0f && !(s.r == s.g && s.g == s.b); };
@@ -389,8 +390,10 @@ int wmain(int argc, wchar_t** argv) try
         std::printf("%s: signal %.2e, white at %.4f, downsample round trip %.2e, frame round trip %.2e, hue %.2e\n",
                     c.name, worstSignal, whiteAt, worstDown, worstFrame, worstHue);
         if (c.mode == 7)
-            std::printf("linear: colours with a channel over white come back off by %.3f of their peak (HC1, known)\n",
+            std::printf("linear: colours with a channel over white come back off by %.3f of their peak (known)\n",
                         overWhiteShift);
+        if (c.mode == 7)
+            expect(overWhiteShift < 0.35f, name + ": colours with a channel over white come back off by more than 0.35");
         expect(worstSignal < 1e-5f, name + ": the proxy is not the standard's signal");
         expect(std::abs(whiteAt - c.white) <= 0.005f, name + ": white is not where BT.2408 puts it");
         expect(rises, name + ": the proxy does not rise with the light");
@@ -470,7 +473,7 @@ int wmain(int argc, wchar_t** argv) try
                 float worst = 0.0f;
                 for (UINT i = 0; i < n; ++i)
                 {
-                    // Linear's over-white colours: HC1, measured in section 2.
+                    // Linear's over-white colours: measured and bounded in section 2.
                     if (mode == 7 && Peak(input[i]) > 1.0f && !(input[i].r == input[i].g && input[i].g == input[i].b))
                         continue;
                     const float scale = std::max(Peak(input[i]), 1e-3f);

@@ -572,7 +572,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
 #ifdef LOW_LATENCY_INPUTS
         if (State::Instance().activeFgOutput == FGOutput::FSRFG)
         {
-            auto fgIsActive = fg != nullptr && fg->IsActive() && !fg->IsPaused();
+            auto fgIsActive = fg != nullptr && fg->IsGenerating(); // not while it waits for frame data
             InputAntiLag2::injectAl2Context(pSwapChain, fgIsActive);
         }
 #else
@@ -581,7 +581,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             LOG_DEBUG("Calling fakenvapi");
 
             static UINT64 fgPresentFrame = 0;
-            auto fgIsActive = fg != nullptr && fg->IsActive() && !fg->IsPaused();
+            auto fgIsActive = fg != nullptr && fg->IsGenerating(); // not while it waits for frame data
 
             if (State::Instance().fgPresentIsCalled)
             {

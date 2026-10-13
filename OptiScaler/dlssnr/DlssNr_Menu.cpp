@@ -1688,7 +1688,7 @@ static void RenderExposureSection(Config* config, float menuResScale)
     }
     else if (exposureState == DlssNrExposureState::State::DisplayPinned)
     {
-        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: HDR screen picture. NR's white is the paper "
+        ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "Not used here: HDR10/scRGB picture. NR's white is the paper "
                                                             "white below.");
         HelpMarker("An HDR10 or scRGB picture is already in screen brightness, so NR takes its white from the game's "
                    "HDR paper white, not from an exposure. The greyed settings change nothing.");
@@ -3093,8 +3093,9 @@ static void RenderInputPage(Config* config, float menuResScale, const NrCommon& 
                    "local contrast (brightness only) so NR has more structure to follow; high strength blurs with a "
                    "composed curve.\nSmooth canvas shows NR skin like an untextured old-game surface: pores and fine "
                    "shading flattened, contours kept, so NR paints its own skin detail.\nWith a composed curve only "
-                   "what NR paints differently shows; with a replace curve you see NR's painting as it is.\nNo effect "
-                   "above 100% Model resolution.");
+                   "what NR paints differently shows; with a replace curve you see NR's painting as it is (Restore "
+                   "Sharpness is off while a style is on, or it would put the game's texture back).\nNo effect above "
+                   "100% Model resolution.");
 
         if (style != 0)
         {

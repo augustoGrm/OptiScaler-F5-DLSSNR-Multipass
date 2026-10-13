@@ -28,7 +28,8 @@ struct alignas(256) DlssNrLutConstants
     // What to divide linear HDR light by before compressing it into 0-1: the white point the encode will use for this
     // frame (ResolveWhitePoint, or the Vulkan path's resolved white point). It is the whole divisor, not the Trim on top
     // of it -- a game that scales its frame by its exposure sits near paper white 1000x, and dividing that by a Trim of ~1
-    // would pin every pixel at the top of the curve. Unused for tone-mapped and PQ frames.
+    // would pin every pixel at the top of the curve. For PQ it is the game's HDR paper white (1.0 at 203 nits after the
+    // PQ decode), which the PQ branch divides by too. Unused for tone-mapped frames.
     float Trim;
     // The encode's live white point inputs (dlssnr_whitepoint.hlsli): when the encode recomputes its white point from a
     // live exposure texture, the LUT pass reads the same texture with the same Trim table, so it grades for the white the

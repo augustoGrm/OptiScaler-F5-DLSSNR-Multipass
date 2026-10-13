@@ -382,8 +382,9 @@ Method CurrentMethod(Api api)
 CapInputs FrameCapInputs(Api api)
 {
     auto& state = State::Instance();
-    const bool fgGenerating =
-        state.currentFG != nullptr && state.currentFG->IsActive() && !state.currentFG->IsPaused();
+    // Generating, not merely on: FSR FG waiting for frame data (FG only with no upscaler call) shows the game's frames
+    // alone, and the cap must not be halved for frames it does not make (IFGFeature::IsGenerating).
+    const bool fgGenerating = state.currentFG != nullptr && state.currentFG->IsGenerating();
 
     CapInputs in;
     in.running = true;
@@ -1071,10 +1072,8 @@ XefgLatency XefgSide()
 
 uint32_t XefgShownPerRendered()
 {
-    if (!XefgGenerating() || State::Instance().currentFG == nullptr)
-        return 1;
-
-    return 1 + State::Instance().currentFG->GetInterpolatedFrameCount();
+    const auto fg = State::Instance().currentFG;
+    return ShownPerRendered(XefgGenerating() && fg != nullptr, fg != nullptr ? fg->GetInterpolatedFrameCount() : 0);
 }
 
 Status GetStatus()

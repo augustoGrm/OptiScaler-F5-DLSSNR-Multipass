@@ -21,6 +21,11 @@ inline float WhiteBase(uint32_t scale, float preExposure, float exposure)
     return exposure > 1e-6f ? preExposure / exposure : 0.0f;
 }
 
+// Whether the shader may recompute the base from the game's live exposure texture. The shader's recomputation is
+// PreExposure / exposure, the "with exposure" base: under "as is" (Native look) it would put the game's exposure back,
+// so the host value (base 1 x the Trim) has to stand and the texture must not be bound (NBA 2K27: ~0.4 EV off).
+inline bool ShaderReadsGameExposure(uint32_t scale) { return scale != kAsIs; }
+
 // The key brightness points are stored and looked up by: the game's exposure, the scene-brightness proxy, in both scales.
 // Under "as is" the base is constant, so keying by it would collapse every point onto one scene.
 inline float AnchorKey(float preExposure, float exposure) { return exposure > 1e-6f ? preExposure / exposure : 0.0f; }

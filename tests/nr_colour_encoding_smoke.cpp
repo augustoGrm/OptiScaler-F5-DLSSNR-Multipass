@@ -68,7 +68,7 @@ int main()
 
     // Linear HDR forced on a format that cannot hold it is refused: the frame is read as Auto reads it (tone-mapped
     // sRGB, since the format already rules linear HDR out), and the choice says so. Reading gamma values as linear light
-    // made the Automatic white point swing 0.15x-12x (Call to Arms, audit HC9).
+    // made the Automatic white point swing 0.15x-12x (Call to Arms).
     for (bool flag : { false, true })
     {
         const auto refused = Resolve(1, flag, false);

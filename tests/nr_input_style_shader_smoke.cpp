@@ -13,7 +13,7 @@
 //      quarter of that range (at full strength).
 //   8. Colour kept: a coloured texture's channel ratios are unchanged where no channel reached 1.
 //
-// Every curve the model can be shown (soft knee, Neutwo, hybrid, HLG, PQ) and a tone-mapped (passthrough) frame.
+// Every curve the model can be shown (soft knee, Neutwo, hybrid, HLG, PQ, Linear) and a tone-mapped (passthrough) frame.
 //
 // Build: cl /nologo /std:c++20 /EHsc /W3 tests\nr_input_style_shader_smoke.cpp /link d3d11.lib d3dcompiler.lib
 // Run:   nr_input_style_shader_smoke.exe <dlssnr.hlsl>
@@ -216,7 +216,8 @@ int wmain(int argc, wchar_t** argv) try
     const Image frame = Scene();
 
     struct Case { uint32_t passthrough, reversible; const char* name; };
-    const Case cases[] = {{0, 0, "soft knee"}, {0, 1, "Neutwo"}, {0, 3, "hybrid"}, {0, 5, "HLG"}, {0, 6, "PQ"}, {1, 0, "tone-mapped"}};
+    const Case cases[] = {{0, 0, "soft knee"}, {0, 1, "Neutwo"}, {0, 3, "hybrid"}, {0, 5, "HLG"}, {0, 6, "PQ"}, {0, 7, "Linear"},
+                          {1, 0, "tone-mapped"}};
 
     std::printf("%-12s %10s %10s %10s %10s %10s\n", "curve", "flat", "edge", "grain", "weave", "off");
     for (const Case& c : cases)
@@ -273,7 +274,7 @@ int wmain(int argc, wchar_t** argv) try
         const Pictures full = Paint(gpu, nr.Get(), frame, c.passthrough, c.reversible, 1.0f, DlssNrMode_StructureHint);
         const Pictures none = Paint(gpu, nr.Get(), frame, c.passthrough, c.reversible, 0.0f, DlssNrMode_StructureHint);
 
-        float flat = 0.0f, off = 0.0f, halo = 0.0f;
+        float flat = 0.0f, off = 0.0f, halo = 0.0f, dark = 0.0f;
         for (UINT y = 0; y < kSize; ++y)
             for (UINT x = 0; x < kSize; ++x)
             {
@@ -296,6 +297,8 @@ int wmain(int argc, wchar_t** argv) try
                 const float l = Luma(b);
                 const float margin = 0.25f * (hi - lo);
                 halo = std::max({halo, l - (hi + margin), (lo - margin) - l});
+                // The dark side of the hard edge (0.03 | 0.9): no lower than three quarters of the darkest neighbour.
+                dark = std::max(dark, 0.75f * lo - l);
             }
         auto spread = [](const Image& im, UINT y0, UINT y1)
         {
@@ -330,20 +333,21 @@ int wmain(int argc, wchar_t** argv) try
             colour = std::max({colour, std::abs(a.g / a.r - b.g / b.r), std::abs(a.b / a.r - b.b / b.r)});
         }
 
-        std::printf("%-12s %10.2e %10.2e %9.0f%% %9.0f%% %10.2e %10.2e\n", c.name, flat, off, grain * 100.0, weave * 100.0,
-                    halo, colour);
+        std::printf("%-12s %10.2e %10.2e %9.0f%% %9.0f%% %10.2e %10.2e dark %.2e\n", c.name, flat, off, grain * 100.0,
+                    weave * 100.0, halo, colour, dark);
         const std::string what = std::string(" (structure hint, ") + c.name + ")";
         expect(flat < 1e-6f, "flat areas change" + what);
         expect(off == 0.0f, "strength 0 changes the picture" + what);
         expect(grain > 1.05 && weave > 1.05, "texture contrast does not rise" + what);
         expect(halo < 1e-5f, "a pixel overshoots its neighbourhood's range by more than a quarter (halo)" + what);
+        expect(dark < 1e-5f, "the dark side of an edge falls below 3/4 of its darkest neighbour (goes to black)" + what);
         expect(colour < 1e-4f, "the colour's channel ratios change" + what);
 
         // Strength 3: more texture than at 1, overshoot within 0.75 of the range.
         const Pictures strong = Paint(gpu, nr.Get(), frame, c.passthrough, c.reversible, 3.0f, DlssNrMode_StructureHint);
         const double weaveStrong =
             spread(strong.painted, kSize / 2 + 3, kSize - 3) / spread(strong.proxy, kSize / 2 + 3, kSize - 3);
-        float haloStrong = 0.0f;
+        float haloStrong = 0.0f, darkStrong = 0.0f;
         for (UINT y = 0; y < kSize; ++y)
             for (UINT x = 0; x < kSize; ++x)
             {
@@ -359,11 +363,13 @@ int wmain(int argc, wchar_t** argv) try
                     }
                 const float l = Luma(strong.painted.at(x, y));
                 haloStrong = std::max({haloStrong, l - (hi + 0.75f * (hi - lo)), (lo - 0.75f * (hi - lo)) - l});
+                darkStrong = std::max(darkStrong, 0.25f * lo - l);
             }
         std::printf("%-12s strength 3: weave %.0f%%, overshoot past 0.75 of the range %.2e\n", c.name, weaveStrong * 100.0,
                     haloStrong);
         expect(weaveStrong > weave + 0.2, "strength 3 does not lift texture beyond strength 1" + what);
         expect(haloStrong < 1e-5f, "strength 3 overshoots by more than 0.75 of the range" + what);
+        expect(darkStrong < 1e-5f, "strength 3 takes the dark side of an edge below 1/4 of its darkest neighbour" + what);
     }
 
     // Smooth canvas: flat areas and the hard edge kept, texture flattened (more than the watercolour's grain), strength
@@ -384,8 +390,8 @@ int wmain(int argc, wchar_t** argv) try
         return std::sqrt(std::max(s2 / n - m * m, 0.0));
     };
 
-    // Two steps in the scene: the hard edge 0.03 | 0.9 at x = 32, and a smaller one 0.25 | 0.03 at x = 16 (about a lip
-    // line's step). The 11x11 window reaches both from different pixels, so they are measured apart: the hard edge must
+    // Two steps in the scene: the hard edge 0.03 | 0.9 at x = 32, and a smaller one 0.25 | 0.03 at x = 16 (about 3 EV,
+    // a strong lip line). The 11x11 window reaches both from different pixels, so they are measured apart: the hard edge must
     // stay exact, the small step may soften a little (the brightness tolerance is wide on purpose, to flatten skin).
     std::printf("\n%-12s %10s %10s %10s %10s %10s %10s\n", "curve", "flat", "edge", "step", "grain", "weave", "off");
     for (const Case& c : cases)

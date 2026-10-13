@@ -425,7 +425,7 @@ bool VulkanHooks::SignalTimelineSemaphore(VkDevice device, VkSemaphore semaphore
 
 static void HookDevice(VkDevice InDevice)
 {
-    if (o_CreateSwapchainKHR != nullptr || State::Instance().vulkanSkipHooks)
+    if (o_CreateSwapchainKHR != nullptr || ScopedSkipVulkanHooks::Active())
         return;
 
     LOG_FUNC();
@@ -482,7 +482,7 @@ static VkResult hkvkCreateWin32SurfaceKHR(VkInstance instance, const VkWin32Surf
     auto procHwnd = Util::GetProcessWindow();
     LOG_DEBUG("procHwnd: {0:X}, swapchain hwnd: {1:X}", (UINT64) procHwnd, (UINT64) pCreateInfo->hwnd);
 
-    if (result == VK_SUCCESS && !State::Instance().vulkanSkipHooks)
+    if (result == VK_SUCCESS && !ScopedSkipVulkanHooks::Active())
     {
         MenuOverlayVk::DestroyVulkanObjects(false);
 
@@ -533,7 +533,7 @@ static VkResult hkvkCreateInstance(const VkInstanceCreateInfo* pCreateInfo, cons
     }
 
     // Disabled to prevent unnecessary object release
-    // if (result == VK_SUCCESS && !State::Instance().vulkanSkipHooks)
+    // if (result == VK_SUCCESS && !ScopedSkipVulkanHooks::Active())
     //{
     //     MenuOverlayVk::DestroyVulkanObjects(false);
     // }
@@ -995,7 +995,7 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
 
     if (result == VK_SUCCESS && Config::Instance()->OverlayMenu.value_or_default())
     {
-        if (!State::Instance().vulkanSkipHooks)
+        if (!ScopedSkipVulkanHooks::Active())
         {
             // Disabled to prevent unnecessary object release
             // MenuOverlayVk::DestroyVulkanObjects(false);
@@ -1284,7 +1284,7 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
     {
         localCreateInfo = *pCreateInfo;
 
-        if (!State::Instance().vulkanSkipHooks)
+        if (!ScopedSkipVulkanHooks::Active())
         {
             // The physical device this swapchain's own device was made on (not the last one the game made)
             const VkPhysicalDevice physical = swapchainPhysicalDevice();
@@ -1336,11 +1336,11 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
     }
 
     if (result == VK_SUCCESS && pCreateInfo != nullptr && pSwapchain != nullptr && *pSwapchain != VK_NULL_HANDLE &&
-        !State::Instance().vulkanSkipHooks)
+        !ScopedSkipVulkanHooks::Active())
         native::VkFrameSource::NoteSwapchain(device, *pSwapchain, localCreateInfo);
 
     if (result == VK_SUCCESS && device != VK_NULL_HANDLE && pCreateInfo != nullptr && *pSwapchain != VK_NULL_HANDLE &&
-        !State::Instance().vulkanSkipHooks)
+        !ScopedSkipVulkanHooks::Active())
     {
         State::Instance().screenWidth = static_cast<float>(pCreateInfo->imageExtent.width);
         State::Instance().screenHeight = static_cast<float>(pCreateInfo->imageExtent.height);

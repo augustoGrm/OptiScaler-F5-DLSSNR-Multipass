@@ -1,4 +1,4 @@
-#include "pch.h"
+﻿#include "pch.h"
 #include "menu_common.h"
 #include "MenuPages.h"
 #include <framegen/dlssg/MfgUnlock.h>
@@ -122,7 +122,7 @@ static int DlssgInterpolationCount(const State& state)
     const auto fg = state.currentFG;
 
     if (state.activeFgOutput == FGOutput::DLSSG && state.activeFgInput == FGInput::Upscaler && fg != nullptr &&
-        fg->IsActive() && !fg->IsPaused())
+        fg->IsGenerating())
     {
         return (int) fg->GetInterpolatedFrameCount();
     }
@@ -2201,8 +2201,8 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
             std::string thirdLine = "";
 
             auto fg = state.currentFG;
-            auto fgText = (fg != nullptr && fg->IsGenerating()) ? (" (" + std::string(fg->Name()) + ")")
-                                                                               : std::string();
+            auto fgText =
+                (fg != nullptr && fg->IsGenerating()) ? (" (" + std::string(fg->Name()) + ")") : std::string();
 
             const int fakeFramesCount = DlssgInterpolationCount(state);
             auto formatFg = [&](std::string_view name, int maxFakeFrames)
@@ -8653,10 +8653,11 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
 
     // Check for GPU support once and reuse the result in all menu sections.
     // DXVK might call Vulkan device creation, which would destroy our objects.
-    State::Instance().vulkanSkipHooks = true;
-    ctx.primaryGpu =
-        std::make_unique<std::decay_t<decltype(IdentifyGpu::getPrimaryGpu())>>(IdentifyGpu::getPrimaryGpu());
-    State::Instance().vulkanSkipHooks = false;
+    {
+        ScopedSkipVulkanHooks skipVulkanHooks {};
+        ctx.primaryGpu =
+            std::make_unique<std::decay_t<decltype(IdentifyGpu::getPrimaryGpu())>>(IdentifyGpu::getPrimaryGpu());
+    }
 
     // Overlay font
     if (config->UseHQFont.value_or_default())

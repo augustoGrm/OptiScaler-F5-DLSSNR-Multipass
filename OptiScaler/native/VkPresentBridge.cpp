@@ -139,7 +139,7 @@ bool FrameGenerationChosen()
 {
     auto& state = State::Instance();
 
-    if (state.vulkanSkipHooks)
+    if (ScopedSkipVulkanHooks::Active())
         return false;
 
     // A dxvk game's Vulkan swapchain is dxvk's, for its D3D11 one. Bridged only with NativeDxvkVulkan on, where it is

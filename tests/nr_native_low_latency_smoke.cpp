@@ -386,6 +386,16 @@ int main()
         CHECK(waitCalls == 0);
     }
 
+    // Frames shown per rendered one: 1 + generated only while frame generation generates (waiting for frame data or
+    // paused it shows the game's frames alone), so XeFG 3x and 4x divide the cap by 3 and 4, not by a fixed 2
+    CHECK(ShownPerRendered(true, 1) == 2);
+    CHECK(ShownPerRendered(true, 2) == 3);
+    CHECK(ShownPerRendered(true, 3) == 4);
+    CHECK(ShownPerRendered(false, 1) == 1);
+    CHECK(ShownPerRendered(false, 3) == 1);
+    CHECK(CapPerRenderedFrame(120.0f, ShownPerRendered(true, 3)) == 30.0f);
+    CHECK(CapPerRenderedFrame(50.0f, ShownPerRendered(false, 1)) == 50.0f);
+
     // The frame cap while we run (PlanCap): one waiter per frame
     {
         CapInputs cap;
