@@ -59,6 +59,30 @@ inline float PinnedWhitePoint(float paperWhiteNitsSetting, float nitsPerUnit)
     return PaperWhiteNits(paperWhiteNitsSetting) / nitsPerUnit;
 }
 
+// Vulkan only: when the game's own exposure image may be read live in the shader, as D3D12 reads it. The layout the game
+// leaves that image in is not known on Vulkan, so the host first reads it a few frames behind (the meter's courier,
+// through the same layout guess) and counts how often the value could be an exposure (finite, above zero -- the same test
+// the shader applies to its live texel, falling back to the host value when it fails). Live once 60 reads are in and 95%
+// held: a game whose image is not readable that way never gets past the host path.
+struct LiveGameGate
+{
+    static constexpr unsigned long long kMinReads = 60;
+    static constexpr unsigned long long kMinValidPercent = 95;
+
+    unsigned long long reads = 0;
+    unsigned long long valid = 0;
+
+    void Count(bool believed)
+    {
+        ++reads;
+        valid += believed ? 1u : 0u;
+    }
+
+    bool Trusted() const { return reads >= kMinReads && valid * 100 >= reads * kMinValidPercent; }
+
+    void Reset() { reads = valid = 0; }
+};
+
 // finishedPicture: the choice came from DlssNrColourEncoding::ResolveFinished (the screen), where Linear HDR is
 // scRGB, display light with 1.0 = 80 nits, rather than the scene light a DLSS evaluate hands over.
 inline State For(const DlssNrColourEncoding::Choice& choice, bool finishedPicture)

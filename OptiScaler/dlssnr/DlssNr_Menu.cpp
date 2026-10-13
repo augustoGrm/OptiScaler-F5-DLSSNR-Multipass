@@ -1816,6 +1816,12 @@ static void RenderExposureSection(Config* config, float menuResScale)
                 else
                     ImGui::TextDisabled("Calculating automatic exposure...");
             }
+            else if (source == 2 && vk)
+            {
+                // The scan watches D3D12 resource creation only; the Vulkan path resolves source 2 to Paper white.
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f),
+                                   "Scanned exposure is DirectX 12 only. Using Paper white.");
+            }
             else if (source == 2)
             {
                 // "Nothing found" and "found several, none of them moving" are different states,

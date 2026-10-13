@@ -305,75 +305,9 @@ RWTexture2D<float4> gKeep     : register(u1);  // encode: the untouched copy. un
 #endif
 SamplerState        gLinear   : register(s0);  // so the edit can be read at a different size
 
-// The Trim that applies at a given base white point (PreExposure / exposure): the slider, unless
-// anchors exist and preview is off, in which case the anchors' Trim is interpolated in log space
-// between the two that bracket the key, and held flat beyond the first and last.
-float ExposureTrimAnchorKey(uint index)
-{
-    if (index == 0) return gExposureTrimAnchorExposure0;
-    if (index == 1) return gExposureTrimAnchorExposure1;
-    if (index == 2) return gExposureTrimAnchorExposure2;
-    if (index == 3) return gExposureTrimAnchorExposure3;
-    if (index == 4) return gExposureTrimAnchorExposure4;
-    if (index == 5) return gExposureTrimAnchorExposure5;
-    if (index == 6) return gExposureTrimAnchorExposure6;
-    return gExposureTrimAnchorExposure7;
-}
-
-float ExposureTrimAnchorValue(uint index)
-{
-    if (index == 0) return gExposureTrimAnchorTrim0;
-    if (index == 1) return gExposureTrimAnchorTrim1;
-    if (index == 2) return gExposureTrimAnchorTrim2;
-    if (index == 3) return gExposureTrimAnchorTrim3;
-    if (index == 4) return gExposureTrimAnchorTrim4;
-    if (index == 5) return gExposureTrimAnchorTrim5;
-    if (index == 6) return gExposureTrimAnchorTrim6;
-    return gExposureTrimAnchorTrim7;
-}
-
-float EffectiveExposureTrim(float key)
-{
-    const float fallback = clamp(gExposureTrim, 0.25, 50.0);
-    const uint count = min(gExposureTrimAnchorCount, 8u);
-    if (gExposureTrimPreview != 0 || count == 0 || !isfinite(key) || key <= 1e-8)
-        return fallback;
-    if (count == 1)
-        return clamp(ExposureTrimAnchorValue(0), 0.25, 50.0);
-    const float firstKey = ExposureTrimAnchorKey(0);
-    const float lastKey = ExposureTrimAnchorKey(count - 1);
-    if (key <= firstKey)
-        return clamp(ExposureTrimAnchorValue(0), 0.25, 50.0);
-    if (key >= lastKey)
-        return clamp(ExposureTrimAnchorValue(count - 1), 0.25, 50.0);
-
-    // The loop is uniform: the exposure and the anchor table are the same for the whole dispatch.
-    [loop] for (uint i = 0; i < 7u; ++i)
-    {
-        if (i + 1 >= count)
-            break;
-        const float aKey = ExposureTrimAnchorKey(i);
-        const float bKey = ExposureTrimAnchorKey(i + 1);
-        if (key >= aKey && key <= bKey && bKey > aKey * 1.000001)
-        {
-            const float aTrim = max(ExposureTrimAnchorValue(i), 0.25);
-            const float bTrim = max(ExposureTrimAnchorValue(i + 1), 0.25);
-            const float t = (log(key) - log(aKey)) / (log(bKey) - log(aKey));
-            return clamp(exp(lerp(log(aTrim), log(bTrim), t)), 0.25, 50.0);
-        }
-    }
-    return clamp(ExposureTrimAnchorValue(count - 1), 0.25, 50.0);
-}
-
 // Where the live exposure is read from. D3D12 binds it at t4. Vulkan has no such descriptor, so it
 // travels in the motion slot: the encode and resolve have no use for motion vectors there, and the
 // meter's courier already borrows the same slot. Only ever bound when gUseExposureWhitePoint is set.
-// The live sample's base white point multiplier: the learned calibration while Automatic follows the game, else 1.
-float ExposureBaseScale()
-{
-    return (isfinite(gExposureBaseScale) && gExposureBaseScale > 0.0) ? gExposureBaseScale : 1.0;
-}
-
 float ExposureSample()
 {
 #ifdef VK_MODE
@@ -383,29 +317,7 @@ float ExposureSample()
 #endif
 }
 
-// The picture white point. Sources 0 (paper white) and 2 (scan) resolve it on the CPU and pass it in
-// gWhitePoint. Source 1 (the game's own exposure) and source 3 (automatic exposure) also pass a CPU
-// value in gWhitePoint as a fallback, but when their 1x1 exposure texture is bound the white point is
-// recomputed HERE from the live exposure -- PreExposure / exposure, times the Trim that applies at that
-// base white point -- which removes the 3-4 frame CPU-readback lag the meter path has. The clamp
-// matches the CPU path's [0.01, 4096]. Vulkan sets only gUseExposureWhitePoint: the game's own
-// exposure stays on the CPU there, because the layout its image is left in is not known.
-float WhitePoint()
-{
-    if (gUseGameExposure != 0 || gUseExposureWhitePoint != 0)
-    {
-        const float e = ExposureSample();
-        if (isfinite(e) && e > 1e-8 && e < 1e8)
-        {
-            const float preExposure =
-                (isfinite(gPreExposure) && gPreExposure > 1e-6) ? gPreExposure : 1.0;
-            const float baseWhitePoint = preExposure / e * ExposureBaseScale();
-            return clamp(baseWhitePoint * EffectiveExposureTrim(baseWhitePoint), 0.01, 4096.0);
-        }
-        // A missing or absurd sample falls through to the CPU value the meter path still maintains.
-    }
-    return max(gWhitePoint, 1e-4);
-}
+#include "dlssnr_whitepoint.hlsli"
 
 // What the debug views (model input, model output, edit) are multiplied by on their way into the game's buffer. The
 // game exposes and tone maps that buffer afterwards, so on a scene-referred frame the 0..1 pictures have to be put back

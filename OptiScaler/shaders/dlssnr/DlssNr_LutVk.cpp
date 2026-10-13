@@ -80,13 +80,14 @@ bool DlssNr_LutVk::Build()
         return false;
     };
 
-    // Bindings as dlssnr_lut.hlsl declares them under VK_MODE: constants, source, LUT, sampler, target. The texture and
-    // sampler are separate descriptors because the shader declares them separately.
-    VkDescriptorSetLayoutBinding bindings[5] {};
-    const VkDescriptorType types[5] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+    // Bindings as dlssnr_lut.hlsl declares them under VK_MODE: constants, source, LUT, sampler, target, and the live
+    // exposure the encode reads (the source again when there is none; the shader then does not read it). The texture
+    // and sampler are separate descriptors because the shader declares them separately.
+    VkDescriptorSetLayoutBinding bindings[6] {};
+    const VkDescriptorType types[6] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
                                         VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLER,
-                                        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE };
-    for (uint32_t i = 0; i < 5; ++i)
+                                        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE };
+    for (uint32_t i = 0; i < 6; ++i)
     {
         bindings[i].binding = i;
         bindings[i].descriptorType = types[i];
@@ -96,7 +97,7 @@ bool DlssNr_LutVk::Build()
 
     VkDescriptorSetLayoutCreateInfo layoutInfo {};
     layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    layoutInfo.bindingCount = 5;
+    layoutInfo.bindingCount = 6;
     layoutInfo.pBindings = bindings;
 
     if (vkCreateDescriptorSetLayout(_device, &layoutInfo, nullptr, &_setLayout) != VK_SUCCESS)
@@ -142,7 +143,7 @@ bool DlssNr_LutVk::Build()
 
     const VkDescriptorPoolSize poolSizes[] = {
         { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSlots },
-        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 2 * kSlots },
+        { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, 3 * kSlots },
         { VK_DESCRIPTOR_TYPE_SAMPLER, kSlots },
         { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, kSlots },
     };
@@ -369,7 +370,8 @@ bool DlssNr_LutVk::EnsureLutImage(VkCommandBuffer cmd, const float* rgb, int siz
 }
 
 bool DlssNr_LutVk::Dispatch(VkCommandBuffer cmd, VkImageView sourceView, VkImageLayout sourceLayout,
-                            VkImageView targetView, const DlssNrLutConstants& constants)
+                            VkImageView targetView, const DlssNrLutConstants& constants, VkImageView exposureView,
+                            VkImageLayout exposureLayout)
 {
     if (cmd == VK_NULL_HANDLE || sourceView == VK_NULL_HANDLE || targetView == VK_NULL_HANDLE ||
         _lutView == VK_NULL_HANDLE || !Build())
@@ -390,6 +392,9 @@ bool DlssNr_LutVk::Dispatch(VkCommandBuffer cmd, VkImageView sourceView, VkImage
     const VkDescriptorImageInfo lutInfo { VK_NULL_HANDLE, _lutView, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL };
     const VkDescriptorImageInfo samplerInfo { _sampler, VK_NULL_HANDLE, VK_IMAGE_LAYOUT_UNDEFINED };
     const VkDescriptorImageInfo targetInfo { VK_NULL_HANDLE, targetView, VK_IMAGE_LAYOUT_GENERAL };
+    const VkDescriptorImageInfo exposureInfo { VK_NULL_HANDLE,
+                                               exposureView != VK_NULL_HANDLE ? exposureView : sourceView,
+                                               exposureView != VK_NULL_HANDLE ? exposureLayout : sourceLayout };
 
     const VkWriteDescriptorSet writes[] = {
         { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, _sets[slot], 0, 0, 1, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
@@ -402,8 +407,10 @@ bool DlssNr_LutVk::Dispatch(VkCommandBuffer cmd, VkImageView sourceView, VkImage
           &samplerInfo, nullptr, nullptr },
         { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, _sets[slot], 4, 0, 1, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
           &targetInfo, nullptr, nullptr },
+        { VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, nullptr, _sets[slot], 5, 0, 1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+          &exposureInfo, nullptr, nullptr },
     };
-    vkUpdateDescriptorSets(_device, 5, writes, 0, nullptr);
+    vkUpdateDescriptorSets(_device, 6, writes, 0, nullptr);
 
     vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipeline);
     vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, _pipelineLayout, 0, 1, &_sets[slot], 0, nullptr);

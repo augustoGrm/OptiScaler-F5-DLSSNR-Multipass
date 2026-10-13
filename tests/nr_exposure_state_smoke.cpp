@@ -59,6 +59,27 @@ int main()
         CHECK(PaperWhiteNits(250.0f) == 250.0f);
     }
 
+    // Vulkan's live Game exposure gate: 60 reads, 95% believable.
+    {
+        DlssNrExposureState::LiveGameGate gate;
+        CHECK(!gate.Trusted());
+        for (int i = 0; i < 59; ++i)
+            gate.Count(true);
+        CHECK(!gate.Trusted()); // 59 reads
+        gate.Count(true);
+        CHECK(gate.Trusted()); // 60 of 60
+        for (int i = 0; i < 3; ++i)
+            gate.Count(false);
+        CHECK(gate.Trusted()); // 60 of 63 = 95.2%
+        gate.Count(false);
+        CHECK(!gate.Trusted()); // 60 of 64 = 93.8%
+        gate.Reset();
+        CHECK(!gate.Trusted() && gate.reads == 0);
+        for (int i = 0; i < 100; ++i)
+            gate.Count(i % 2 == 0);
+        CHECK(!gate.Trusted()); // a layout guess that half holds never goes live
+    }
+
     printf(fails == 0 ? "PASS\n" : "%d FAILED\n", fails);
     return fails == 0 ? 0 : 1;
 }
