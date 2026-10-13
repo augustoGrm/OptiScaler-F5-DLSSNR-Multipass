@@ -124,6 +124,9 @@ class IFGFeature
 
     bool IsActive();
     bool IsPaused();
+    // Generating frames now: active, not paused, and not stood down waiting for the game's next frame data (IsActive
+    // stays true while it waits, so frame generation is picked up again on the next frame)
+    bool IsGenerating();
     bool IsDispatched();
     bool IsLowResMV();
     bool IsAsync();

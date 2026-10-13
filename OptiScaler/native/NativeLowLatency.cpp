@@ -987,8 +987,9 @@ bool WantsBoostForFrameGeneration()
 bool XefgGenerating()
 {
     auto& state = State::Instance();
-    const bool fgGenerating =
-        state.currentFG != nullptr && state.currentFG->IsActive() && !state.currentFG->IsPaused();
+    // Not while it waits for the game's next frame data (FG only with no upscaler call feeding it): it shows only the
+    // game's frames then, and a cap counted in shown frames would halve the frame rate
+    const bool fgGenerating = state.currentFG != nullptr && state.currentFG->IsGenerating();
 
     // XeFG passes frames through in exclusive full screen (Intel); realExclusiveFullscreen is set after
     // FGXeFGForceBorderless had its say, so it means the real thing
