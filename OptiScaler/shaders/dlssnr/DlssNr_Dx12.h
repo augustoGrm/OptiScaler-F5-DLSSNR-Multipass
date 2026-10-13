@@ -19,6 +19,7 @@
 
 #include "DlssNr_Common.h"
 #include "DlssNr_DetailReuseConstants.h"
+#include "DlssNr_EditCacheConstants.h"
 #include "DlssNr_LutConstants.h"
 #include "DlssNr_Spatial.h"
 
@@ -39,12 +40,14 @@
 // persistent. Reuse detail between frames (DlssNr_DetailReuse.inl) adds up to four more on a full frame (compose,
 // estimate, steady, capture) and four on a reused one (estimate, fill, save motion, capture), which skips the clamps.
 // Compress screen edges (DlssNr_Spatial.inl) adds three (colour pack, depth + motion pack, unpack), and replaces Reuse
-// detail's, which does not run beside it.
-// Sixty-four slots leave four or more such frames before descriptor/constant reuse; many more passes leave fewer.
-#define DLSSNR_NUM_OF_HEAPS 64
+// detail's, which does not run beside it. The edit cache (DlssNr_EditCache.inl) adds seven on a cached frame (ring,
+// context, carry, three cell levels, apply) and up to five on a refresh (ring, compose, context, capture, a crossfade).
+// Ninety-six slots leave four or more such frames before descriptor/constant reuse; many more passes leave fewer.
+#define DLSSNR_NUM_OF_HEAPS 96
 
 // Goes through the same constant-buffer ring as DlssNrConstants.
 static_assert(sizeof(DlssNrDetailReuseConstants) == sizeof(DlssNrConstants));
+static_assert(sizeof(DlssNrEditCacheConstants) == sizeof(DlssNrConstants));
 static_assert(sizeof(DlssNr::Spatial::Constants) == sizeof(DlssNrConstants));
 
 class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
@@ -90,6 +93,8 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
     // failed to build.
     ID3D12PipelineState* _detailReusePipelineState = nullptr;
     bool _detailReusePipelineFailed = false;
+    ID3D12PipelineState* _editCachePipelineState = nullptr;
+    bool _editCachePipelineFailed = false;
 
     // Compress screen edges (dlssnr_spatial.hlsl): the colour pack / unpack and the depth + motion pack are two
     // pipelines of one shader, built on first use the same way. Not retried once they failed to build.
@@ -196,6 +201,14 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
                              unsigned int Width, unsigned int Height, ID3D12Resource* In0, ID3D12Resource* In1,
                              ID3D12Resource* In2, ID3D12Resource* In3, ID3D12Resource* In4, ID3D12Resource* OutTarget,
                              ID3D12Resource* OutSecond, ID3D12Resource* InHistoryDistrust = nullptr);
+
+    // The edit cache (dlssnr_edit_cache.hlsl, DlssNr_EditCache.inl). EditCacheReady builds the PSO on first use;
+    // DispatchEditCache is false (no-op) without it. Same descriptor table shape as DispatchPass (t0-t5, u0-u1); null
+    // inputs get In0 as a stand-in, a null OutSecond gets OutTarget. Dispatches Width x Height threads.
+    bool EditCacheReady();
+    bool DispatchEditCache(ID3D12GraphicsCommandList* InCmdList, const DlssNrEditCacheConstants& InConstants,
+                           unsigned int Width, unsigned int Height, ID3D12Resource* const (&In)[kSrvCount],
+                           ID3D12Resource* OutTarget, ID3D12Resource* OutSecond);
 
     // Compress screen edges (dlssnr_spatial.hlsl, DlssNr_Spatial.h). SpatialReady builds the pipelines on first use and
     // says whether there are any; DispatchSpatial is false (no-op) without them. Same descriptor table shape as

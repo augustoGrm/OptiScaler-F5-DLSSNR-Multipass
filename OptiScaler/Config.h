@@ -310,6 +310,13 @@ class Config
     // moved detail on the cut frame, and the model resets when the answer arrives, a few frames later). 1 by default
     // until in-game counts show how often games leave cuts unflagged and that nothing else reads as one.
     CustomOptional<uint32_t> DlssNrSceneCut { 1 };
+    // Edit cache (dlssnr/DlssNrEditCache.h, shaders/dlssnr/DlssNr_EditCache.inl): run the model one frame in N and show
+    // its last answer, carried along the game's vectors, in between. D3D12, NR after SR only; not together with
+    // DetailReuse (the menu's Reuse detail offers one or the other). Experimental, off by default.
+    CustomOptional<bool> DlssNrEditCache { false };
+    CustomOptional<uint32_t> DlssNrEditCacheInterval { 4 };  // the model every N frames, 2..8
+    CustomOptional<uint32_t> DlssNrEditCacheCrossfade { 5 }; // frames a refresh takes to reach the new answer, 1..8
+    CustomOptional<uint32_t> DlssNrEditCacheDebug { 0 };     // 1: dropped pixels red, 2: the edit's age
     CustomOptional<bool> DlssNrResidualFgApproxCamera { false }; // forced off, as DlssNrResidualFg
     // Toggles the pass in game. Unbound by default -- a key that does something unexpected is worse
     // than one that does nothing.

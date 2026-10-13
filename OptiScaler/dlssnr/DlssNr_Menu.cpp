@@ -1411,16 +1411,58 @@ static void EdgeCompressionDrawText(const EdgeCompressionLine& line)
     ImGui::PopStyleColor();
 }
 
-// The "Reuse detail between frames" checkbox and its help, on the NR Options page; the Optical F5Low page shows its
-// state and links here. Returns whether it is on.
+// "Reuse detail" on the NR Options page: off, every other frame (DetailReuse) or the edit cache (every N frames,
+// EditCache); the two never run together. The Optical F5Low page shows the state and links here. Returns whether
+// every other frame is on (its fine-tuning follows on the page).
 static bool RenderDetailReuseToggle(Config* config)
 {
     bool detailReuse = config->DlssNrDetailReuse.value_or_default();
-    if (ImGui::Checkbox("Reuse detail between frames (experimental)", &detailReuse))
+    bool editCache = !detailReuse && config->DlssNrEditCache.value_or_default();
+    int choice = detailReuse ? 1 : editCache ? 2 : 0;
+    const char* choices[] = { "Off", "Every other frame", "Edit cache (every N frames)" };
+    if (ImGui::Combo("Reuse detail (experimental)", &choice, choices, IM_ARRAYSIZE(choices)))
+    {
+        detailReuse = choice == 1;
+        editCache = choice == 2;
         config->DlssNrDetailReuse = detailReuse;
-    HelpMarker("Runs the model every other frame and moves its last result onto the frame between. About halves NR's "
-               "GPU cost. Detail can pop where things move or appear; best with 1 pass. Not with NR before SR. "
-               "Fine-tune under Debug.");
+        config->DlssNrEditCache = editCache;
+    }
+    HelpMarker("Runs the model on fewer frames and carries its last result onto the frames between, for a lower NR GPU "
+               "cost.\nEvery other frame: moves the last result's detail; detail can pop where things move or appear; "
+               "best with 1 pass. Not with NR before SR. Fine-tune under Debug.\nEdit cache: runs the model every N "
+               "frames and carries its whole edit along the game's motion, dropping it where the picture changed "
+               "under it. D3D12 games, NR after the upscaler.");
+
+    if (editCache)
+    {
+        if (DlssNr::IsRunningVk())
+            ImGui::TextDisabled("Edit cache: D3D12 games only for now");
+
+        int interval = (int) std::clamp(config->DlssNrEditCacheInterval.value_or_default(), 2u, 8u);
+        if (ImGui::SliderInt("Model every N frames", &interval, 2, 8))
+            config->DlssNrEditCacheInterval = (uint32_t) interval;
+        HelpMarker("How often the model runs. Longer saves more GPU time; things moving fast hold the model's last "
+                   "result longer.");
+
+        int crossfade = (int) std::clamp(config->DlssNrEditCacheCrossfade.value_or_default(), 1u, 8u);
+        if (ImGui::SliderInt("Crossfade (frames)", &crossfade, 1, 8))
+            config->DlssNrEditCacheCrossfade = (uint32_t) crossfade;
+        HelpMarker("Frames a new result takes to fade in. 1: at once (the light can pulse each time the model runs); "
+                   "longer: smoother, but a change takes longer to show.");
+
+        int view = (int) std::min(config->DlssNrEditCacheDebug.value_or_default(), 2u);
+        const char* views[] = { "Off", "Dropped pixels (red)", "Age of the result" };
+        if (ImGui::Combo("Edit cache view", &view, views, IM_ARRAYSIZE(views)))
+            config->DlssNrEditCacheDebug = (uint32_t) view;
+
+        const DlssNr::EditCacheInfo status = DlssNr::EditCacheStatus();
+        if (status.running)
+            ImGui::Text("Edit cache: on, the model ran on %.0f%% of frames", status.modelShare * 100.0f);
+        else if (status.standsAside != nullptr)
+            ImGui::TextWrapped("Edit cache: every frame runs the model (%s)", status.standsAside);
+        else
+            ImGui::TextDisabled("Edit cache: not running yet");
+    }
     return detailReuse;
 }
 

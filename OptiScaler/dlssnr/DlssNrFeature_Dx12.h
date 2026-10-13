@@ -289,6 +289,17 @@ struct DetailReuseInfo
 };
 DetailReuseInfo DetailReuseStatus();
 
+// The edit cache (DlssNr_EditCache.inl), published at every evaluate so the menu never waits: running on the last
+// NR frame, the share of frames the model ran on (over the last second), and why it stands aside (null while it
+// runs or is off).
+struct EditCacheInfo
+{
+    bool running = false;
+    float modelShare = 0.0f;
+    const char* standsAside = nullptr;
+};
+EditCacheInfo EditCacheStatus();
+
 // Scene cuts the game does not flag (dlssnr/DlssNrSceneCut.h), on D3D12 game input: cuts the detector found since the
 // game started, how many the game flagged too, how many it did not, and the model resets made for those (SceneCut=2).
 // lateBy: how many evaluates after its frame the last answer arrived. running: the detector ran on the last NR
