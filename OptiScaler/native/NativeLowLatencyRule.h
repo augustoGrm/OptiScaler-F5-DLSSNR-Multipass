@@ -779,6 +779,14 @@ struct CapInputs
     uint32_t shownPerRendered = 1;   // frames XeFG shows per frame the game renders (1 + generated); 1 when it generates none
 };
 
+// Frames shown per frame the game renders: 1 + the generated ones, but only while frame generation generates. Stood
+// down waiting for frame data (FG only with no upscaler call feeding it) it shows the game's frames alone, so the cap
+// must not be divided by frames it does not make (IFGFeature::IsGenerating, not IsActive).
+inline uint32_t ShownPerRendered(bool generating, uint32_t interpolated)
+{
+    return generating ? 1 + interpolated : 1;
+}
+
 // A cap on shown frames, as a cap on the game's own (rendered) frames
 inline float CapPerRenderedFrame(float capFps, uint32_t shownPerRendered)
 {
