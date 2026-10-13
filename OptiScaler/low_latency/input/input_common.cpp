@@ -444,6 +444,16 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
             apply_sleep_mode(current_tech.get()); // Restore any potential sleep mode
     }
 
+    // The game's Reflex is delivered by ReflexHooks' router (routed_input): an output another input started (the UE
+    // mod's) stops, and none starts while it is the active input
+    if (routed_input(activeInput) && !mode.has_value())
+    {
+        if (currently_active_tech.load() != nullptr)
+            stop_output();
+
+        return true;
+    }
+
     // The output runs on the active input's device, another API's device can't start it. OptiScaler's frame
     // generation asks for its output with its own device.
     if (auto inputApi = input_api[static_cast<size_t>(activeInput)].load();
