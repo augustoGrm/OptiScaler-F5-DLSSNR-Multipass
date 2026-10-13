@@ -3,6 +3,7 @@
 #include "VkPresentBridge.h"
 #include "VkPresentBridgeCore.h"
 #include "VkDeviceRules.h"
+#include "VkHiddenSurfaceRule.h"
 #include "VkOutputFailureRule.h"
 #include "VkPresentCopyRule.h"
 
@@ -634,20 +635,30 @@ bool OnCreateSwapchain(VkInstance instance, VkPhysicalDevice physical, VkDevice 
         g_bridge = std::move(bridge);
     }
 
-    bool patched = g_bridge->core.Patch(in, out, why);
-
     // The hidden surface can stop answering while the bridge waits for the game's next swapchain (Batman: Arkham Knight on
     // dxvk, after it left exclusive full screen and dxvk set the display modes back): with no game swapchain on it, a new
-    // hidden window and surface are made and the swapchain is tried once more, the D3D12 swapchain kept.
-    if (!patched && g_bridge->swapchains.empty())
-    {
-        std::string remade;
-        LOG_INFO("Vulkan bridge: {}; making the hidden window and surface again", why);
+    // hidden window and surface are made and the swapchain is tried once more, the D3D12 swapchain kept
+    // (native/VkHiddenSurfaceRule.h).
+    bool patched = false;
+    bool remade = false;
 
-        if (g_bridge->core.RemakeSurface(remade))
-            patched = g_bridge->core.Patch(in, out, why);
-        else
-            why += "; making them again failed: " + remade;
+    for (;;)
+    {
+        patched = g_bridge->core.Patch(in, out, why);
+
+        if (native::OnHiddenSurfacePatch(patched, !g_bridge->swapchains.empty(), remade) !=
+            native::HiddenSurfaceStep::Remake)
+            break;
+
+        std::string remakeWhy;
+        LOG_INFO("Vulkan bridge: {}; making the hidden window and surface again", why);
+        remade = true;
+
+        if (!g_bridge->core.RemakeSurface(remakeWhy))
+        {
+            why += "; making them again failed: " + remakeWhy;
+            break;
+        }
     }
 
     if (!patched)
@@ -1003,6 +1014,10 @@ void PresentOutput()
             failures = g_bridge->outputRule.Failures();
         }
     }
+
+    // This present's own reference goes before giving up: retiring has frame generation destroy its swapchain, and XeFG
+    // wants every reference to it gone by then (as the bridge core's own, LetGoOfOutput)
+    output.Reset();
 
     if (giveUp)
     {

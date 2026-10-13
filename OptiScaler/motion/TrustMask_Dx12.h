@@ -71,6 +71,7 @@ class TrustMaskDx12
     void Reset()
     {
         _haveHistory = false;
+        _depthBoth = false;
         _share = -1.0f;
 
         for (auto& frame : _readbackFrame)

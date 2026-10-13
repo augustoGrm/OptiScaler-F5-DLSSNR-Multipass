@@ -34,6 +34,8 @@ Texture2D<float4> Flow : register(t0);
 Texture2D<float4> FlowBefore : register(t1);
 Texture2D<float>  DepthNow : register(t2);
 Texture2D<float>  DepthBefore : register(t3);
+Texture2D<float>  GuideRawDepth : register(t2); // GuideMotion's t2: the guide depth at the picture's size, raw
+Texture2D<float>  GuideProxy : register(t3);    // GuideMotion's t3: this frame's depth proxy at the flow's size
 Texture2D<float>  LumaNow : register(t4);
 Texture2D<float>  LumaBefore : register(t5);
 Texture2D<float>  MaskBefore : register(t6);
@@ -328,8 +330,8 @@ void Uncover(uint3 id : SV_DispatchThreadID)
 // A flow texel covers 2x2 picture pixels, and a plain bilinear read mixes the motion of the texels around a pixel: at
 // the outline of a thing that moves differently from what is behind it, a band of pixels gets a motion between the two,
 // which a frame generator draws as a see-through or haloed edge. With guideSurface each of the four texels counts by
-// its bilinear weight and by how near its depth (DepthBefore, t3: this frame's depth proxy at the flow's size) is to
-// this pixel's (DepthNow, t2: the guide depth at the picture's size, raw), measured against the nearest of the four, so
+// its bilinear weight and by how near its depth (GuideProxy, t3: this frame's depth proxy at the flow's size) is to
+// this pixel's (GuideRawDepth, t2: the guide depth at the picture's size, raw), measured against the nearest of the four, so
 // the pixel takes its own surface's motion and a pixel whose surface no texel has takes the nearest surface's (joint
 // bilateral upsampling).
 [numthreads(8, 8, 1)]
@@ -351,7 +353,7 @@ void GuideMotion(uint3 id : SV_DispatchThreadID)
     const int2 flowHi = int2(flowWidth, flowHeight) - 1;
 
     // This pixel's distance, as the depth proxy has it (larger is farther).
-    const float raw = DepthNow.Load(int3(id.xy, 0));
+    const float raw = GuideRawDepth.Load(int3(id.xy, 0));
     const float here = min(1.0 / max(reversed != 0 ? raw : 1.0 - raw, 1e-6), 1e6);
 
     const float2 f = uv * float2(flowWidth, flowHeight) - 0.5;
@@ -366,7 +368,7 @@ void GuideMotion(uint3 id : SV_DispatchThreadID)
     {
         const int2 o = int2(k & 1, k >> 1);
         const int2 q = clamp(f0 + o, 0, flowHi);
-        const float z = DepthBefore.Load(int3(q, 0));
+        const float z = GuideProxy.Load(int3(q, 0));
         const float rel = abs(z - here) / max(min(z, here), 1e-6);
 
         motion[k] = Flow.Load(int3(q, 0)).xy;

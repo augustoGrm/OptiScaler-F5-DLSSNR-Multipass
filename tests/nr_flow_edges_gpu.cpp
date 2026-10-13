@@ -9,14 +9,16 @@
 //            under the disc): no match can find it, but its motion is the background's, which is what a frame
 //            generator needs there (the background is what fills it)
 //   inner    inside, more than 8 pixels in; far: outside, more than 16 pixels out
-// Each is the share of pixels within 1 pixel of the truth, and the mean error in pixels.
+// Each is the share of pixels within 1 pixel of the truth, and the mean error in pixels. "steady": the share of outline
+// pixels (fore and back) whose guide changed by at most 1 pixel from the frame before (the truth does not change).
 //
 //   vcvars64, then from the repo root:
 //   cl /std:c++20 /EHsc /O2 tests\nr_flow_edges_gpu.cpp OptiScaler\motion\OpticalFlow_Dx12.cpp
 //   OptiScaler\motion\SceneCut_Dx12.cpp OptiScaler\motion\TrustMask_Dx12.cpp d3d12.lib dxgi.lib d3dcompiler.lib
 //
-// Modes: no argument runs every case and prints the tallies and a SUMMARY line; "perf" times BuildGuides at 2560x1440
-// on the GPU. Settings as key=value after the mode (see main).
+// Modes: no argument is the check: every case under the default settings, with and without depth, a normal depth
+// buffer, a jittered depth and plain enlarging, held to limits (exit 1 on a miss). Settings as key=value (see main) run
+// only those, with and without depth, and print the tallies. "perf" times BuildGuides at 2560x1440 on the GPU.
 
 #define NOMINMAX
 #define WIN32_LEAN_AND_MEAN
@@ -304,10 +306,10 @@ enum Band
 };
 const char* kBandNames[kBands] = { "fore", "back", "reveal", "inner", "far" };
 
-// Which band a point (picture pixels) is in on the scored frame, or -1.
-int BandOf(const Case& c, float x, float y)
+// Which band a point (picture pixels) is in on `frame`, or -1.
+int BandOf(const Case& c, float x, float y, int frame = kFrames - 1)
 {
-    const Disc now = DiscAt(c, kFrames - 1), before = DiscAt(c, kFrames - 2);
+    const Disc now = DiscAt(c, frame), before = DiscAt(c, frame - 1);
     const float r = std::hypot(x - now.cx, y - now.cy);
     if (r < now.r)
         return now.r - r <= 4.0f ? kFore : now.r - r > 8.0f ? kInner : -1;
@@ -327,6 +329,10 @@ struct Settings
     float reach = -1; // ... gathered from this far (-1: its default)
     float jitter = 0; // the depth's disc is this many pixels off the colour's, alternating left and right per frame
                       // (a game that jitters its picture for anti-aliasing)
+    bool reversed = true; // reversed-Z depth (near is 1); false: a normal depth buffer (near is 0)
+
+    // The guide is the flow's plain bilinear enlarging: no depth, or both depth steps off.
+    bool Bilinear() const { return !depth || (surface == 0 && uncover == 0); }
 };
 
 void Apply(const Settings& s, OpticalFlowDx12& flow, TrustMaskDx12& trust)
@@ -345,7 +351,28 @@ struct Result
 {
     Tally guide[kBands];
     Tally flow[kBands];
+    Tally steady;            // outline pixels (fore and back, the same band both frames): the guide's change from the
+                             // frame before, whose truth is none (a jittered depth must not make the outline flicker)
+    double bilinearOff = -1; // largest distance (pixels) of the guide from a bilinear enlarging of the flow, when the
+                             // guide should be exactly that (Settings::Bilinear); -1: not checked
 };
+
+// The flow (fw x fh, x y pairs) enlarged to the picture by a clamp-to-edge bilinear read at pixel centres.
+void BilinearAt(const std::vector<float>& flow, uint32_t fw, uint32_t fh, uint32_t x, uint32_t y, float* out)
+{
+    const float fx = ((float) x + 0.5f) / kWidth * fw - 0.5f, fy = ((float) y + 0.5f) / kHeight * fh - 0.5f;
+    const int x0 = (int) std::floor(fx), y0 = (int) std::floor(fy);
+    const float tx = fx - x0, ty = fy - y0;
+    auto at = [&](int ix, int iy, int ch)
+    {
+        ix = std::clamp(ix, 0, (int) fw - 1);
+        iy = std::clamp(iy, 0, (int) fh - 1);
+        return flow[((size_t) iy * fw + ix) * 2 + ch];
+    };
+    for (int ch = 0; ch < 2; ++ch)
+        out[ch] = (at(x0, y0, ch) * (1 - tx) + at(x0 + 1, y0, ch) * tx) * (1 - ty) +
+                  (at(x0, y0 + 1, ch) * (1 - tx) + at(x0 + 1, y0 + 1, ch) * tx) * ty;
+}
 
 Result Run(Gpu& gpu, const Case& c, const Settings& settings)
 {
@@ -359,6 +386,7 @@ Result Run(Gpu& gpu, const Case& c, const Settings& settings)
         exit(1);
     }
     Apply(settings, flow, trust);
+    std::vector<float> previousGuide;
 
     for (int frame = 0; frame < kFrames; ++frame)
     {
@@ -388,14 +416,15 @@ Result Run(Gpu& gpu, const Case& c, const Settings& settings)
                                [&](uint32_t x, uint32_t y, uint8_t* px)
                                {
                                    const float shift = (frame & 1) != 0 ? settings.jitter : -settings.jitter;
-                                   const float d =
+                                   const float nearness =
                                        0.1f / (Inside(disc, (float) x + 0.5f - shift, (float) y + 0.5f) ? 5.0f : 20.0f);
+                                   const float d = settings.reversed ? nearness : 1.0f - nearness;
                                    memcpy(px, &d, 4);
                                },
                                keep);
 
         flow.Dispatch(gpu.list.Get(), colour.Get(), DXGI_FORMAT_R8G8B8A8_UNORM, depth.Get(),
-                      settings.depth ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_UNKNOWN, true);
+                      settings.depth ? DXGI_FORMAT_R32_FLOAT : DXGI_FORMAT_UNKNOWN, settings.reversed);
 
         bool built = false;
         if (flow.FlowValid())
@@ -416,7 +445,7 @@ Result Run(Gpu& gpu, const Case& c, const Settings& settings)
                 in.depthFormat = DXGI_FORMAT_R32_FLOAT;
                 in.depthWidth = kWidth;
                 in.depthHeight = kHeight;
-                in.depthReversed = true;
+                in.depthReversed = settings.reversed;
             }
 
             if (trust.Dispatch(gpu.list.Get(), in))
@@ -425,19 +454,35 @@ Result Run(Gpu& gpu, const Case& c, const Settings& settings)
 
         gpu.Submit();
 
-        if (frame != kFrames - 1)
+        if (frame < kFrames - 2)
             continue;
 
         if (!built)
         {
-            printf("%s: no guide on the scored frame\n", c.name);
+            printf("%s: no guide on frame %d\n", c.name, frame);
             exit(1);
+        }
+
+        const auto guide = gpu.ReadMotion(trust.GuideMotion(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+
+        if (frame == kFrames - 2)
+        {
+            previousGuide = guide;
+            continue;
         }
 
         // The flow points from here to where the content was: minus its motion.
         const float bgX = -c.cameraX, bgY = -c.cameraY, fgX = -c.objectX, fgY = -c.objectY;
 
-        const auto guide = gpu.ReadMotion(trust.GuideMotion(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        for (uint32_t y = 0; y < kHeight; ++y)
+            for (uint32_t x = 0; x < kWidth; ++x)
+            {
+                const int band = BandOf(c, x + 0.5f, y + 0.5f);
+                if ((band != kFore && band != kBack) || BandOf(c, x + 0.5f, y + 0.5f, kFrames - 2) != band)
+                    continue;
+                const size_t i = ((size_t) y * kWidth + x) * 2;
+                result.steady.Add(guide[i] - previousGuide[i], guide[i + 1] - previousGuide[i + 1]);
+            }
         for (uint32_t y = 0; y < kHeight; ++y)
             for (uint32_t x = 0; x < kWidth; ++x)
             {
@@ -453,6 +498,20 @@ Result Run(Gpu& gpu, const Case& c, const Settings& settings)
                                                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
         const uint32_t fw = flow.FlowWidth(), fh = flow.FlowHeight();
         const float per = (float) kWidth / fw;
+
+        if (settings.Bilinear())
+        {
+            result.bilinearOff = 0;
+            for (uint32_t y = 0; y < kHeight; ++y)
+                for (uint32_t x = 0; x < kWidth; ++x)
+                {
+                    float b[2];
+                    BilinearAt(half, fw, fh, x, y, b);
+                    const size_t i = ((size_t) y * kWidth + x) * 2;
+                    result.bilinearOff =
+                        std::max(result.bilinearOff, (double) std::hypot(guide[i] - b[0], guide[i + 1] - b[1]));
+                }
+        }
 
         // EDGE_ROW=1: the flow's x along the row through the disc's centre, across its right edge (for a look).
         if (getenv("EDGE_ROW") != nullptr)
@@ -630,23 +689,62 @@ int main(int argc, char** argv)
         { "alike   r60 ", 18, 4, 0, 0, 60, false },   { "alikeX  r60 ", 6, 0, -10, 4, 60, false },
     };
 
-    Tally sumGuide[2][kBands], sumFlow[2][kBands];
-
-    for (int withDepth = 1; withDepth >= 0; --withDepth)
+    // With no argument, the check: the default settings with and without depth, a normal depth buffer, a jittered depth,
+    // and both depth steps off (plain enlarging) for comparison, each held to the limits below. With settings given,
+    // only those, with and without depth (depth=0/1 picks one), and no limits.
+    struct Series
     {
-        if ((withDepth && onlyNoDepth) || (!withDepth && onlyDepth))
-            continue;
+        const char* label;
+        Settings settings;
+        Tally guide[kBands], flow[kBands];
+        Tally steady;
+        double bilinearOff = -1;
+    };
+    std::vector<Series> series;
+    const bool check = argc == 1;
 
-        settings.depth = withDepth != 0;
-        printf("%s depth            guide (picture size): share within 1 px / mean error       | half-res flow\n",
-               withDepth ? "with" : "no  ");
+    auto add = [&](const char* label, auto change)
+    {
+        Series s { label, settings };
+        change(s.settings);
+        series.push_back(s);
+    };
+
+    if (check)
+    {
+        add("depth", [](Settings&) {});
+        add("no depth", [](Settings& s) { s.depth = false; });
+        add("depth, normal Z", [](Settings& s) { s.reversed = false; });
+        add("depth, plain", [](Settings& s) { s.surface = s.uncover = 0; });
+        add("depth, jitter 1", [](Settings& s) { s.jitter = 1; });
+        add("depth, jitter 1, plain",
+            [](Settings& s)
+            {
+                s.jitter = 1;
+                s.surface = s.uncover = 0;
+            });
+    }
+    else
+    {
+        if (!onlyNoDepth)
+            add("depth", [](Settings&) {});
+        if (!onlyDepth)
+            add("no depth", [](Settings& s) { s.depth = false; });
+    }
+
+    for (Series& s : series)
+    {
+        printf("%-22s guide (picture size): share within 1 px / mean error, steady | half-res flow\n", s.label);
 
         for (const Case& c : cases)
         {
-            const Result r = Run(gpu, c, settings);
+            const Result r = Run(gpu, c, s.settings);
             printf("  %s", c.name);
             for (int b = 0; b < kBands; ++b)
                 printf("  %s %.3f/%.2f", kBandNames[b], r.guide[b].Share(), r.guide[b].Mean());
+            printf("  steady %.3f", r.steady.Share());
+            if (r.bilinearOff >= 0)
+                printf("  bilinear off %.3f", r.bilinearOff);
             printf("  |");
             for (int b = 0; b < kBands; ++b)
                 printf(" %.3f", r.flow[b].Share());
@@ -658,32 +756,79 @@ int main(int argc, char** argv)
                 // (nothing is uncovered where the disc stands still) does not count.
                 if (r.guide[b].n == 0)
                     continue;
-                sumGuide[withDepth][b].within += r.guide[b].Share();
-                sumGuide[withDepth][b].error += r.guide[b].Mean();
-                ++sumGuide[withDepth][b].n;
-                sumFlow[withDepth][b].within += r.flow[b].Share();
-                ++sumFlow[withDepth][b].n;
+                s.guide[b].within += r.guide[b].Share();
+                s.guide[b].error += r.guide[b].Mean();
+                ++s.guide[b].n;
+                s.flow[b].within += r.flow[b].Share();
+                ++s.flow[b].n;
             }
+            s.steady.within += r.steady.Share();
+            ++s.steady.n;
+            s.bilinearOff = std::max(s.bilinearOff, r.bilinearOff);
         }
     }
 
-    printf("SUMMARY");
-    for (int withDepth = 1; withDepth >= 0; --withDepth)
+    for (const Series& s : series)
     {
-        if (sumGuide[withDepth][0].n == 0)
-            continue;
+        printf("SUMMARY %-22s", s.label);
         for (int b = 0; b < kBands; ++b)
-            printf(" %s%s %.3f/%.2f", withDepth ? "d." : "n.", kBandNames[b], sumGuide[withDepth][b].Share(),
-                   sumGuide[withDepth][b].Mean());
+            printf(" %s %.3f/%.2f", kBandNames[b], s.guide[b].Share(), s.guide[b].Mean());
+        printf(" steady %.3f", s.steady.Share());
+        if (s.bilinearOff >= 0)
+            printf(" bilinear off %.3f", s.bilinearOff);
+        printf(" | flow");
+        for (int b = 0; b < kBands; ++b)
+            printf(" %.3f", s.flow[b].Share());
+        printf("\n");
     }
-    printf("\nSUMMARY-FLOW");
-    for (int withDepth = 1; withDepth >= 0; --withDepth)
+
+    if (!check)
+        return 0;
+
+    // The limits, a margin under what the steps reach (2026-10-13: depth fore 0.975, back 0.982, reveal 0.957).
+    int fails = 0;
+    auto expect = [&](bool ok, const char* what, double value, double limit)
     {
-        if (sumFlow[withDepth][0].n == 0)
-            continue;
-        for (int b = 0; b < kBands; ++b)
-            printf(" %s%s %.3f", withDepth ? "d." : "n.", kBandNames[b], sumFlow[withDepth][b].Share());
-    }
-    printf("\n");
-    return 0;
+        if (!ok)
+        {
+            printf("FAIL %s: %.3f, limit %.3f\n", what, value, limit);
+            ++fails;
+        }
+    };
+    const Series &depth = series[0], &none = series[1], &normalZ = series[2], &plain = series[3],
+                 &jitter = series[4], &jitterPlain = series[5];
+
+    expect(depth.guide[kFore].Share() >= 0.95, "depth: inside the outline", depth.guide[kFore].Share(), 0.95);
+    expect(depth.guide[kBack].Share() >= 0.95, "depth: beside the outline", depth.guide[kBack].Share(), 0.95);
+    expect(depth.guide[kReveal].Share() >= 0.90, "depth: uncovered", depth.guide[kReveal].Share(), 0.90);
+
+    // Away from the outline the steps change nothing.
+    for (int b : { kInner, kFar })
+        expect(std::abs(depth.guide[b].Share() - plain.guide[b].Share()) <= 0.01,
+               b == kInner ? "depth: inner, against plain" : "depth: far, against plain", depth.guide[b].Share(),
+               plain.guide[b].Share());
+
+    // A normal depth buffer reads the same as reversed-Z.
+    for (int b : { kFore, kBack, kReveal })
+        expect(std::abs(normalZ.guide[b].Share() - depth.guide[b].Share()) <= 0.01, "normal Z against reversed-Z",
+               normalZ.guide[b].Share(), depth.guide[b].Share());
+
+    // Without depth, or with both steps off, the guide is the plain bilinear enlarging it always was. The GPU's sampler
+    // weighs with a few fractional bits: between texels 34 pixels of motion apart (turnFast) that is 0.125 px off.
+    expect(none.bilinearOff >= 0 && none.bilinearOff <= 0.25, "no depth: off a bilinear enlarging (px)",
+           none.bilinearOff, 0.25);
+    expect(plain.bilinearOff >= 0 && plain.bilinearOff <= 0.25, "both steps off: off a bilinear enlarging (px)",
+           plain.bilinearOff, 0.25);
+
+    // A depth jittered by a pixel each frame (a game's anti-aliasing): the steps still help, and the outline is no less
+    // steady from frame to frame than with plain enlarging.
+    expect(jitter.guide[kFore].Share() >= jitterPlain.guide[kFore].Share(), "jitter: inside, against plain",
+           jitter.guide[kFore].Share(), jitterPlain.guide[kFore].Share());
+    expect(jitter.guide[kBack].Share() >= jitterPlain.guide[kBack].Share(), "jitter: beside, against plain",
+           jitter.guide[kBack].Share(), jitterPlain.guide[kBack].Share());
+    expect(jitter.steady.Share() >= jitterPlain.steady.Share() - 0.01, "jitter: outline steadiness, against plain",
+           jitter.steady.Share(), jitterPlain.steady.Share() - 0.01);
+
+    printf(fails == 0 ? "PASS\n" : "FAILED (%d)\n", fails);
+    return fails == 0 ? 0 : 1;
 }

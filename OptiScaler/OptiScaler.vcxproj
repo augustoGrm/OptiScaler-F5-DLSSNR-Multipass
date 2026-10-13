@@ -556,6 +556,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="native\PresentStageTiming.h" />
     <ClInclude Include="native\VkDeviceRules.h" />
     <ClInclude Include="native\VkOutputFailureRule.h" />
+    <ClInclude Include="native\VkHiddenSurfaceRule.h" />
     <ClInclude Include="native\VkPresentCopyRule.h" />
     <ClInclude Include="LogAsyncRule.h" />
     <ClInclude Include="motion\OpticalFlow_Hlsl.h" />

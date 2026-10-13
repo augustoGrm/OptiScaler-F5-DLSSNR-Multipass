@@ -548,6 +548,9 @@
     <ClInclude Include="native\VkOutputFailureRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="native\VkHiddenSurfaceRule.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="native\VkPresentCopyRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
