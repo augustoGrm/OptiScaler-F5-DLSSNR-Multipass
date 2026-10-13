@@ -58,7 +58,7 @@ bool InputCommon::deinit_current_tech()
 
         old_tech->deinit();
 
-        std::memset(frame_reports, 0, sizeof(frame_reports));
+        clear_reports();
 
         return true;
     }
@@ -114,7 +114,7 @@ bool InputCommon::init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMo
         if (!isInitialized && desiredMode != LowLatencyMode::LatencyFlex)
         {
             failed_output = desiredMode;
-            failed_time = std::chrono::steady_clock::now();
+            failed_time = std::chrono::steady_clock::now().time_since_epoch().count();
             isInitialized = try_init(std::make_shared<LatencyFlex>(), "LatencyFlex (Fallback)");
             if (isInitialized)
             {
@@ -244,7 +244,7 @@ API InputCommon::register_call(const InputContext& inputContext, IUnknown* pDevi
         if (api != API::NotSelected)
             input_api[static_cast<size_t>(inputContext.caller)] = api;
 
-        avaliableInputs.set(inputContext.caller);
+        available_inputs.fetch_or(1u << static_cast<uint32_t>(inputContext.caller), std::memory_order_relaxed);
     }
 
     return api;
@@ -254,7 +254,7 @@ API InputCommon::uses_api()
 {
     if (activeInput != LowLatencyInput::None)
     {
-        if (auto api = input_api[static_cast<size_t>(activeInput)].load(); api != API::NotSelected)
+        if (auto api = input_api[static_cast<size_t>(activeInput.load())].load(); api != API::NotSelected)
             return api;
     }
 
@@ -296,34 +296,34 @@ LowLatencyInput InputCommon::default_input()
     // With the XeFG input the game's own low latency for its frame generation is XeLL, Reflex markers it also sends
     // belong to its other paths. A game that turns XeLL off uses another frame generation, The Witcher 3 its DLSSG
     // with Reflex.
-    if (State::Instance().activeFgInput == FGInput::XeFG && avaliableInputs[LowLatencyInput::XeLL] &&
+    if (State::Instance().activeFgInput == FGInput::XeFG && available(LowLatencyInput::XeLL) &&
         get_sleep_copy(LowLatencyInput::XeLL).low_latency_enabled)
     {
         return LowLatencyInput::XeLL;
     }
 
     // The game's FSR-FG only reports its generated frames through AntiLag 2
-    if (avaliableInputs[LowLatencyInput::AntiLag2] && reports_frame_generation(LowLatencyInput::AntiLag2))
+    if (available(LowLatencyInput::AntiLag2) && reports_frame_generation(LowLatencyInput::AntiLag2))
         return LowLatencyInput::AntiLag2;
 
-    if (avaliableInputs[LowLatencyInput::Reflex])
+    if (available(LowLatencyInput::Reflex))
         return LowLatencyInput::Reflex;
 
     // A game can have XeLL without it being enabled in its settings, it does nothing until it is
-    if (avaliableInputs[LowLatencyInput::XeLL] && get_sleep_copy(LowLatencyInput::XeLL).low_latency_enabled)
+    if (available(LowLatencyInput::XeLL) && get_sleep_copy(LowLatencyInput::XeLL).low_latency_enabled)
         return LowLatencyInput::XeLL;
 
-    if (avaliableInputs[LowLatencyInput::AntiLag2])
+    if (available(LowLatencyInput::AntiLag2))
         return LowLatencyInput::AntiLag2;
 
-    if (avaliableInputs[LowLatencyInput::UeLowLatency])
+    if (available(LowLatencyInput::UeLowLatency))
         return LowLatencyInput::UeLowLatency;
 
-    if (avaliableInputs[LowLatencyInput::XeLL])
+    if (available(LowLatencyInput::XeLL))
         return LowLatencyInput::XeLL;
 
     // OptiScaler's own Streamline (DLSSG output) when the game has nothing
-    if (avaliableInputs[LowLatencyInput::OptiScaler])
+    if (available(LowLatencyInput::OptiScaler))
         return LowLatencyInput::OptiScaler;
 
     return LowLatencyInput::None;
@@ -383,7 +383,7 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
     }
 
     // An output asked for (OptiScaler's XeFG) starts without one
-    if (avaliableInputs.count() == 0 && !mode.has_value())
+    if (available_inputs.load(std::memory_order_relaxed) == 0 && !mode.has_value())
     {
         LOG_TRACE("No avaliable inputs");
 
@@ -424,7 +424,7 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
         desiredInput = LowLatencyInput::Auto;
 
     // The selection stays, the input is used once the game starts using it
-    if (!avaliableInputs[desiredInput] && desiredInput != LowLatencyInput::Auto)
+    if (!available(desiredInput) && desiredInput != LowLatencyInput::Auto)
     {
         static std::atomic<LowLatencyInput> unavailable = LowLatencyInput::_;
 
@@ -441,10 +441,10 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
     if (activeInput != desiredInput)
     {
         activeInput = desiredInput;
-        LOG_INFO("Low latency input: {}", magic_enum::enum_name(activeInput));
+        LOG_INFO("Low latency input: {}", magic_enum::enum_name(desiredInput));
 
         // The previous input's frame reports would stay in the overlay, its frame ids don't continue
-        std::memset(frame_reports, 0, sizeof(frame_reports));
+        clear_reports();
 
         for (auto& id : last_marker_frame_ids)
             id = 0;
@@ -469,7 +469,7 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
 
     // The output runs on the active input's device, another API's device can't start it. OptiScaler's frame
     // generation asks for its output with its own device.
-    if (auto inputApi = input_api[static_cast<size_t>(activeInput)].load();
+    if (auto inputApi = input_api[static_cast<size_t>(activeInput.load())].load();
         !mode.has_value() && inputApi != API::NotSelected && api != inputApi)
     {
         return true;
@@ -532,8 +532,10 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
     }
 
     // An output that couldn't start keeps its fallback instead of being retried every call
+    const auto failedAt = std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(failed_time.load()));
+
     if (desiredMode == failed_output && currently_active_tech.load() != nullptr &&
-        std::chrono::steady_clock::now() - failed_time < std::chrono::seconds(10))
+        std::chrono::steady_clock::now() - failedAt < std::chrono::seconds(10))
     {
         desiredMode = activeOutput;
     }
@@ -590,8 +592,16 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
     return true;
 }
 
+void InputCommon::clear_reports()
+{
+    std::scoped_lock lock(report_mutex);
+    std::memset(frame_reports, 0, sizeof(frame_reports));
+}
+
 void InputCommon::add_marker_to_report(const MarkerParams& marker_params)
 {
+    std::scoped_lock lock(report_mutex);
+
     auto current_timestamp = Util::GetTimestamp() / 1000;
     static auto last_sim_start = current_timestamp;
     static auto _2nd_last_sim_start = current_timestamp;
@@ -657,9 +667,10 @@ void InputCommon::stop_output(bool release)
     if (release)
         old_tech->deinit();
 
-    LOG_INFO("Low latency output {} stopped{}", magic_enum::enum_name(activeOutput), release ? "" : " (device gone)");
+    LOG_INFO("Low latency output {} stopped{}", magic_enum::enum_name(activeOutput.load()),
+             release ? "" : " (device gone)");
 
-    std::memset(frame_reports, 0, sizeof(frame_reports));
+    clear_reports();
     activeOutput = LowLatencyMode::None;
     output_api = API::NotSelected;
 }
@@ -807,7 +818,7 @@ InputResult InputCommon::set_sleep_mode(const InputContext& inputContext, IUnkno
     // Ignore context that Opti creates. Its contexts (XeFG's XeLL) don't stand for the game's setting either, which
     // is kept even without an output yet: AntiLag 2 and XeLL only send it when it changes.
     if (!inputContext.localContext)
-        get_sleep_copy(inputContext.caller) = *sleep_mode;
+        set_sleep_copy(inputContext.caller, *sleep_mode);
 
     if (!update_for_call(inputContext, pDevice))
         return InputResult::LowLatencyUpdateFail;
@@ -902,6 +913,8 @@ InputResult InputCommon::get_latency(const InputContext& inputContext, IUnknown*
 
         // Hopefully not too slow
         // XeLL doesn't seem to make any guarantees about ordering so no sort needed
+        std::scoped_lock lock(report_mutex);
+
         for (auto i = 0; i < reportCount; i++)
         {
             auto& reportOut = reports[i];
@@ -926,6 +939,8 @@ InputResult InputCommon::get_latency(const InputContext& inputContext, IUnknown*
 
 bool InputCommon::copy_frame_reports(FrameReport* reports)
 {
+    std::scoped_lock lock(report_mutex);
+
     // Assume no frame reports collected yet, report all zeros
     if (frame_reports[FRAME_REPORTS_BUFFER_SIZE - 1].frameID == 0)
     {
@@ -1063,6 +1078,8 @@ bool InputCommon::get_timing_data(TimingData& timingDataOut)
     //}
 
     {
+        std::scoped_lock lock(report_mutex);
+
         size_t maxIdx = 0;
         uint64_t maxID = frame_reports[0].frameID;
         for (size_t i = 1; i < FRAME_REPORTS_BUFFER_SIZE; i++)
@@ -1422,7 +1439,7 @@ void InputCommon::update()
             activeOutput != LowLatencyMode::FpsLimiter && !xefgPaced &&
             Config::Instance()->FN_ForceReflex.value_or_default() != ForceReflex::ForceEnable)
         {
-            LOG_INFO("Multi frame generation, disabling {}", magic_enum::enum_name(activeOutput));
+            LOG_INFO("Multi frame generation, disabling {}", magic_enum::enum_name(activeOutput.load()));
             Config::Instance()->FN_ForceReflex.set_volatile_value(ForceReflex::ForceDisable);
         }
 
@@ -1499,7 +1516,7 @@ void InputCommon::update()
 
     if (fps_limit_interval_us.exchange(interval) != interval)
     {
-        LOG_INFO("FPS limit through {}: {} us", magic_enum::enum_name(activeOutput), interval);
+        LOG_INFO("FPS limit through {}: {} us", magic_enum::enum_name(activeOutput.load()), interval);
 
         if (current_tech != nullptr)
             apply_sleep_mode(current_tech.get());

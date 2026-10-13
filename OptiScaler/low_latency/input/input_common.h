@@ -66,13 +66,16 @@ class InputCommon
     inline static std::atomic<LowLatencyMode> xefg_started_output = LowLatencyMode::None;
     static LowLatencyMode xefg_output(LowLatencyMode configured);
 
+    // The frame reports of the input's markers: the game's threads write them, the overlay and GetLatency read them
     inline static FrameReport frame_reports[FRAME_REPORTS_BUFFER_SIZE] {};
+    inline static std::mutex report_mutex {};
     inline static std::array<std::atomic_uint64_t, 6> last_marker_frame_ids {}; // Simulation start to present end
-    inline static LowLatencyMode failed_output = LowLatencyMode::None;
-    inline static std::chrono::steady_clock::time_point failed_time {};
+    inline static std::atomic<LowLatencyMode> failed_output = LowLatencyMode::None;
+    inline static std::atomic<std::chrono::steady_clock::rep> failed_time = 0; // steady_clock ticks
     inline static std::atomic_uint64_t last_present_start_frame_id = 0;
     inline static std::atomic_uint32_t delay_deinit = 0;
     inline static std::array<SleepMode, static_cast<size_t>(LowLatencyInput::_)> sleep_mode_copies {};
+    inline static std::mutex sleep_copy_mutex {};
     inline static std::atomic_uint32_t presents_without_input = 0;
     inline static std::atomic_uint32_t fps_limit_interval_us = 0; // OptiScaler's FPS limit for the output, 0 = none
     inline static std::atomic_bool limits_fps = false;
@@ -100,9 +103,15 @@ class InputCommon
 
     static bool xefg_paced();
 
-    inline static flag_set<LowLatencyInput> avaliableInputs {};
-    inline static LowLatencyInput activeInput = LowLatencyInput::None;
-    inline static LowLatencyMode activeOutput = LowLatencyMode::None;
+    // Each input's calls come from the game's threads, the UE mod's tick and OptiScaler's present: one bit per input
+    inline static std::atomic<uint32_t> available_inputs = 0;
+    inline static std::atomic<LowLatencyInput> activeInput = LowLatencyInput::None;
+    inline static std::atomic<LowLatencyMode> activeOutput = LowLatencyMode::None;
+
+    static bool available(LowLatencyInput input)
+    {
+        return (available_inputs.load(std::memory_order_relaxed) & (1u << static_cast<uint32_t>(input))) != 0;
+    }
     inline static bool enabled = false;
 
     // The API of each input's device, the output runs on the active input's
@@ -118,6 +127,7 @@ class InputCommon
     static bool update_for_call(const InputContext& inputContext, IUnknown* pDevice);
     static void add_marker_to_report(const MarkerParams& marker_params);
     static bool copy_frame_reports(FrameReport* reports); // NVAPI_BUFFER_SIZE reports, oldest first
+    static void clear_reports();
 
     // The API of the call's device
     static API device_api(const InputContext& inputContext, IUnknown* pDevice);
@@ -127,7 +137,17 @@ class InputCommon
 
     // The output that does the same on the call's API: AntiLag Vk on Vulkan, AntiLag 2 on D3D, XeLL is D3D12 only
     static LowLatencyMode for_api(LowLatencyMode mode, API api);
-    static SleepMode& get_sleep_copy(LowLatencyInput input) { return sleep_mode_copies[static_cast<size_t>(input)]; }
+    static SleepMode get_sleep_copy(LowLatencyInput input)
+    {
+        std::scoped_lock lock(sleep_copy_mutex);
+        return sleep_mode_copies[static_cast<size_t>(input)];
+    }
+
+    static void set_sleep_copy(LowLatencyInput input, const SleepMode& mode)
+    {
+        std::scoped_lock lock(sleep_copy_mutex);
+        sleep_mode_copies[static_cast<size_t>(input)] = mode;
+    }
     static void apply_sleep_mode(LowLatencyTech* tech);
 
   public:
@@ -149,15 +169,26 @@ class InputCommon
     static InputResult get_frame_reports(const InputContext& inputContext, IUnknown* pDev, FrameReport* reports);
     static bool get_timing_data(TimingData& timingDataOut);
     static uint64_t get_last_present_start_frame_id() { return last_present_start_frame_id; };
-    static flag_set<LowLatencyInput> get_avaliable_inputs() { return avaliableInputs; };
+    static flag_set<LowLatencyInput> get_avaliable_inputs()
+    {
+        flag_set<LowLatencyInput> inputs;
+
+        for (uint32_t i = 0; i < static_cast<uint32_t>(LowLatencyInput::_); i++)
+        {
+            if (available(static_cast<LowLatencyInput>(i)))
+                inputs |= static_cast<LowLatencyInput>(i);
+        }
+
+        return inputs;
+    }
     static LowLatencyMode active_output() { return activeOutput; }
 
     // The active input's API, the swapchain's without one
     static API uses_api();
     static void get_currently_active(LowLatencyInput& activeInput, LowLatencyMode& activeOutput)
     {
-        activeInput = InputCommon::activeInput;
-        activeOutput = InputCommon::activeOutput;
+        activeInput = InputCommon::activeInput.load();
+        activeOutput = InputCommon::activeOutput.load();
     }
 
     static InputResult mark_present_start(IUnknown* pDevice);
