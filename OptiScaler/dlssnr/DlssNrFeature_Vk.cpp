@@ -2109,7 +2109,8 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     {
         const uint32_t style = cfg.DlssNrInputStyle.value_or_default();
         const float strength = std::min(cfg.DlssNrInputStyleStrength.value_or_default(), style == 2u ? 3.0f : 1.0f);
-        const bool wanted = (style == 1u || style == 2u) && strength > 0.0f;
+        const bool facesOnly = cfg.DlssNrInputStyleFacesOnly.value_or_default();
+        const bool wanted = style >= 1u && style <= 3u && strength > 0.0f;
         const char* skip = wanted && workScale > 1.0f ? "model resolution above 100%" : nullptr;
         bool restyled = false;
 
@@ -2130,10 +2131,11 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
             if (g_vk.styled.Valid())
             {
                 DlssNrConstants paint = encode;
-                paint.Mode = style == 2u ? DlssNrMode_StructureHint : DlssNrMode_Watercolor;
+                paint.Mode = StyleMode(style);
                 paint.Width = modelInput->width;
                 paint.Height = modelInput->height;
                 paint.TransferStrength = strength;
+                paint.SkinProtection = facesOnly ? 1u : 0u; // the style passes read it as "faces only"
 
                 Transition(cmdBuffer, *modelInput, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
                 Transition(cmdBuffer, g_vk.styled, VK_IMAGE_LAYOUT_GENERAL);
@@ -2158,16 +2160,16 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
 
         // Said when it changes, so a log shows each A/B toggle.
         static int said = -1;
-        const int state = restyled ? (int) style + 10 : (skip != nullptr ? 2 : 0);
+        const int state = restyled ? (int) style + 10 + (facesOnly ? 10 : 0) : (skip != nullptr ? 2 : 0);
 
         if (state != said)
         {
             said = state;
 
             if (restyled)
-                LOG_INFO("DLSS-NR Vulkan input style: {} on (strength {:.2f}, {}x{}{})",
-                         style == 2u ? "structure hint" : "watercolour", strength, modelInput->width,
-                         modelInput->height, spatial ? ", edge-compressed picture" : "");
+                LOG_INFO("DLSS-NR Vulkan input style: {} on (strength {:.2f}, {}x{}{}{})", StyleName(style), strength,
+                         modelInput->width, modelInput->height, facesOnly ? ", faces only" : "",
+                         spatial ? ", edge-compressed picture" : "");
             else if (skip != nullptr)
                 LOG_INFO("DLSS-NR Vulkan input style: skipped ({})", skip);
             else

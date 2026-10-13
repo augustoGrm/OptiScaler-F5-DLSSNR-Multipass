@@ -164,7 +164,7 @@ static DlssNrConstants Base(uint32_t mode, UINT w, UINT h, uint32_t passthrough,
 struct Pictures { Image proxy, painted; };
 
 static Pictures Paint(Gpu& gpu, ID3D11ComputeShader* nr, const Image& frame, uint32_t passthrough, uint32_t reversible,
-                      float strength, uint32_t mode = DlssNrMode_Watercolor)
+                      float strength, uint32_t mode = DlssNrMode_Watercolor, bool facesOnly = false)
 {
     const UINT w = frame.w, h = frame.h;
     auto source = gpu.Texture(w, h, &frame);
@@ -174,6 +174,7 @@ static Pictures Paint(Gpu& gpu, ID3D11ComputeShader* nr, const Image& frame, uin
     gpu.Run(nr, Base(DlssNrMode_Encode, w, h, passthrough, reversible), source.Get(), proxy.Get(), keep.Get(), w, h);
     DlssNrConstants k = Base(mode, w, h, passthrough, reversible);
     k.TransferStrength = strength;
+    k.SkinProtection = facesOnly ? 1u : 0u; // the style passes read it as "faces only"
     gpu.Run(nr, k, proxy.Get(), painted.Get(), keep.Get(), w, h);
     return {gpu.Read(proxy.Get()), gpu.Read(painted.Get())};
 }
@@ -365,13 +366,112 @@ int wmain(int argc, wchar_t** argv) try
         expect(haloStrong < 1e-5f, "strength 3 overshoots by more than 0.75 of the range" + what);
     }
 
+    // Smooth canvas: flat areas and the hard edge kept, texture flattened (more than the watercolour's grain), strength
+    // 0 exact.
+    auto spreadOf = [](const Image& im, UINT x0, UINT x1, UINT y0, UINT y1)
+    {
+        double s = 0.0, s2 = 0.0;
+        int n = 0;
+        for (UINT y = y0; y < y1; ++y)
+            for (UINT x = x0; x < x1; ++x)
+            {
+                const double l = Luma(im.at(x, y));
+                s += l;
+                s2 += l * l;
+                ++n;
+            }
+        const double m = s / n;
+        return std::sqrt(std::max(s2 / n - m * m, 0.0));
+    };
+
+    // Two steps in the scene: the hard edge 0.03 | 0.9 at x = 32, and a smaller one 0.25 | 0.03 at x = 16 (about a lip
+    // line's step). The 11x11 window reaches both from different pixels, so they are measured apart: the hard edge must
+    // stay exact, the small step may soften a little (the brightness tolerance is wide on purpose, to flatten skin).
+    std::printf("\n%-12s %10s %10s %10s %10s %10s %10s\n", "curve", "flat", "edge", "step", "grain", "weave", "off");
+    for (const Case& c : cases)
+    {
+        const Pictures full = Paint(gpu, nr.Get(), frame, c.passthrough, c.reversible, 1.0f, DlssNrMode_SmoothCanvas);
+        const Pictures none = Paint(gpu, nr.Get(), frame, c.passthrough, c.reversible, 0.0f, DlssNrMode_SmoothCanvas);
+
+        float flat = 0.0f, edge = 0.0f, step = 0.0f, off = 0.0f;
+        for (UINT y = 0; y < kSize; ++y)
+            for (UINT x = 0; x < kSize; ++x)
+            {
+                const Pixel& a = full.proxy.at(x, y);
+                const Pixel& b = full.painted.at(x, y);
+                const float d = std::max({std::abs(a.r - b.r), std::abs(a.g - b.g), std::abs(a.b - b.b)});
+                if (x >= 3 && x < 11)
+                    flat = std::max(flat, d);
+                if (x >= 22 && x < 39) // both sides of the hard edge, out of reach of the small step and the texture
+                    edge = std::max(edge, d);
+                if (x >= 11 && x < 22) // both sides of the small step
+                    step = std::max(step, d);
+                const Pixel& n = none.painted.at(x, y);
+                off = std::max({off, std::abs(n.r - a.r), std::abs(n.g - a.g), std::abs(n.b - a.b)});
+            }
+
+        const double grain =
+            spreadOf(full.painted, 50, kSize - 6, 6, kSize / 2 - 6) / spreadOf(full.proxy, 50, kSize - 6, 6, kSize / 2 - 6);
+        const double weave = spreadOf(full.painted, 50, kSize - 6, kSize / 2 + 6, kSize - 6) /
+                             spreadOf(full.proxy, 50, kSize - 6, kSize / 2 + 6, kSize - 6);
+
+        std::printf("%-12s %10.2e %10.2e %10.2e %9.0f%% %9.0f%% %10.2e\n", c.name, flat, edge, step, grain * 100.0,
+                    weave * 100.0, off);
+        const std::string what = std::string(" (smooth canvas, ") + c.name + ")";
+        expect(flat < 1e-4f, "flat areas change" + what);
+        expect(edge < 1e-3f, "the hard edge moves or blurs" + what);
+        expect(step < 0.03f, "the small step softens by more than 0.03" + what);
+        expect(grain < 0.3 && weave < 0.3, "texture is not flattened to under 30%" + what);
+        expect(off == 0.0f, "strength 0 changes the picture" + what);
+    }
+
+    // Faces only: grey texture is left exactly as it was on every curve (no skin colour); skin-coloured texture is
+    // smoothed (tone-mapped frame, where the stored values are the display colours the skin test is made for).
+    std::printf("\n%-12s %10s %10s\n", "curve", "grey off", "skin");
+    for (const Case& c : cases)
+    {
+        Image mixed = frame;
+        for (UINT y = 0; y < kSize; ++y)
+            for (UINT x = 0; x < kSize; ++x)
+                if (y >= kSize / 2) // the lower half's texture skin-coloured (a warm 0.85 : 0.62 : 0.50 tone)
+                {
+                    Pixel& p = mixed.at(x, y);
+                    p = {p.r * 2.6f * 0.85f, p.g * 2.6f * 0.62f, p.b * 2.6f * 0.50f, 1};
+                }
+
+        float greyOff = 0.0f;
+        double skin = 0.0;
+        for (uint32_t mode : {DlssNrMode_Watercolor, DlssNrMode_StructureHint, DlssNrMode_SmoothCanvas})
+        {
+            const Pictures faces = Paint(gpu, nr.Get(), mixed, c.passthrough, c.reversible, 1.0f, mode, true);
+            for (UINT y = 0; y < kSize / 2; ++y)
+                for (UINT x = 0; x < kSize; ++x)
+                {
+                    const Pixel& a = faces.proxy.at(x, y);
+                    const Pixel& b = faces.painted.at(x, y);
+                    greyOff = std::max({greyOff, std::abs(a.r - b.r), std::abs(a.g - b.g), std::abs(a.b - b.b)});
+                }
+            if (mode == DlssNrMode_SmoothCanvas)
+                skin = spreadOf(faces.painted, 50, kSize - 6, kSize / 2 + 6, kSize - 6) /
+                       spreadOf(faces.proxy, 50, kSize - 6, kSize / 2 + 6, kSize - 6);
+        }
+
+        std::printf("%-12s %10.2e %9.0f%%\n", c.name, greyOff, skin * 100.0);
+        const std::string what = std::string(" (faces only, ") + c.name + ")";
+        expect(greyOff == 0.0f, "a style changes grey (non-skin) texture" + what);
+        if (c.passthrough != 0)
+            expect(skin < 0.3, "skin-coloured texture is not smoothed" + what);
+    }
+
     if (fails)
     {
         std::printf("%d check(s) failed\n", fails);
         return 1;
     }
     std::puts("PASS: watercolour keeps flat areas and hard edges and flattens texture; the structure hint raises texture\n"
-              "      contrast with bounded halos and no colour change; strength 0 is a no-op for both (WARP HLSL)");
+              "      contrast with bounded halos and no colour change; the smooth canvas keeps flat areas and hard edges\n"
+              "      and flattens texture; faces only leaves grey texture alone and smooths skin; strength 0 is a no-op\n"
+              "      (WARP HLSL)");
     return 0;
 }
 catch (const std::exception& e)

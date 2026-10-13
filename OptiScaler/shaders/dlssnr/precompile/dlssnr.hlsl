@@ -893,6 +893,14 @@ float3 ApplyReplaceGuard(float3 v, float3 nativeOriginal, float referenceLuma, f
     return v * (boundedRatio / max(ratio, 1e-6));
 }
 
+// The input styles' "faces only" weight of a stored proxy value: the skin-colour test on the colour as it would be
+// displayed, as the resolve's skin protection classifies the frame (a tone-mapped frame's stored values are that already;
+// a linear HDR frame's are decoded and sRGB-encoded first, so every proxy curve classifies alike).
+float StyleSkinWeight(float3 stored)
+{
+    return SkinColourWeight(gPassthrough != 0 ? stored : LinearToSrgb(saturate(DecodeProxyToLinear(stored))));
+}
+
 // Automatic exposure uses the same 8x8 group as every other mode, but spreads the expensive work
 // across all 64 lanes. Only 1 KiB of groupshared memory is reserved, so the ordinary encode/resolve
 // passes keep effectively the same occupancy.
@@ -1343,8 +1351,61 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         // One scale on the triple, capped so no channel passes 1 (a clipped channel would shift the hue).
         // Black stays black: with no luminance there is no chromaticity to keep.
         const float peak = max(max(c.r, c.g), c.b);
-        const float3 hinted = l > 1e-6 ? c * min(boosted / l, 1.0 / max(peak, 1e-6)) : c;
+        float3 hinted = l > 1e-6 ? c * min(boosted / l, 1.0 / max(peak, 1e-6)) : c;
+
+        // Faces only (the style pass's SkinProtection): as much of the style as the pixel looks like skin
+        if (gSkinProtection != 0)
+            hinted = lerp(c, hinted, StyleSkinWeight(c));
+
         gTarget[id.xy] = float4(saturate(hinted), centre.a);
+        return;
+    }
+    if (gMode == 16)
+    {
+        // Experimental input style ([DlssNr] InputStyle = 3), the smooth canvas: a cross bilateral filter over the
+        // picture the model is shown, so skin reads like an untextured old-game surface (pores, fine shading and
+        // shimmer flattened) while contours stay -- a neighbour counts less the further away it is (Gaussian, sigma
+        // 3 px, 11x11) and the more its brightness differs. Brightness is compared in light, as exposure steps
+        // (log2 of the decoded luminance), so every proxy curve filters alike (PQ's stored values bunch steps together
+        // that the other curves keep apart): sigma 0.35 EV -- a +-20% skin texture (0.26 EV) keeps 75% weight, a 1 EV
+        // lip line about 2%, a hard edge nothing. No quadrant switching as in the watercolour, so no blocks. Averaged in
+        // light and re-encoded once. gTransferStrength blends with the picture as it was (0..1); faces only scales it
+        // by the pixel's skin-colour weight.
+        uint w, h;
+        gSource.GetDimensions(w, h);
+        const int2 last = int2((int) w - 1, (int) h - 1);
+
+        const float4 centre = gSource.Load(int3(id.xy, 0));
+        const float3 storedCentre = saturate(centre.rgb);
+        const float evCentre = log2(max(dot(DecodeProxyToLinear(storedCentre), kLuma), 1e-4));
+
+        const float spatialScale = -1.0 / (2.0 * 3.0 * 3.0);
+        const float rangeScale = -1.0 / (2.0 * 0.35 * 0.35);
+        float3 sum = 0;
+        float weights = 0.0;
+
+        [loop] for (int dy = -5; dy <= 5; ++dy)
+        {
+            [loop] for (int dx = -5; dx <= 5; ++dx)
+            {
+                const float3 light = DecodeProxyToLinear(
+                    saturate(gSource.Load(int3(clamp((int2) id.xy + int2(dx, dy), int2(0, 0), last), 0)).rgb));
+                const float difference = log2(max(dot(light, kLuma), 1e-4)) - evCentre;
+                const float weight =
+                    exp((float) (dx * dx + dy * dy) * spatialScale + difference * difference * rangeScale);
+                sum += light * weight;
+                weights += weight;
+            }
+        }
+
+        // The centre's own weight is 1, so weights >= 1
+        const float3 smoothed = EncodeLinearToProxy(sum / weights);
+        float amount = saturate(gTransferStrength);
+
+        if (gSkinProtection != 0)
+            amount *= StyleSkinWeight(storedCentre);
+
+        gTarget[id.xy] = float4(lerp(centre.rgb, smoothed, amount), centre.a);
         return;
     }
     if (gMode == 14)
@@ -1404,7 +1465,13 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
 
         const float4 centre = gSource.Load(int3(id.xy, 0));
         const float3 painted = EncodeLinearToProxy(mean);
-        gTarget[id.xy] = float4(lerp(centre.rgb, painted, saturate(gTransferStrength)), centre.a);
+        float amount = saturate(gTransferStrength);
+
+        // Faces only (the style pass's SkinProtection): as much of the style as the pixel looks like skin
+        if (gSkinProtection != 0)
+            amount *= StyleSkinWeight(saturate(centre.rgb));
+
+        gTarget[id.xy] = float4(lerp(centre.rgb, painted, amount), centre.a);
         return;
     }
     if (gMode == 12)

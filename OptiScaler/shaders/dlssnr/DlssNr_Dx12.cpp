@@ -4274,7 +4274,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     {
         const uint32_t style = cfg.DlssNrInputStyle.value_or_default();
         const float strength = std::min(cfg.DlssNrInputStyleStrength.value_or_default(), style == 2u ? 3.0f : 1.0f);
-        const bool wanted = (style == 1u || style == 2u) && strength > 0.0f;
+        const bool facesOnly = cfg.DlssNrInputStyleFacesOnly.value_or_default();
+        const bool wanted = style >= 1u && style <= 3u && strength > 0.0f;
         const char* skip = !wanted                                     ? nullptr
                            : cfg.DlssNrDeferredDlss.value_or_default() ? "the deferred Super Resolution path"
                            : workScale > 1.0f                          ? "model resolution above 100%"
@@ -4304,12 +4305,13 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
                 Barrier(cmdList, g_nr.styled, g_nr.styledState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
 
                 DlssNrConstants paint {};
-                paint.Mode = style == 2u ? DlssNrMode_StructureHint : DlssNrMode_Watercolor;
+                paint.Mode = StyleMode(style);
                 paint.Width = (unsigned int) in.Width;
                 paint.Height = in.Height;
                 paint.Passthrough = isHdrBuffer ? 0u : 1u;
                 paint.ReversibleMode = cfg.DlssNrReversibleMode.value_or_default();
                 paint.TransferStrength = strength;
+                paint.SkinProtection = facesOnly ? 1u : 0u; // the style passes read it as "faces only"
                 DispatchPass(cmdList, paint, modelInput, nullptr, nullptr, nullptr, nullptr, g_nr.styled, nullptr);
 
                 Barrier(cmdList, g_nr.styled, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -4326,16 +4328,16 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
 
         // Said when it changes, so a log shows each A/B toggle.
         static int said = -1;
-        const int state = restyled ? (int) style + 10 : (skip != nullptr ? 2 : 0);
+        const int state = restyled ? (int) style + 10 + (facesOnly ? 10 : 0) : (skip != nullptr ? 2 : 0);
 
         if (state != said)
         {
             said = state;
 
             if (restyled)
-                LOG_INFO("DLSS-NR input style: {} on (strength {:.2f}, {}x{}{})",
-                         style == 2u ? "structure hint" : "watercolour", strength, modelInput->GetDesc().Width,
-                         modelInput->GetDesc().Height, spatial ? ", edge-compressed picture" : "");
+                LOG_INFO("DLSS-NR input style: {} on (strength {:.2f}, {}x{}{}{})", StyleName(style), strength,
+                         modelInput->GetDesc().Width, modelInput->GetDesc().Height, facesOnly ? ", faces only" : "",
+                         spatial ? ", edge-compressed picture" : "");
             else if (skip != nullptr)
                 LOG_INFO("DLSS-NR input style: skipped ({})", skip);
             else

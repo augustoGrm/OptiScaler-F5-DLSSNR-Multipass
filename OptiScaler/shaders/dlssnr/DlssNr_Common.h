@@ -31,8 +31,21 @@ enum DlssNrMode : uint32_t
     DlssNrMode_ClampProxy = 12, // a pass's raw answer -> the same value saturated back into the proxy's valid range, before it becomes the next pass's input
     DlssNrMode_AutoExposure = 13, // the 64x64 meter's tile means -> one exposure value, 1x1
     DlssNrMode_Watercolor = 14,   // experimental input style: the model's picture -> a Kuwahara "watercolour" of it
-    DlssNrMode_StructureHint = 15 // experimental input style: the model's picture with its local contrast raised
+    DlssNrMode_StructureHint = 15, // experimental input style: the model's picture with its local contrast raised
+    DlssNrMode_SmoothCanvas = 16   // experimental input style: the model's picture through a cross bilateral filter
 };
+
+// [DlssNr] InputStyle (1..3) -> its pass and its name for the log. The pass reads its constants' SkinProtection as
+// "faces only".
+inline DlssNrMode StyleMode(uint32_t style)
+{
+    return style == 2u ? DlssNrMode_StructureHint : style == 3u ? DlssNrMode_SmoothCanvas : DlssNrMode_Watercolor;
+}
+
+inline const char* StyleName(uint32_t style)
+{
+    return style == 2u ? "structure hint" : style == 3u ? "smooth canvas" : "watercolour";
+}
 
 // A successful sample may be reused only on the immediately following frame.
 // Failed composition, cuts and gaps must not turn a two-frame hold into a freeze.
