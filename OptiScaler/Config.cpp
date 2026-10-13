@@ -401,6 +401,12 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrDetailReuseDebug.set_from_config(readBool("DlssNr", "DetailReuseDebug"));
             DlssNrDetailReuseSteady.set_from_config(readFloat("DlssNr", "DetailReuseSteady"));
             DlssNrDetailReuseFill.set_from_config(readFloat("DlssNr", "DetailReuseFill"));
+            DlssNrDetailReuseInterval.set_from_config(readUInt("DlssNr", "DetailReuseInterval"));
+            if (DlssNrDetailReuseInterval.has_value())
+                DlssNrDetailReuseInterval = std::clamp(DlssNrDetailReuseInterval.value(), 2u, 3u);
+            DlssNrDetailReuseSpread.set_from_config(readUInt("DlssNr", "DetailReuseSpread"));
+            if (DlssNrDetailReuseSpread.has_value())
+                DlssNrDetailReuseSpread = std::min(DlssNrDetailReuseSpread.value(), 3u);
             DlssNrDetailReuseDepthTolerance.set_from_config(readFloat("DlssNr", "DetailReuseDepthTolerance"));
             DlssNrDetailReuseClipGamma.set_from_config(readFloat("DlssNr", "DetailReuseClipGamma"));
             DlssNrDetailReuseClipFalloff.set_from_config(readFloat("DlssNr", "DetailReuseClipFalloff"));
@@ -1519,6 +1525,8 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "DetailReuseDebug", GetBoolValue(Instance()->DlssNrDetailReuseDebug.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseSteady", GetFloatValue(Instance()->DlssNrDetailReuseSteady.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseFill", GetFloatValue(Instance()->DlssNrDetailReuseFill.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "DetailReuseInterval", GetIntValue(Instance()->DlssNrDetailReuseInterval.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "DetailReuseSpread", GetIntValue(Instance()->DlssNrDetailReuseSpread.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseDepthTolerance", GetFloatValue(Instance()->DlssNrDetailReuseDepthTolerance.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseClipGamma", GetFloatValue(Instance()->DlssNrDetailReuseClipGamma.value_for_config()).c_str());
     ini.SetValue("DlssNr", "DetailReuseClipFalloff", GetFloatValue(Instance()->DlssNrDetailReuseClipFalloff.value_for_config()).c_str());

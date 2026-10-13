@@ -1,8 +1,9 @@
 // Reuse detail between frames, Vulkan (menu: "Reuse detail between frames"; ini DetailReuse*).
 //
-// The same feature as the D3D12 side (shaders/dlssnr/DlssNr_DetailReuse.inl), step for step: every other frame skips
-// the model -- all passes -- and moves the previous frame's detail onto this frame's input; a full frame after a reused
-// one hands the model vectors composed over both frames; Fill, Steady and the debug view as there. When it may run,
+// The same feature as the D3D12 side (shaders/dlssnr/DlssNr_DetailReuse.inl), step for step: every other frame (or two
+// of every three) skips the model -- all passes -- and moves the previous frame's detail onto this frame's input; a
+// full frame after reused ones hands the model vectors composed back to its last run; Fill, Steady, the spread and the
+// debug view as there. When it may run,
 // the cadence, the constants and the status are shared (dlssnr/DlssNrDetailReuseHost.h); this file owns the images and
 // records the dispatches (shaders/dlssnr/DlssNrDetailReuse_Vk.h).
 //
@@ -51,7 +52,12 @@ bool passFailed = false;
 OwnedImage detail[2];      // work size, RGBA16F: answer - input, a = valid
 OwnedImage colourDepth[2]; // work size, RGBA32F: that frame's input colour, a = far-is-zero depth
 unsigned int cur = 0;
-OwnedImage prevMotion; // work size, RG32F: the last reused frame's vectors as uv displacement
+// work size, RG32F: the reused frames' vectors as uv displacement, back to the last full frame; two, so the second
+// reused frame in a row can add its own to what the first kept (savedMotion holds them)
+OwnedImage prevMotion[2];
+unsigned int savedMotion = 0;
+OwnedImage shownDetail; // work size, RGBA16F: the detail a spread frame showed, for the spread's next frame to move
+bool shownValid = false;
 OwnedImage composed;   // the motion image's size, RG32F: raw vectors over two frames
 OwnedImage estimate;   // work size, RGBA16F: moved detail with its trust (Fill and Steady)
 OwnedImage steadied;   // work size, the answers' format: the steadied answer (Steady)
@@ -250,7 +256,11 @@ void RetireAll()
         Retire(detail[i]);
         Retire(colourDepth[i]);
     }
-    Retire(prevMotion);
+    Retire(prevMotion[0]);
+    Retire(prevMotion[1]);
+    savedMotion = 0;
+    Retire(shownDetail);
+    shownValid = false;
     Retire(composed);
     RetireExtras();
     Retire(coverage);
@@ -289,7 +299,7 @@ const char* ShaderReady(const Frame& f)
 
 // Allocates or retires the images for this frame. Returns whether reuse can run. keep: reuse is held off for now
 // (frame generation, the frame rate), so the images stay.
-bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, bool measure)
+bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, bool measure, unsigned int spread)
 {
     if (wanted && (!detail[0].Valid() || workWidth != f.workWidth || workHeight != f.workHeight))
     {
@@ -299,7 +309,9 @@ bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, b
             allocated = allocated &&
                         CreateImage(detail[i], f.workWidth, f.workHeight, VK_FORMAT_R16G16B16A16_SFLOAT, false) &&
                         CreateImage(colourDepth[i], f.workWidth, f.workHeight, VK_FORMAT_R32G32B32A32_SFLOAT, false);
-        allocated = allocated && CreateImage(prevMotion, f.workWidth, f.workHeight, VK_FORMAT_R32G32_SFLOAT, false);
+        for (unsigned int i = 0; i < 2; ++i)
+            allocated = allocated && CreateImage(prevMotion[i], f.workWidth, f.workHeight, VK_FORMAT_R32G32_SFLOAT, false);
+        savedMotion = 0;
         if (!allocated)
         {
             RetireAll();
@@ -352,7 +364,8 @@ bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, b
         RetireCoverageBuffers();
     }
 
-    const bool needEstimate = steady > 0.0f || fill > 0.0f || (measure && coverage.Valid());
+    const bool spreading = spread > 1;
+    const bool needEstimate = steady > 0.0f || fill > 0.0f || (measure && coverage.Valid()) || spreading;
     if (needEstimate && !estimate.Valid() && !host.ExtrasFailed())
     {
         if (!CreateImage(estimate, f.workWidth, f.workHeight, VK_FORMAT_R16G16B16A16_SFLOAT, false))
@@ -365,7 +378,8 @@ bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, b
     {
         Retire(estimate);
     }
-    if (steady > 0.0f && estimate.Valid() && !host.ExtrasFailed() &&
+    const bool needSteadied = steady > 0.0f || spreading;
+    if (needSteadied && estimate.Valid() && !host.ExtrasFailed() &&
         (!steadied.Valid() || steadied.format != f.answerFormat))
     {
         Retire(steadied);
@@ -376,9 +390,24 @@ bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, b
                      "model made them");
         }
     }
-    else if (steady <= 0.0f && steadied.Valid())
+    else if (!needSteadied && steadied.Valid())
     {
         Retire(steadied);
+    }
+    if (spreading && !shownDetail.Valid() && !host.ExtrasFailed())
+    {
+        shownValid = false;
+        if (!CreateImage(shownDetail, f.workWidth, f.workHeight, VK_FORMAT_R16G16B16A16_SFLOAT, false))
+        {
+            host.AllocationFailed(f, true);
+            LOG_WARN("DLSS-NR Vulkan detail reuse: could not allocate the spread's image; the model's frames are not "
+                     "spread");
+        }
+    }
+    else if (!spreading && shownDetail.Valid())
+    {
+        Retire(shownDetail);
+        shownValid = false;
     }
     return true;
 }
@@ -516,12 +545,15 @@ void MeasureCoverage(const Frame& f)
 }
 
 // The moved detail with its trust into `estimate`, then `mode` (Fill or Steady) from it into `target`. measure: also
-// read off how much of the frame had no detail to move, while the estimate is readable anyway.
-bool EstimateThen(const Frame& f, DlssNrDetailReuseMode mode, OwnedImage* second, OwnedImage* target, bool measure)
+// read off how much of the frame had no detail to move, while the estimate is readable anyway. moved: the detail to
+// move, last frame's saved detail by default (the spread moves what it showed; the colour is last frame's either way).
+bool EstimateThen(const Frame& f, DlssNrDetailReuseMode mode, OwnedImage* second, OwnedImage* target, bool measure,
+                  OwnedImage* moved = nullptr)
 {
     {
         const DlssNrDetailReuse_Vk::Read reads[DlssNrDetailReuse_Vk::kReads] = {
-            Own(f, f.modelInput), Own(f, &detail[cur]), Own(f, &colourDepth[cur]), Game(f.motion), GameDepth(f)
+            Own(f, f.modelInput), Own(f, moved != nullptr ? moved : &detail[cur]), Own(f, &colourDepth[cur]),
+            Game(f.motion), GameDepth(f)
         };
         if (!Run(f, DlssNrDetailReuse_Estimate, f.workWidth, f.workHeight, reads, &estimate, nullptr))
             return false;
@@ -566,7 +598,7 @@ Plan BeforeModel(const Frame& f)
             return why;
         return PrepareDepth(f) ? nullptr : "the game's depth cannot be read";
     });
-    plan.active = Prepare(f, want.wanted, want.keep, want.steady, want.fill, want.measure);
+    plan.active = Prepare(f, want.wanted, want.keep, want.steady, want.fill, want.measure, want.spread);
 
     // Once: what the game's depth and motion are, since they are read here as sampled images in a layout nobody states.
     // A depth view that includes the stencil aspect cannot be sampled.
@@ -609,11 +641,28 @@ Plan BeforeModel(const Frame& f)
         if (plan.reused)
         {
             // Kept for the next full frame, which composes it with its own vectors for the model's history. Without
-            // it that frame cannot compose, so the cadence starts over and the model's history is reset instead.
-            const DlssNrDetailReuse_Vk::Read reads[DlssNrDetailReuse_Vk::kReads] = {
-                Game(f.motion), {}, {}, Game(f.motion), {}
-            };
-            if (!Run(f, DlssNrDetailReuse_SaveMotion, f.workWidth, f.workHeight, reads, &prevMotion, nullptr))
+            // it that frame cannot compose, so the cadence starts over and the model's history is reset instead. The
+            // second reused frame in a row adds its own to what the first kept, into the other image.
+            bool saved = false;
+            if (decision.accumulateMotion)
+            {
+                const DlssNrDetailReuse_Vk::Read reads[DlssNrDetailReuse_Vk::kReads] = {
+                    Game(f.motion), {}, {}, Game(f.motion), Own(f, &prevMotion[savedMotion])
+                };
+                saved = Run(f, DlssNrDetailReuse_AccumulateMotion, f.workWidth, f.workHeight, reads,
+                            &prevMotion[savedMotion ^ 1u], nullptr);
+                if (saved)
+                    savedMotion ^= 1u;
+            }
+            else
+            {
+                const DlssNrDetailReuse_Vk::Read reads[DlssNrDetailReuse_Vk::kReads] = {
+                    Game(f.motion), {}, {}, Game(f.motion), {}
+                };
+                saved = Run(f, DlssNrDetailReuse_SaveMotion, f.workWidth, f.workHeight, reads,
+                            &prevMotion[savedMotion], nullptr);
+            }
+            if (!saved)
                 host.cadence.Drop();
         }
         else
@@ -640,12 +689,12 @@ Plan BeforeModel(const Frame& f)
             MeasureOnly(f);
     }
 
-    // A full frame after a reused frame: the model last ran two frames ago, so it gets the vectors over both.
+    // A full frame after reused frames: the model last ran two (or three) frames ago, so it gets the vectors over all.
     bool composedReady = false;
     if (!plan.reused && decision.kind == DlssNrDetailReuse::Kind::Full && decision.composeMotion)
     {
         const DlssNrDetailReuse_Vk::Read reads[DlssNrDetailReuse_Vk::kReads] = {
-            Game(f.motion), {}, {}, Game(f.motion), Own(f, &prevMotion)
+            Game(f.motion), {}, {}, Game(f.motion), Own(f, &prevMotion[savedMotion])
         };
         if (Run(f, DlssNrDetailReuse_Compose, f.motionWidth, f.motionHeight, reads, &composed, nullptr))
         {
@@ -667,10 +716,29 @@ void AfterModel(const Frame& f, const Plan& plan, bool succeeded, OwnedImage*& f
 {
     const auto& decision = host.decision;
 
+    // The spread (dlssnr/DlssNrDetailReuse.h): this frame shows Steady's blend toward what was shown before, moved here
+    // -- last frame's saved detail on the full frame, what the spread showed last frame after it -- while the history
+    // below keeps the unblended answer. displayed: what the resolve shows instead, once the history is saved.
+    OwnedImage* displayed = nullptr;
+    const int spreadStep = decision.spreadStep;
+    if (spreadStep >= 0 && succeeded && finalAnswer != nullptr && host.params.DebugView == 0 && estimate.Valid() &&
+        steadied.Valid() && (spreadStep == 0 || (shownValid && shownDetail.Valid())))
+    {
+        const float steady = host.params.Steady;
+        host.params.Steady = decision.spreadAmount;
+        if (EstimateThen(f, DlssNrDetailReuse_Steady, finalAnswer, &steadied, spreadStep == 0 && measureWithSteady,
+                         spreadStep == 0 ? nullptr : &shownDetail))
+            displayed = &steadied;
+        host.params.Steady = steady;
+    }
+    shownValid = false;
+    if (displayed == nullptr && spreadStep >= 0)
+        host.cadence.EndSpread();
+
     // A full frame with last frame's history: pull the model's new detail toward the moved previous detail, as far as
-    // that is trusted, so this frame and the reused one next to it differ less.
-    if (!plan.reused && succeeded && finalAnswer != nullptr && decision.historyUsable && host.params.Steady > 0.0f &&
-        estimate.Valid() && steadied.Valid() &&
+    // that is trusted, so this frame and the reused one next to it differ less. Not where the spread runs.
+    if (displayed == nullptr && spreadStep < 0 && !plan.reused && succeeded && finalAnswer != nullptr &&
+        decision.historyUsable && host.params.Steady > 0.0f && estimate.Valid() && steadied.Valid() &&
         EstimateThen(f, DlssNrDetailReuse_Steady, finalAnswer, &steadied, measureWithSteady))
         finalAnswer = &steadied;
 
@@ -692,7 +760,21 @@ void AfterModel(const Frame& f, const Plan& plan, bool succeeded, OwnedImage*& f
                 cur = write;
         }
         host.cadence.Captured(captured);
+
+        // The spread's next frame moves what this one showed (tested with this frame's colour, just saved)
+        if (displayed != nullptr && decision.saveShown && captured && shownDetail.Valid())
+        {
+            const DlssNrDetailReuse_Vk::Read reads[DlssNrDetailReuse_Vk::kReads] = {
+                Own(f, f.modelInput), Own(f, displayed), GameDepth(f), {}, {}
+            };
+            shownValid = Run(f, DlssNrDetailReuse_Capture, f.workWidth, f.workHeight, reads, &shownDetail,
+                             &colourDepth[cur]);
+        }
+        if (displayed != nullptr && decision.saveShown && !shownValid)
+            host.cadence.EndSpread();
     }
+    if (displayed != nullptr)
+        finalAnswer = displayed;
 }
 
 void RecordGpuTime(double ms) { host.RecordGpuTime(ms); }
@@ -706,8 +788,9 @@ DlssNr::DetailReuseInfo Published() { return host.Published(DlssNr::VkFrameClock
 // with it, so they are only forgotten.
 void Release(bool deviceAlive)
 {
-    OwnedImage* const images[] = { &detail[0], &detail[1], &colourDepth[0], &colourDepth[1], &prevMotion, &composed,
-                                   &estimate, &steadied, &depthOnly, &coverage };
+    OwnedImage* const images[] = { &detail[0], &detail[1], &colourDepth[0], &colourDepth[1], &prevMotion[0],
+                                   &prevMotion[1], &shownDetail, &composed, &estimate, &steadied, &depthOnly,
+                                   &coverage };
     for (OwnedImage* img : images)
     {
         if (deviceAlive)
@@ -737,6 +820,8 @@ void Release(bool deviceAlive)
     depthRead = {};
     workWidth = workHeight = 0;
     cur = 0;
+    savedMotion = 0;
+    shownValid = false;
     host.Reset();
 }
 } // namespace DetailReuseVk

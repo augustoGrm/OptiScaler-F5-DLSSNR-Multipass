@@ -40,7 +40,7 @@
 #include "DlssNr_GameDefaults.h"
 #include "DlssNr_NativeMode.h"
 #include "DlssNr_LutStatus.h"
-#include "DlssNrEditCache.h"
+#include "DlssNrDetailReuseHost.h"
 
 #include <string>
 #include <vector>
@@ -1412,62 +1412,56 @@ static void EdgeCompressionDrawText(const EdgeCompressionLine& line)
     ImGui::PopStyleColor();
 }
 
-// "Reuse detail" on the NR Options page: off, every other frame (DetailReuse) or the edit cache (every N frames,
-// EditCache); the two never run together. The Optical F5Low page shows the state and links here. Returns whether
-// every other frame is on (its fine-tuning follows on the page).
+// "Reuse detail" on the NR Options page: off, every other frame or every 3rd frame (DetailReuse, DetailReuseInterval),
+// and the spread of the model's frames. The Optical F5Low page shows the state and links here. The edit cache
+// (EditCache) is not offered here: it is set in the ini only, and shown here when it is. Returns whether reuse is on
+// (its fine-tuning follows on the page).
 static bool RenderDetailReuseToggle(Config* config)
 {
     bool detailReuse = config->DlssNrDetailReuse.value_or_default();
-    bool editCache = !detailReuse && config->DlssNrEditCache.value_or_default();
-    int choice = detailReuse ? 1 : editCache ? 2 : 0;
-    const char* choices[] = { "Off", "Every other frame", "Edit cache (every N frames)" };
+    const unsigned int interval = std::clamp(config->DlssNrDetailReuseInterval.value_or_default(), 2u, 3u);
+    int choice = !detailReuse ? 0 : interval == 3 ? 2 : 1;
+    const char* choices[] = { "Off", "Every other frame", "Every 3rd frame" };
     if (ImGui::Combo("Reuse detail (experimental)", &choice, choices, IM_ARRAYSIZE(choices)))
     {
-        detailReuse = choice == 1;
-        editCache = choice == 2;
+        detailReuse = choice != 0;
         config->DlssNrDetailReuse = detailReuse;
-        config->DlssNrEditCache = editCache;
+        if (choice != 0)
+            config->DlssNrDetailReuseInterval = choice == 2 ? 3u : 2u;
     }
-    HelpMarker("Runs the model on fewer frames and carries its last result onto the frames between, for a lower NR GPU "
-               "cost.\nEvery other frame: moves the last result's detail; detail can pop where things move or appear; "
-               "best with 1 pass. Not with NR before SR. Fine-tune under Debug.\nEdit cache: runs the model every N "
-               "frames and carries its whole edit along the game's motion, dropping it where the picture changed "
-               "under it. D3D12 games, NR after the upscaler.");
+    HelpMarker("Runs the model on fewer frames and moves its last detail onto the frames between, for a lower NR GPU "
+               "cost: half the frames run the model at every other frame, a third at every 3rd frame (detail trails a "
+               "little more on motion). Detail can pop where things move or appear; best with 1 pass. Not with NR "
+               "before SR. Fine-tune under Debug.");
 
-    if (editCache)
+    if (detailReuse)
     {
-        if (DlssNr::IsRunningVk())
-            ImGui::TextDisabled("Edit cache: D3D12 games only for now");
+        // 0 = Auto: none at every other frame (as it shipped), over 3 at every 3rd frame (DlssNrDetailReuse::SpreadFor)
+        int spread = (int) std::min(config->DlssNrDetailReuseSpread.value_or_default(), 3u);
+        char autoLabel[48];
+        const unsigned int autoSpread = DlssNrDetailReuse::SpreadFor(choice == 2 ? 3u : 2u, 0);
+        std::snprintf(autoLabel, sizeof(autoLabel), autoSpread > 1 ? "Auto (over %u frames)" : "Auto (off)",
+                      autoSpread);
+        const char* spreads[] = { autoLabel, "Off", "Over 2 frames", "Over 3 frames" };
+        if (ImGui::Combo("Smooth the model's frames", &spread, spreads, IM_ARRAYSIZE(spreads)))
+            config->DlssNrDetailReuseSpread = (uint32_t) spread;
+        HelpMarker("Each time the model runs, its new detail differs a little from the moved old one, and the light "
+                   "can pulse at that rate (more at every 3rd frame). Smoothed, the model's frame and the frames after "
+                   "it blend from what was shown toward the new detail. Only what is shown is blended, so trails do not "
+                   "build up.");
+    }
 
-        int interval = (int) std::clamp(config->DlssNrEditCacheInterval.value_or_default(), 2u, 8u);
-        if (ImGui::SliderInt("Model every N frames", &interval, 2, 8))
-            config->DlssNrEditCacheInterval = (uint32_t) interval;
-        HelpMarker("How often the model runs. Longer saves more GPU time; things moving fast hold the model's last "
-                   "result longer.");
-
-        // 0 = Auto: the measured best for this interval (DlssNrEditCache::CrossfadeFor), shown in the slider
-        int crossfade = (int) std::min(config->DlssNrEditCacheCrossfade.value_or_default(), 8u);
-        char autoLabel[32];
-        std::snprintf(autoLabel, sizeof(autoLabel), "Auto (%u)",
-                      DlssNrEditCache::CrossfadeFor((uint32_t) interval, 0));
-        if (ImGui::SliderInt("Crossfade (frames)", &crossfade, 0, 8, crossfade == 0 ? autoLabel : "%d"))
-            config->DlssNrEditCacheCrossfade = (uint32_t) crossfade;
-        HelpMarker("Frames a new result takes to fade in. Auto: the shortest that keeps the light from pulsing at this "
-                   "N (measured). 1: at once (the light can pulse each time the model runs); longer: smoother, but a "
-                   "change takes longer to show.");
-
-        int view = (int) std::min(config->DlssNrEditCacheDebug.value_or_default(), 2u);
-        const char* views[] = { "Off", "Dropped pixels (red)", "Age of the result" };
-        if (ImGui::Combo("Edit cache view", &view, views, IM_ARRAYSIZE(views)))
-            config->DlssNrEditCacheDebug = (uint32_t) view;
-
+    // The edit cache: ini only (EditCache=true), not offered here
+    if (config->DlssNrEditCache.value_or_default())
+    {
         const DlssNr::EditCacheInfo status = DlssNr::EditCacheStatus();
         if (status.running)
-            ImGui::Text("Edit cache: on, the model ran on %.0f%% of frames", status.modelShare * 100.0f);
+            ImGui::TextDisabled("Edit cache (set in the ini): on, the model ran on %.0f%% of frames",
+                                status.modelShare * 100.0f);
         else if (status.standsAside != nullptr)
-            ImGui::TextWrapped("Edit cache: every frame runs the model (%s)", status.standsAside);
+            ImGui::TextDisabled("Edit cache (set in the ini): every frame runs the model (%s)", status.standsAside);
         else
-            ImGui::TextDisabled("Edit cache: not running yet");
+            ImGui::TextDisabled("Edit cache (set in the ini): not running");
     }
     return detailReuse;
 }
@@ -1557,8 +1551,8 @@ static void RenderF5LowPage(Config* config, const NrCommon& nr)
         else
             ImGui::TextUnformatted("Reuse detail between frames: On");
     }
-    HelpMarker("Runs the model every other frame to about halve NR's cost; with Optical F5Low it skips detail where "
-               "the motion can't be trusted. Set on the NR Options page.");
+    HelpMarker("Runs the model every other frame (or every 3rd) to cut NR's cost by about half (or two thirds); with "
+               "Optical F5Low it skips detail where the motion can't be trusted. Set on the NR Options page.");
     if (ImGui::SmallButton("Set in NR Options##f5lowdetailreuse"))
         MenuPages::RequestPage(MenuPages::Page::NrOptions);
 

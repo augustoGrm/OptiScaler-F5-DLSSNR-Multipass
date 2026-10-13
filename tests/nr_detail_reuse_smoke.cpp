@@ -3,6 +3,7 @@
 // cl /std:c++20 /EHsc tests/nr_detail_reuse_smoke.cpp
 #include "../OptiScaler/dlssnr/DlssNrDetailReuse.h"
 
+#include <cmath>
 #include <cstdio>
 
 using namespace DlssNrDetailReuse;
@@ -407,6 +408,135 @@ static void LearntStep()
     CHECK(c.Next(f).kind == Kind::Full && c.Fallback() == 1 && c.Causes().gap == 1);
 }
 
+// Every 3rd frame: two reused frames after each full one; the second accumulates its vectors, the full frame after it
+// composes, and nothing else changes.
+static void EveryThird()
+{
+    Cadence c;
+    const char* pattern = "FRRFRRFR";
+    for (int i = 0; i < 8; ++i)
+    {
+        FrameFacts f = Facts(100 + i);
+        f.reuseRun = 2;
+        const Decision d = c.Next(f);
+        c.Captured(true);
+        const bool reuse = pattern[i] == 'R';
+        CHECK((d.kind == Kind::Reuse) == reuse);
+        CHECK(d.accumulateMotion == (reuse && pattern[i - 1] == 'R'));
+        CHECK(d.composeMotion == (!reuse && i > 0));
+        CHECK(d.spreadStep == -1); // no spread asked for
+    }
+    CHECK(c.Full() == 3 && c.Reused() == 5);
+
+    // A held frame between the two reused ones: the full frame composes the one reused frame's vectors, and the run
+    // starts over after it
+    Cadence h;
+    for (int i = 0; i < 2; ++i)
+    {
+        FrameFacts f = Facts(200 + i);
+        f.reuseRun = 2;
+        h.Next(f);
+        h.Captured(true);
+    }
+    FrameFacts held = Facts(202);
+    held.reuseRun = 2;
+    held.hold = true;
+    Decision d = h.Next(held);
+    h.Captured(true);
+    CHECK(d.kind == Kind::Full && d.composeMotion);
+    FrameFacts next = Facts(203);
+    next.reuseRun = 2;
+    d = h.Next(next);
+    CHECK(d.kind == Kind::Reuse && !d.accumulateMotion);
+}
+
+// The spread: the full frame after reused ones and the reused frames after it, k = 0 .. spread - 2, with Steady's
+// amounts that leave (k + 1) / spread of the new detail; the last of them saves nothing for a next one.
+static void Spread()
+{
+    CHECK(SpreadAmount(0, 1) == 0.0f);
+    CHECK(std::abs(SpreadAmount(0, 2) - 0.5f) < 1e-6f);
+    CHECK(std::abs(SpreadAmount(0, 3) - 2.0f / 3.0f) < 1e-6f && std::abs(SpreadAmount(1, 3) - 0.5f) < 1e-6f);
+    CHECK(SpreadAmount(2, 3) == 0.0f);
+    // What the k-th frame shows of the new detail: 1 - the product of the amounts so far
+    for (unsigned int s = 2; s <= 3; ++s)
+    {
+        float old = 1.0f;
+        for (unsigned int k = 0; k + 1 < s; ++k)
+        {
+            old *= SpreadAmount(k, s);
+            CHECK(std::abs((1.0f - old) - float(k + 1) / float(s)) < 1e-6f);
+        }
+    }
+
+    // Every 3rd frame, spread over 3: F(k0, saves) R(k1) R(none) F(k0) ...
+    Cadence c;
+    const int steps[] = { -1, -1, -1, 0, 1, -1, 0, 1 }; // the first full frame follows nothing reused: no spread
+    for (int i = 0; i < 8; ++i)
+    {
+        FrameFacts f = Facts(300 + i);
+        f.reuseRun = 2;
+        f.spread = 3;
+        const Decision d = c.Next(f);
+        c.Captured(true);
+        CHECK(d.spreadStep == steps[i]);
+        CHECK(d.saveShown == (steps[i] == 0));
+        if (steps[i] >= 0)
+            CHECK(std::abs(d.spreadAmount - SpreadAmount((unsigned) steps[i], 3)) < 1e-6f);
+    }
+
+    // Every other frame, spread over 2: only the full frames after a reused one
+    Cadence e;
+    const int steps2[] = { -1, -1, 0, -1, 0, -1 };
+    for (int i = 0; i < 6; ++i)
+    {
+        FrameFacts f = Facts(400 + i);
+        f.spread = 2;
+        const Decision d = e.Next(f);
+        e.Captured(true);
+        CHECK(d.spreadStep == steps2[i] && !d.saveShown);
+    }
+
+    // A reset or a dropped frame ends it; a full frame without usable history does not start one
+    Cadence r;
+    for (int i = 0; i < 3; ++i)
+    {
+        FrameFacts f = Facts(500 + i);
+        f.reuseRun = 2;
+        f.spread = 3;
+        r.Next(f);
+        r.Captured(true);
+    }
+    FrameFacts cut = Facts(503);
+    cut.reuseRun = 2;
+    cut.spread = 3;
+    cut.reset = true;
+    Decision d = r.Next(cut);
+    r.Captured(true);
+    CHECK(d.kind == Kind::Full && d.spreadStep == -1);
+    FrameFacts after = Facts(504);
+    after.reuseRun = 2;
+    after.spread = 3;
+    d = r.Next(after);
+    CHECK(d.spreadStep == -1);
+    r.Captured(true);
+
+    Cadence q;
+    for (int i = 0; i < 4; ++i) // F R R F(k0)
+    {
+        FrameFacts f = Facts(600 + i);
+        f.reuseRun = 2;
+        f.spread = 3;
+        q.Next(f);
+        q.Captured(true);
+    }
+    q.EndSpread(); // the shown detail could not be saved
+    FrameFacts f = Facts(604);
+    f.reuseRun = 2;
+    f.spread = 3;
+    CHECK(q.Next(f).spreadStep == -1);
+}
+
 int main()
 {
     Route();
@@ -424,6 +554,8 @@ int main()
     HeldCountsOnlyLostReuse();
     Motion();
     FrameRate();
+    EveryThird();
+    Spread();
 
     if (fails == 0)
         printf("nr_detail_reuse_smoke: all passed\n");

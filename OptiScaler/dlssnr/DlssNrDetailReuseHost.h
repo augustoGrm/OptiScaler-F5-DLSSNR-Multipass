@@ -84,7 +84,18 @@ struct Wanted
     bool hold = false;    // that measurement says the picture is moving too fast: run the model this frame
     float steady = 0.0f;
     float fill = 0.0f;
+    unsigned int interval = 2; // the model every N frames (2 or 3)
+    unsigned int spread = 1;   // frames the full frame's jump is spread over (1 = none)
 };
+
+// DetailReuseSpread 0 (auto): none at every other frame, as it shipped; over 3 at every 3rd frame, where the measured
+// pulse is largest (dlssnr/DlssNrDetailReuse.h).
+inline unsigned int SpreadFor(unsigned int interval, unsigned int spread)
+{
+    if (spread == 0)
+        return interval >= 3 ? 3u : 1u;
+    return std::clamp(spread, 1u, 3u);
+}
 
 // Frame generation is built from two real frames, so reused frames next to full ones show under it: the edges of the
 // screen flickered in fast motion (NBA 2K27 with OptiFG 2026-09-28, The Witcher 3 2026-09-30) until MotionGuard stopped
@@ -175,6 +186,8 @@ class Host
         // menu shows it, and the frame counts carry it).
         w.steady = std::clamp(cfg.DlssNrDetailReuseSteady.value_or_default(), 0.0f, 1.0f);
         w.fill = std::clamp(cfg.DlssNrDetailReuseFill.value_or_default(), 0.0f, 1.0f);
+        w.interval = std::clamp(cfg.DlssNrDetailReuseInterval.value_or_default(), 2u, 3u);
+        w.spread = SpreadFor(w.interval, cfg.DlssNrDetailReuseSpread.value_or_default());
         // Held off for now (frame generation, which often pauses and resumes, or the frame rate): the textures stay a
         // while.
         const bool heldOff = on && whyNot != nullptr && (whyNot == fg || whyNot == kBelowMinimumFps);
@@ -206,6 +219,8 @@ class Host
         facts.reset = f.modelReset;
         facts.blocked = f.blocked;
         facts.hold = w.hold;
+        facts.reuseRun = w.interval - 1;
+        facts.spread = w.spread;
         // Without frame generation NR runs on every present, so any skipped present is a gap. With it, the present
         // counter also counts the generated frames: the step that is normal is learnt (StepTracker).
         facts.frame = f.frameNumber;

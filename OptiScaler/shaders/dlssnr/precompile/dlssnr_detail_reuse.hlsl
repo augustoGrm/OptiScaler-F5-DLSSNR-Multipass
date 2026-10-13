@@ -579,6 +579,29 @@ void SaveMotion(uint2 p)
     u0[p] = float4(all(isfinite(displacement)) ? displacement : 0.0, 0.0, 0.0);
 }
 
+// The second reused frame in a row (every 3rd frame): this frame's displacement plus the saved one (the reused frame
+// before) where it leads, so the next full frame composes back to the model's last run. Point-sampled, as Compose.
+void AccumulateMotion(uint2 p)
+{
+    const float2 uv = WorkUv(p);
+    const float2 displacement = UvDisplacement(RawMotion(uv));
+    if (!all(isfinite(displacement)))
+    {
+        u0[p] = float4(0.0, 0.0, 0.0, 0.0);
+        return;
+    }
+    float2 sum = displacement;
+    const float2 previousUv = uv + displacement;
+    // Off screen there is no saved displacement: the one frame we know stands in, as Compose does
+    if (all(previousUv >= 0.0) && all(previousUv <= 1.0))
+    {
+        const float2 prior = t4.Load(int3(GuideTexel(previousUv, uint2(workWidth, workHeight)), 0)).rg;
+        if (all(isfinite(prior)) && all(abs(displacement + prior) <= 1.0))
+            sum = displacement + prior;
+    }
+    u0[p] = float4(sum, 0.0, 0.0);
+}
+
 // Motion size: this frame's raw vector plus the saved displacement at the moved position, back in this frame's raw
 // units. Vectors are point-sampled: blending two surfaces' vectors across an edge gives one that belongs to neither.
 void Compose(uint2 q)
@@ -629,6 +652,8 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         Capture(p);
     else if (mode == 2)
         SaveMotion(p);
+    else if (mode == 8)
+        AccumulateMotion(p);
     else if (mode == 1)
         Reproject(p);
     else if (mode == 4)

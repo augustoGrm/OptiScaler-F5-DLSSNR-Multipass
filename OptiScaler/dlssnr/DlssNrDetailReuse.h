@@ -24,6 +24,20 @@
 // The model keeps its own history (its previous output). After a reuse frame that history is two frames old,
 // so the next full frame hands the model motion composed over both frames (composeMotion), unless the model
 // starts over anyway (reset).
+//
+// Every 3rd frame (DetailReuseInterval 3): two reused frames follow each full one. The second keeps its vectors
+// accumulated over both reused frames (accumulateMotion), so the next full frame composes back to the model's last run.
+//
+// The spread (DetailReuseSpread): the model's new detail differs from the moved old detail by however much the model
+// itself drifted over the frames it was skipped (its regional light moves a little every frame), and the full frame
+// shows that drift at once: the light pulses each time the model runs, more at every 3rd frame. Spread over S frames,
+// the full frame and the reused frames after it show what was shown before it, moved along, blended toward the new
+// detail by (k + 1) / S on the k-th of them. It is Steady's blend (Steady below), but on the display only: what is
+// saved for the next frame is the unblended detail, so the old detail is not carried on through the run (Steady's pull
+// is saved, and trails). Measured offline (DLSS-TOOLS editcache/reuse_sim.py, NBA 2K27, slow pan): every 3rd frame
+// stepped the regional light 0.022 stop when the model ran, against 0.009 from frame to frame when it runs on every
+// frame; spread over 3, 0.008 (no pulse), at slightly stronger trails than every other frame unspread (0.395 vs 0.258
+// stop, p99.5) and the model on a third of the frames instead of half.
 
 namespace DlssNrDetailReuse
 {
@@ -45,6 +59,8 @@ struct FrameFacts
     unsigned long long maxStep = 1;  // the largest step between two NR frames that is not a gap (frame generation
                                      // presents in between, so a present counter steps by more than one)
     unsigned long long revision = 0; // changes whenever anything that changes the model's answer changes
+    unsigned int reuseRun = 1;       // reused frames after each full one: 1 (every other frame) or 2 (every 3rd)
+    unsigned int spread = 1;         // frames the full frame's jump is spread over (1 = none)
 };
 
 struct Decision
@@ -54,7 +70,25 @@ struct Decision
     bool captureHistory = false; // save answer - input, the input colour and the depth for the next frame
     bool composeMotion = false;  // full frame: give the model motion composed over the last two frames
     bool saveMotion = false;     // reuse frame: keep this frame's motion for the next full frame to compose
+    bool accumulateMotion = false; // ... added to what the reuse frame before it kept (the second reused frame in a row)
+    int spreadStep = -1;         // the k-th frame of a spread (0 = the full frame), or -1: none on this frame
+    float spreadAmount = 0.0f;   // how far it pulls toward the moved detail shown before (Steady's amount)
+    bool saveShown = false;      // keep what this frame shows (its spread result) for the spread's next frame
 };
+
+// The k-th frame of a spread over `spread` frames shows (k + 1) / spread of the new detail. What it blends with is the
+// last frame's shown detail moved here, which is itself already partly new from k = 1 on, so the pull toward it is
+// the share of old that remains over the share that was left: k = 0, 1 - 1 / spread; then (1 - (k + 1) / spread) /
+// (1 - k / spread). Over 3: 2/3, then 1/2.
+inline float SpreadAmount(unsigned int k, unsigned int spread)
+{
+    if (spread <= 1 || k + 1 >= spread)
+        return 0.0f;
+    const float s = (float) spread;
+    if (k == 0)
+        return 1.0f - 1.0f / s;
+    return (1.0f - (float) (k + 1) / s) / (1.0f - (float) k / s);
+}
 
 // How far the frame number steps between two NR frames when NR runs on every rendered frame. With frame generation
 // the present counter also counts the generated frames, so the step is the multiplier: 2 at 2x, 4 at 4x, more with an
@@ -117,7 +151,8 @@ class Cadence
 {
     bool historyValid = false; // the previous frame's detail is saved
     bool pending = false;      // Next asked for a capture; Captured has not confirmed it yet
-    bool lastWasReuse = false;
+    unsigned int reusedInRow = 0; // reused frames since the last full one
+    int spreadStep = -1;          // the last frame's step in a spread, -1: none
     bool lastBlocked = false; // the history was saved on a blocked frame (a held frame saves the frozen picture)
     bool hasLast = false;
     unsigned long long lastFrame = 0;
@@ -134,7 +169,8 @@ public:
         {
             historyValid = false;
             pending = false;
-            lastWasReuse = false;
+            reusedInRow = 0;
+            spreadStep = -1;
             lastBlocked = false;
             hasLast = false;
             return d;
@@ -152,14 +188,20 @@ public:
         // The frame after a blocked one runs the model too: what was saved then may be a frozen picture.
         const bool invalid = f.reset || f.blocked || lastBlocked || gap || changed;
         const bool usable = historyValid && !invalid;
-        const bool wouldReuse = historyValid && !lastWasReuse;
+        const unsigned int run = std::clamp(f.reuseRun, 1u, 2u);
+        const bool wouldReuse = historyValid && reusedInRow < run;
+        const bool afterReuse = reusedInRow > 0;
 
         if (wouldReuse && !invalid && !f.hold)
         {
             d.kind = Kind::Reuse;
             d.saveMotion = true;
+            d.accumulateMotion = reusedInRow > 0;
             ++reused;
-            lastWasReuse = true;
+            ++reusedInRow;
+            // The spread goes on through the reused frames after a full one
+            if (spreadStep >= 0 && (unsigned int) spreadStep + 2 < f.spread)
+                d.spreadStep = spreadStep + 1;
         }
         else
         {
@@ -185,10 +227,20 @@ public:
             d.kind = Kind::Full;
             // After a gap the model's history is older still; composing two frames would not cover it,
             // and the saved motion belongs to a frame before the gap.
-            d.composeMotion = lastWasReuse && !f.reset && !gap;
+            d.composeMotion = afterReuse && !f.reset && !gap;
             ++full;
-            lastWasReuse = false;
+            reusedInRow = 0;
+            // A spread starts on a full frame after reused ones (the model was skipped, so its detail jumps), with
+            // last frame's detail to move
+            if (afterReuse && usable && f.spread > 1)
+                d.spreadStep = 0;
         }
+        if (d.spreadStep >= 0)
+        {
+            d.spreadAmount = SpreadAmount((unsigned int) d.spreadStep, f.spread);
+            d.saveShown = (unsigned int) d.spreadStep + 2 < f.spread;
+        }
+        spreadStep = d.spreadStep;
 
         d.historyUsable = usable;
         d.captureHistory = true;
@@ -217,14 +269,19 @@ public:
     {
         historyValid = false;
         pending = false;
-        lastWasReuse = false;
+        reusedInRow = 0;
+        spreadStep = -1;
     }
+
+    // The spread's saved shown detail could not be written: the spread ends here (the frames after show the unblended
+    // detail, as without it).
+    void EndSpread() { spreadStep = -1; }
 
     // The reuse frame Next asked for could not be recorded (the caller ran the model instead): counted as a fallback,
     // not a reuse, and the next frame starts clean.
     void ReuseFailed()
     {
-        if (lastWasReuse && reused > 0)
+        if (reusedInRow > 0 && reused > 0)
         {
             --reused;
             ++fallback;

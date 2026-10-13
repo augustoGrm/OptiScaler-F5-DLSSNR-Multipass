@@ -22,6 +22,9 @@ enum DlssNrDetailReuseMode : uint32_t
                                       //          (sum of 1 - trust, pixels measured, 0, 0). Dispatched over
                                       //          kDlssNrDetailReuseCoverageTiles * 8 in each direction, so there is one
                                       //          8x8 thread group per tile.
+    DlssNrDetailReuse_AccumulateMotion = 8, // [work] t3 motion guide, t4 saved vectors -> u0 this frame's vectors as
+                                            //        uv displacement plus the saved ones where they lead (the second
+                                            //        reused frame in a row, every 3rd frame)
 };
 
 // The curve a Replace answer is decoded through (dlssnr.hlsl: Neutwo + replace, balanced + replace). None for the

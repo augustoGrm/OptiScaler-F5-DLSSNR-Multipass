@@ -279,6 +279,11 @@ class Config
     // Full frames: how far the model's new detail is pulled toward the moved previous detail (0..1), so full and
     // reused frames differ less. 0 = off.
     CustomOptional<float> DlssNrDetailReuseSteady { 0.0f };
+    // The model every N frames: 2 (every other frame) or 3 (two reused frames after each full one).
+    CustomOptional<uint32_t> DlssNrDetailReuseInterval { 2 };
+    // Frames the jump of the model's new detail is spread over, on the display only (dlssnr/DlssNrDetailReuse.h):
+    // 0 = auto (every other frame: 1, none, as before; every 3rd frame: 3), 1 = none, 2..3.
+    CustomOptional<uint32_t> DlssNrDetailReuseSpread { 0 };
     // Reused frames: where the moved detail was dropped, how much of the trusted detail of neighbours on the same
     // surface goes in instead (0..1). Stops dropped areas flashing to the un-NR'd image with several passes.
     CustomOptional<float> DlssNrDetailReuseFill { 1.0f };
