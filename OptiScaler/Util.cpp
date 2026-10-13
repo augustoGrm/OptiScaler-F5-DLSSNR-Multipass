@@ -25,6 +25,16 @@ static IID streamlineRiid {};
 /// </summary>
 /// <param name="returnAddress">Use _ReturnAddress() for this</param>
 /// <returns>Caller module filename</returns>
+uint64_t Util::GetTimestamp()
+{
+    FILETIME fileTime;
+    GetSystemTimePreciseAsFileTime(&fileTime);
+
+    uint64_t time = (static_cast<uint64_t>(fileTime.dwHighDateTime) << 32) | fileTime.dwLowDateTime;
+
+    return time * 100;
+}
+
 std::string Util::WhoIsTheCaller(void* returnAddress)
 {
     char callerPath[MAX_PATH] = { 0 };

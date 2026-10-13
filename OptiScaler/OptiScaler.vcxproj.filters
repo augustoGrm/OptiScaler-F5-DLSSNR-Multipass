@@ -1016,6 +1016,21 @@
     <ClInclude Include="low_latency\input\input_reflex.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="low_latency\low_latency_tech\ll_reflex_vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="low_latency\low_latency_tech\ll_reflex.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="low_latency\low_latency_tech\ll_fps_limiter.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="low_latency\input\input_antilag_vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="low_latency\input\input_reflex_vk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="shaders\rcas\precompile\da_das_sharpen_Shader.h">
       <Filter>Header Files</Filter>
     </ClInclude>
@@ -1053,6 +1068,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="low_latency\input\input_common.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="low_latency\input\UeInputRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="menu\input\input_system.h">
@@ -1704,6 +1722,21 @@
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="low_latency\input\input_reflex.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="low_latency\low_latency_tech\ll_reflex_vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="low_latency\low_latency_tech\ll_reflex.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="low_latency\low_latency_tech\ll_fps_limiter.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="low_latency\input\input_antilag_vk.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="low_latency\input\input_reflex_vk.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="low_latency\input\input_common.cpp">

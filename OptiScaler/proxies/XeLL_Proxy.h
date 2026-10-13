@@ -200,9 +200,10 @@ class XeLLProxy
     {
 #ifndef LOW_LATENCY_INPUTS
         return true;
-#endif
-
+#else
         // TODO: add hooks to redirect already loaded libxell into dllModule
+        // Phase B of the low latency absorb: RedirectAllExports below patches another libxell copy (vendor NN1, as XL16
+        // removed on the live path); replace it with the lookup answer before LOW_LATENCY_INPUTS is turned on.
 
         HMODULE mainModule = nullptr;
 
@@ -228,6 +229,7 @@ class XeLLProxy
         }
 
         return false;
+#endif
     }
 
   public:
