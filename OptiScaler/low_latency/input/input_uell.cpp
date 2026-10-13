@@ -1,12 +1,33 @@
 #include "pch.h"
 
-// Upstream's low latency input layer, absorbed in phases (.ai-os plan 2026-10-14-absorb-upstream-low-latency): built once LOW_LATENCY_INPUTS is on.
-#ifdef LOW_LATENCY_INPUTS
 #include "input_uell.h"
+#include "UeInputRule.h"
+
+#include <hooks/Reflex_Hooks.h>
+#include <native/NativeLowLatency.h>
 
 #include <DirectXMath.h>
 
 using namespace DirectX;
+
+// The output keeps what it has while the mod stands aside: stopping Reflex would send low latency off under the one
+// that runs
+static bool StandAside()
+{
+    const bool aside = ueinput::StandAside(ReflexHooks::gameCalledReflex(), native::lowlatency::Running());
+
+    static std::atomic_bool wasAside = false;
+
+    if (wasAside.exchange(aside) != aside)
+    {
+        if (aside)
+            LOG_INFO("UE Low Latency mod: stands aside, the game's Reflex or OptiScaler's own low latency runs");
+        else
+            LOG_INFO("UE Low Latency mod: its frames drive the low latency output again");
+    }
+
+    return aside;
+}
 
 void InputUeLowLatency::init()
 {
@@ -22,27 +43,31 @@ void InputUeLowLatency::init()
     inited = device != nullptr;
 
     if (inited)
-    {
         LOG_DEBUG("Inited UeLowLatency");
-
-        // TODO: not fully filled out
-        SleepMode sleepMode {};
-        sleepMode.low_latency_enabled = true;
-        sleepMode.minimum_interval_us = 0;
-
-        auto result = InputCommon::set_sleep_mode(inputContext, device, &sleepMode);
-
-        if (result == InputResult::Ok || result == InputResult::UsingDifferentInput)
-            return;
-        else
-            LOG_ERROR("set_sleep_mode result: {}", magic_enum::enum_name(result));
-    }
 }
 
 void InputUeLowLatency::tickStart(int64_t frameId, float DeltaSeconds, bool bIdleMode)
 {
     if (!inited)
         InputUeLowLatency::init();
+
+    if (!inited || StandAside())
+        return;
+
+    if (auto lowLatency = ueinput::SleepModeToSend(native::lowlatency::GameLowLatencyBlocked(), sentLowLatency))
+    {
+        // No interval: the frame cap stays with OptiScaler's limiter. InputCommon keeps the mode even when it fails,
+        // for an output that starts later.
+        SleepMode sleepMode {};
+        sleepMode.low_latency_enabled = *lowLatency;
+        sentLowLatency = *lowLatency;
+
+        if (auto result = InputCommon::set_sleep_mode(inputContext, device, &sleepMode);
+            result != InputResult::Ok && result != InputResult::UsingDifferentInput)
+        {
+            LOG_ERROR("set_sleep_mode result: {}", magic_enum::enum_name(result));
+        }
+    }
 
     // Most backends use 32bit frameId so it is what it is
     auto result = InputCommon::sleep(inputContext, device, (uint32_t) frameId);
@@ -71,6 +96,9 @@ void InputUeLowLatency::tickStart(int64_t frameId, float DeltaSeconds, bool bIdl
 
 void InputUeLowLatency::tickEnd(int64_t frameId, float DeltaSeconds, bool bIdleMode)
 {
+    if (!inited || StandAside())
+        return;
+
     MarkerParams markerParams {};
     markerParams.frame_id = frameId;
     markerParams.marker_type = MarkerType::SIMULATION_END;
@@ -136,5 +164,3 @@ void InputUeLowLatency::cameraUpdate(int64_t frameId, float cameraPosition[3], f
         fg->SetCameraValues(0.01f, 10000.f, DirectX::XMConvertToRadians(fovAngle), aspectRatio, 0.0f, index);
     }
 }
-
-#endif // LOW_LATENCY_INPUTS

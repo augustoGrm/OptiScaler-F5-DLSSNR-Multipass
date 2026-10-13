@@ -20,28 +20,22 @@ bool Reflex::init(IUnknown* pDevice)
     }
 
     auto queryInterface = NvApiHooks::o_NvAPI_QueryInterface;
-    ReflexHooks::hookReflex(queryInterface);
+
+    // Our own Reflex calls (ReflexHooks::own*) run the hooked wrappers without counting as the game's
+    if (!ReflexHooks::ensureTable(queryInterface))
+        return false;
 
     // A game without Reflex might never have initialized nvapi
     if (auto initialize = GET_INTERFACE(NvAPI_Initialize, queryInterface);
         initialize == nullptr || initialize() != NVAPI_OK)
         return false;
 
-    o_SetSleepMode = (decltype(o_SetSleepMode)) ReflexHooks::getHookedReflex(GET_ID(NvAPI_D3D_SetSleepMode));
-    o_Sleep = (decltype(o_Sleep)) ReflexHooks::getHookedReflex(GET_ID(NvAPI_D3D_Sleep));
-    o_SetLatencyMarker =
-        (decltype(o_SetLatencyMarker)) ReflexHooks::getHookedReflex(GET_ID(NvAPI_D3D_SetLatencyMarker));
-    o_SetAsyncFrameMarker =
-        (decltype(o_SetAsyncFrameMarker)) ReflexHooks::getHookedReflex(GET_ID(NvAPI_D3D12_SetAsyncFrameMarker));
-    o_GetLatency = (decltype(o_GetLatency)) ReflexHooks::getHookedReflex(GET_ID(NvAPI_D3D_GetLatency));
+    o_SetAsyncFrameMarker = GET_INTERFACE(NvAPI_D3D12_SetAsyncFrameMarker, queryInterface);
     o_GetSleepStatus = GET_INTERFACE(NvAPI_D3D_GetSleepStatus, queryInterface);
     o_SetReflexSync = GET_INTERFACE(NvAPI_D3D_SetReflexSync, queryInterface); // Optional, R530+
 
-    if (o_SetSleepMode == nullptr || o_Sleep == nullptr || o_SetLatencyMarker == nullptr ||
-        o_SetAsyncFrameMarker == nullptr || o_GetLatency == nullptr || o_GetSleepStatus == nullptr)
-    {
+    if (o_SetAsyncFrameMarker == nullptr || o_GetSleepStatus == nullptr)
         return false;
-    }
 
     device = pDevice;
     LOG_INFO("Reflex initialized");
@@ -55,7 +49,7 @@ void Reflex::deinit()
     {
         NV_SET_SLEEP_MODE_PARAMS params {};
         params.version = NV_SET_SLEEP_MODE_PARAMS_VER;
-        o_SetSleepMode(device, &params);
+        ReflexHooks::ownSetSleepMode(device, &params);
     }
 
     device = nullptr;
@@ -81,7 +75,7 @@ void Reflex::apply_sleep_mode()
     params.bUseMarkersToOptimize = sleep_mode.use_markers_to_optimize;
     params.bUseMinQueueTime = sleep_mode.use_min_queue_time;
 
-    auto result = o_SetSleepMode(device, &params);
+    auto result = ReflexHooks::ownSetSleepMode(device, &params);
     applied_enabled = params.bLowLatencyMode;
 
     LOG_INFO("Reflex sleep mode, low latency: {}, boost: {}, interval: {} us, result: {}", (int) params.bLowLatencyMode,
@@ -129,7 +123,7 @@ void Reflex::sleep(std::optional<uint32_t> frame_id)
     if (sleep_mode_known && is_enabled() != applied_enabled)
         apply_sleep_mode();
 
-    o_Sleep(device);
+    ReflexHooks::ownSleep(device);
 }
 
 void Reflex::set_marker(IUnknown* pDevice, const MarkerParams& marker_params)
@@ -140,7 +134,7 @@ void Reflex::set_marker(IUnknown* pDevice, const MarkerParams& marker_params)
     params.markerType = (NV_LATENCY_MARKER_TYPE) marker_params.marker_type; // Enums match
 
     if (auto target = pDevice != nullptr ? pDevice : device)
-        o_SetLatencyMarker(target, &params);
+        ReflexHooks::ownSetLatencyMarker(target, &params);
 }
 
 void Reflex::set_async_marker(IUnknown* pCommandQueue, const MarkerParams& marker_params)
@@ -178,5 +172,5 @@ NvAPI_Status Reflex::get_latency(NV_LATENCY_RESULT_PARAMS* latency_params) const
     if (device == nullptr)
         return NVAPI_INVALID_ARGUMENT;
 
-    return o_GetLatency(device, latency_params);
+    return ReflexHooks::ownGetLatency(device, latency_params);
 }

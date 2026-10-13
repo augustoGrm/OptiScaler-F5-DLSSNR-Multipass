@@ -37,6 +37,10 @@ enum class InputResult : uint32_t
 
 class ReflexVk;
 
+// Completes the type in every file that includes this one: one that only declares the members below would give them
+// a weaker alignment than input_common.cpp (LTCG warning C4744), and the linker may keep that one
+static_assert(sizeof(std::atomic<std::shared_ptr<LowLatencyTech>>) > 0);
+
 struct TimingData
 {
     std::optional<TimingEntry> timeRange; // in ns, value stored in length

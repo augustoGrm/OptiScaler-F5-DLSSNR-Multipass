@@ -1,7 +1,8 @@
 #include "pch.h"
 
-// Upstream's low latency input layer, absorbed in phases (.ai-os plan 2026-10-14-absorb-upstream-low-latency): built once LOW_LATENCY_INPUTS is on.
-#ifdef LOW_LATENCY_INPUTS
+// Upstream's low latency input layer, absorbed in phases (.ai-os plan 2026-10-14-absorb-upstream-low-latency). Without
+// LOW_LATENCY_INPUTS only the UE Low Latency mod is an input (input_uell.cpp): the game's Reflex and XeLL stay on
+// our own hooks, and there is no Vulkan Reflex output yet.
 
 #include <misc/IdentifyGpu.h>
 
@@ -15,7 +16,9 @@
 #include <low_latency/low_latency_tech/ll_antilag_vk.h>
 #include <low_latency/low_latency_tech/ll_fps_limiter.h>
 #include <hooks/Vulkan_Hooks.h>
+#ifdef LOW_LATENCY_INPUTS
 #include <inputs/FG/XeFG_Inputs_Dx12.h>
+#endif
 #include <framegen/IFGFeature_Dx12.h>
 #include <nvapi/fakenvapi.h>
 
@@ -87,9 +90,11 @@ bool InputCommon::init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMo
             isInitialized = try_init(std::make_shared<AntiLag2>(), "AntiLag2");
             break;
         case LowLatencyMode::Reflex:
+#ifdef LOW_LATENCY_INPUTS
             if (api == API::Vulkan)
                 isInitialized = try_init(std::make_shared<ReflexVk>(), "Reflex Vulkan");
             else
+#endif
                 isInitialized = try_init(std::make_shared<Reflex>(), "Reflex");
             break;
         case LowLatencyMode::AntiLagVk:
@@ -144,8 +149,10 @@ LowLatencyMode InputCommon::default_output(API api)
         if (vendorId == VendorId::AMD && VulkanHooks::o_vkAntiLagUpdateAMD != nullptr)
             return LowLatencyMode::AntiLagVk;
 
+#ifdef LOW_LATENCY_INPUTS
         if (vendorId == VendorId::Nvidia && VulkanHooks::o_vkSetLatencySleepModeNV != nullptr)
             return LowLatencyMode::Reflex;
+#endif
 
         return LowLatencyMode::LatencyFlex;
     }
@@ -350,8 +357,10 @@ const char* InputCommon::incompatibility(LowLatencyInput input, LowLatencyMode o
 std::optional<LowLatencyInput> InputCommon::forced_input()
 {
     // The game's XeFG (also with the XeFG passthrough) runs on the game's XeLL
+#ifdef LOW_LATENCY_INPUTS
     if (XeFGInputs::Passthrough() || InputXeLL::IsNative())
         return LowLatencyInput::XeLL;
+#endif
 
     return std::nullopt;
 }
@@ -471,6 +480,12 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
         desiredMode = *forced;
 
     desiredMode = for_api(desiredMode, api);
+
+    // XeLL needs all six markers every frame (Intel R9): an input that can't send them (the UE mod's simulation
+    // markers) gets LatencyFlex instead of a XeLL fed half its frame
+    if (!forced.has_value() && desiredMode == LowLatencyMode::XeLL &&
+        incompatibility(activeInput, desiredMode) != nullptr)
+        desiredMode = LowLatencyMode::LatencyFlex;
 
     // XeFG paces with the XeLL output's own context, which stays the output until XeFG lets go of it
     if (xefg_uses_output_xell && activeOutput == LowLatencyMode::XeLL && desiredMode != LowLatencyMode::XeLL)
@@ -1457,7 +1472,11 @@ InputResult InputCommon::mark_present_start(IUnknown* pDevice)
 
 std::shared_ptr<ReflexVk> InputCommon::reflex_vk_output()
 {
+#ifdef LOW_LATENCY_INPUTS
     return std::dynamic_pointer_cast<ReflexVk>(currently_active_tech.load());
+#else
+    return nullptr;
+#endif
 }
 
 xell_context_handle_t InputCommon::xell_output_context()
@@ -1557,5 +1576,3 @@ bool InputCommon::xefg_output_change_pending()
     return started != LowLatencyMode::None &&
            xefg_output(Config::Instance()->LowLatencyOutput.value_or_default()) != started;
 }
-
-#endif // LOW_LATENCY_INPUTS

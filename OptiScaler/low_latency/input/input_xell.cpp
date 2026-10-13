@@ -1,6 +1,7 @@
 #include "pch.h"
 
-// Upstream's low latency input layer, absorbed in phases (.ai-os plan 2026-10-14-absorb-upstream-low-latency): built once LOW_LATENCY_INPUTS is on.
+// Upstream's low latency input layer, absorbed in phases (.ai-os plan 2026-10-14-absorb-upstream-low-latency): built
+// once LOW_LATENCY_INPUTS is on.
 #ifdef LOW_LATENCY_INPUTS
 #include "input_xell.h"
 #include <proxies/XeLL_Proxy.h>
@@ -622,5 +623,12 @@ XELL_EXPORT uint32_t xellAILGetVersion() { return InputXeLL::AILGetVersion(); }
 XELL_EXPORT bool xellAILIsSupportedDevice(uint32_t param1) { return InputXeLL::AILIsSupportedDevice(param1); }
 
 #endif
+
+#else
+
+#include "input_xell.h"
+
+// Without LOW_LATENCY_INPUTS the game's XeLL is no input (IsNative stays false): InputCommon never limits through it
+bool InputXeLL::LimitFps(uint32_t) { return false; }
 
 #endif // LOW_LATENCY_INPUTS

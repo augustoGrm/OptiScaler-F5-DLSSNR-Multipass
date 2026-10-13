@@ -13,6 +13,7 @@ class InputUeLowLatency
 {
     inline static bool inited = false;
     inline static IUnknown* device = nullptr;
+    inline static std::optional<bool> sentLowLatency; // the sleep mode last sent
 
     inline static InputContext inputContext { .caller = LowLatencyInput::UeLowLatency,
                                               .localContext = false,
