@@ -113,7 +113,10 @@ static void PatchSL1PluginJson(nlohmann::json& configJson)
     if (!IsSL1AndDLSSGManaged())
         return;
 
-    LOG_DEBUG("Patching SL1 plugin JSON for external FG management");
+    // Once per plugin load: says in a user's log why the game's own SL1 frame generation does nothing
+    LOG_INFO("SL1 DLSSG kept inert, OptiScaler manages it (FG Input {}, FG Output {}): plugin hooks and tags cleared",
+             magic_enum::enum_name(State::Instance().activeFgInput),
+             magic_enum::enum_name(State::Instance().activeFgOutput));
 
     if (configJson.contains("/hooks"_json_pointer))
         configJson["hooks"].clear();
