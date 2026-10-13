@@ -190,6 +190,26 @@ HMODULE WINAPI KernelHooks::hk_K32_GetModuleHandleW(LPCWSTR lpModuleName)
     return o_K32_GetModuleHandleW(lpModuleName);
 }
 
+// "libxell.dll" without case, ASCII only. No CRT locale (_stricmp can take its lock): the GetModuleHandleEx hooks can
+// run under the loader lock. Stops at the first mismatch, so it never reads past a shorter name.
+template <class C> static bool IsXellName(const C* name)
+{
+    static constexpr char xell[] = "libxell.dll";
+
+    for (size_t i = 0; i < sizeof(xell); ++i)
+    {
+        C c = name[i];
+
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<C>(c - 'A' + 'a');
+
+        if (c != static_cast<C>(xell[i]))
+            return false;
+    }
+
+    return true;
+}
+
 VALIDATE_HOOK(hk_K32_GetModuleHandleExA, Kernel32Proxy::PFN_GetModuleHandleExA)
 // XeFG finds the XeLL it pairs with by asking for libxell.dll by name. It gets the XeLL OptiScaler loaded, so XeFG and
 // OptiScaler share one XeLL (R1, R6) and no other copy has to be patched (XL16). Both A and W are answered: which one a
@@ -222,7 +242,8 @@ bool KernelHooks::AnswerXellLookup(DWORD dwFlags, HMODULE* phModule, BOOL* resul
 
 BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExA(DWORD dwFlags, LPCSTR lpModuleName, HMODULE* phModule)
 {
-    if (lpModuleName && _stricmp(lpModuleName, "libxell.dll") == 0)
+    // Flags first: with GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS lpModuleName is an address, not a name to compare
+    if (dwFlags == 0 && lpModuleName && IsXellName(lpModuleName))
     {
         BOOL result = FALSE;
 
@@ -244,7 +265,8 @@ BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExW(DWORD dwFlags, LPCWSTR lpModu
         return true;
     }
 
-    if (lpModuleName && _wcsicmp(lpModuleName, L"libxell.dll") == 0)
+    // Flags first: with GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS lpModuleName is an address, not a name to compare
+    if (dwFlags == 0 && lpModuleName && IsXellName(lpModuleName))
     {
         BOOL result = FALSE;
 
