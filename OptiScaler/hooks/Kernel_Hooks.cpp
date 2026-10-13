@@ -191,20 +191,43 @@ HMODULE WINAPI KernelHooks::hk_K32_GetModuleHandleW(LPCWSTR lpModuleName)
 }
 
 VALIDATE_HOOK(hk_K32_GetModuleHandleExA, Kernel32Proxy::PFN_GetModuleHandleExA)
+// XeFG finds the XeLL it pairs with by asking for libxell.dll by name. It gets the XeLL OptiScaler loaded, so XeFG and
+// OptiScaler share one XeLL (R1, R6) and no other copy has to be patched (XL16). Both A and W are answered: which one a
+// given XeFG build calls is not known here, and names are compared without case.
+bool KernelHooks::AnswerXellLookup(DWORD dwFlags, HMODULE* phModule, BOOL* result)
+{
+    if (dwFlags != 0 || phModule == nullptr)
+        return false;
+
+#ifdef LOW_LATENCY_INPUTS
+    *phModule = dllModule;
+    *result = TRUE;
+    return true;
+#else
+    const auto module = XeLLProxy::Module();
+
+    if (module == nullptr)
+        return false;
+
+    static std::atomic_bool logged { false };
+
+    if (!logged.exchange(true))
+        LOG_INFO("libxell.dll lookup answered with OptiScaler's XeLL: one XeLL for XeFG and OptiScaler");
+
+    *result = o_K32_GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCSTR>(module),
+                                       phModule);
+    return true;
+#endif
+}
+
 BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExA(DWORD dwFlags, LPCSTR lpModuleName, HMODULE* phModule)
 {
-    if (lpModuleName && dwFlags == 0 && strcmp("libxell.dll", lpModuleName) == 0 && phModule)
+    if (lpModuleName && _stricmp(lpModuleName, "libxell.dll") == 0)
     {
-#ifdef LOW_LATENCY_INPUTS
-        *phModule = dllModule;
-        return true;
-#else
-        if (const auto module = XeLLProxy::Module())
-        {
-            return o_K32_GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCSTR>(module),
-                                            phModule);
-        }
-#endif
+        BOOL result = FALSE;
+
+        if (AnswerXellLookup(dwFlags, phModule, &result))
+            return result;
     }
 
     return o_K32_GetModuleHandleExA(dwFlags, lpModuleName, phModule);
@@ -219,6 +242,14 @@ BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExW(DWORD dwFlags, LPCWSTR lpModu
         LOG_TRACE("Suspected SpecialK call for nvapi64");
         *phModule = LibraryLoadHooks::LoadNvApi();
         return true;
+    }
+
+    if (lpModuleName && _wcsicmp(lpModuleName, L"libxell.dll") == 0)
+    {
+        BOOL result = FALSE;
+
+        if (AnswerXellLookup(dwFlags, phModule, &result))
+            return result;
     }
 
     return o_K32_GetModuleHandleExW(dwFlags, lpModuleName, phModule);

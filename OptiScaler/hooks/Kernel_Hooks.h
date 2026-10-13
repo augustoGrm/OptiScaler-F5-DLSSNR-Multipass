@@ -51,6 +51,8 @@ class KernelHooks
     static HMODULE WINAPI hk_K32_GetModuleHandleW(LPCWSTR lpModuleName);
     static BOOL WINAPI hk_K32_GetModuleHandleExA(DWORD dwFlags, LPCSTR lpModuleName, HMODULE* phModule);
     static BOOL WINAPI hk_K32_GetModuleHandleExW(DWORD dwFlags, LPCWSTR lpModuleName, HMODULE* phModule);
+    // A by-name libxell.dll lookup (XeFG pairing with its XeLL): true and *result set when OptiScaler answers it
+    static bool AnswerXellLookup(DWORD dwFlags, HMODULE* phModule, BOOL* result);
     static FARPROC WINAPI hk_KB_GetProcAddress(HMODULE hModule, LPCSTR lpProcName);
     static DWORD WINAPI hk_K32_GetFileAttributesW(LPCWSTR lpFileName);
     static HANDLE WINAPI hk_K32_CreateFileW(LPCWSTR lpFileName, DWORD dwDesiredAccess, DWORD dwShareMode,
