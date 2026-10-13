@@ -486,6 +486,19 @@ class Config
     // rather than kept as an unclear trade-off; see plans/2026-09-18-dlssnr-enlarge-filter-simplify.md.
     CustomOptional<uint32_t> DlssNrReducedUpscaleMethod { 1 };
 
+    // Experimental input style: how the picture the model is shown is restyled before the model runs.
+    // 0 = off (default), 1 = watercolour (a Kuwahara filter: texture flattened into washes, edges kept),
+    // 2 = structure hint (local contrast raised on luminance, CAS-like, overshoot bounded),
+    // 3 = smooth canvas (a cross bilateral filter: skin like an untextured old-game surface, contours kept).
+    // DlssNrInputStyleStrength: watercolour and smooth canvas blend with the picture as it was (0..1); the structure
+    // hint scales its boost (0..3). DlssNrInputStyleFacesOnly: the style only where the colour looks like skin (the
+    // same colour test as SkinProtection). The resolve compares the answer against the same restyled picture, so
+    // Composed hands back only what the model painted; Replace shows the model's painting as it is. Skipped at model
+    // resolution above 100% and on the deferred path.
+    CustomOptional<uint32_t> DlssNrInputStyle { 0 };
+    CustomOptional<float> DlssNrInputStyleStrength { 1.0f };
+    CustomOptional<bool> DlssNrInputStyleFacesOnly { false };
+
     // Post-SR placement only: derive the working scale from the render:output ratio the upscaler
     // itself already reconstructed detail at, instead of the manual slider above. That output already
     // reconstructed detail at that ratio, so running NR at the same reduced scale on it is effectively

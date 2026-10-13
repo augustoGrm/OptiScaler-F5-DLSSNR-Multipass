@@ -330,6 +330,12 @@ struct NrState
     SGSR1_Dx12* sgsr1UpAnswer = nullptr;
     Scaler nrScaler = Scaler::Count;
 
+    // Experimental input style (DlssNrInputStyle): the model's picture restyled (DlssNrMode_Watercolor or
+    // DlssNrMode_StructureHint), which then stands in for the model input and the resolve's proxy. Created when first
+    // used, parked with the scratch set; its state is tracked because the resolve reads it.
+    ID3D12Resource* styled = nullptr;
+    D3D12_RESOURCE_STATES styledState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+
     // Frame hold (design/frame-hold.md): a persistent copy of the output taken on hold-on and restored
     // over the live output before the encode reads it while held, so a setting change re-renders the
     // same frame. heldWhitePoint is the snapshot used while held -- measurement is suspended.
@@ -3087,6 +3093,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
             ParkNrResource(g_nr.outputNative);
             ParkNrResource(g_nr.activeColor);
             ParkNrResource(g_nr.lutScratch);
+            ParkNrResource(g_nr.styled);
+            g_nr.styledState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
             g_nr.passScratchFailed = false;
             g_nr.passClampScratchFailed = false;
             g_nr.passClampScratch2Failed = false;
@@ -4257,6 +4265,84 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         modelInput = EdgeCompression::color;
         modelDepth = depth != nullptr ? EdgeCompression::depth : nullptr;
         modelMotion = EdgeCompression::motion;
+    }
+
+    // Experimental input style (DlssNrInputStyle): restyle the model's picture once it is final (after the shrink and
+    // the edge packing). The restyled picture is both the model input and the resolve's proxy (ordinaryProxy below,
+    // and through the edge unpacking), so Composed hands back only what the model painted on top of it. Skipped above
+    // 100% model resolution (the resolve compares against colorCopy there) and on the deferred path.
+    {
+        const uint32_t style = cfg.DlssNrInputStyle.value_or_default();
+        const float strength = std::min(cfg.DlssNrInputStyleStrength.value_or_default(), style == 2u ? 3.0f : 1.0f);
+        const bool facesOnly = cfg.DlssNrInputStyleFacesOnly.value_or_default();
+        const bool wanted = style >= 1u && style <= 3u && strength > 0.0f;
+        const char* skip = !wanted                                     ? nullptr
+                           : cfg.DlssNrDeferredDlss.value_or_default() ? "the deferred Super Resolution path"
+                           : workScale > 1.0f                          ? "model resolution above 100%"
+                                                                       : nullptr;
+        bool restyled = false;
+
+        if (wanted && skip == nullptr)
+        {
+            const D3D12_RESOURCE_DESC in = modelInput->GetDesc();
+
+            if (g_nr.styled != nullptr && (g_nr.styled->GetDesc().Width != in.Width ||
+                                           g_nr.styled->GetDesc().Height != in.Height ||
+                                           g_nr.styled->GetDesc().Format != in.Format))
+            {
+                ParkNrResource(g_nr.styled);
+                g_nr.styledState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            }
+
+            if (g_nr.styled == nullptr)
+            {
+                g_nr.styled = CreateScratch(device, in.Format, (unsigned int) in.Width, in.Height);
+                g_nr.styledState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+            }
+
+            if (g_nr.styled != nullptr)
+            {
+                Barrier(cmdList, g_nr.styled, g_nr.styledState, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+
+                DlssNrConstants paint {};
+                paint.Mode = StyleMode(style);
+                paint.Width = (unsigned int) in.Width;
+                paint.Height = in.Height;
+                paint.Passthrough = isHdrBuffer ? 0u : 1u;
+                paint.ReversibleMode = cfg.DlssNrReversibleMode.value_or_default();
+                paint.TransferStrength = strength;
+                paint.SkinProtection = facesOnly ? 1u : 0u; // the style passes read it as "faces only"
+                DispatchPass(cmdList, paint, modelInput, nullptr, nullptr, nullptr, nullptr, g_nr.styled, nullptr);
+
+                Barrier(cmdList, g_nr.styled, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                        D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+                g_nr.styledState = D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE;
+                modelInput = g_nr.styled;
+                restyled = true;
+            }
+            else
+            {
+                skip = "its texture could not be created";
+            }
+        }
+
+        // Said when it changes, so a log shows each A/B toggle.
+        static int said = -1;
+        const int state = restyled ? (int) style + 10 + (facesOnly ? 10 : 0) : (skip != nullptr ? 2 : 0);
+
+        if (state != said)
+        {
+            said = state;
+
+            if (restyled)
+                LOG_INFO("DLSS-NR input style: {} on (strength {:.2f}, {}x{}{}{})", StyleName(style), strength,
+                         modelInput->GetDesc().Width, modelInput->GetDesc().Height, facesOnly ? ", faces only" : "",
+                         spatial ? ", edge-compressed picture" : "");
+            else if (skip != nullptr)
+                LOG_INFO("DLSS-NR input style: skipped ({})", skip);
+            else
+                LOG_INFO("DLSS-NR input style: off");
+        }
     }
 
     // The vectors were scaled to full-frame pixels; the image the model reprojects is the working size.
@@ -5901,6 +5987,13 @@ void Shutdown()
         delete g_nr.superDown;
         g_nr.superDown = nullptr;
     }
+
+    if (g_nr.styled != nullptr)
+    {
+        g_nr.styled->Release();
+        g_nr.styled = nullptr;
+    }
+    g_nr.styledState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
 
     if (g_nr.sgsr1UpAnswer != nullptr)
     {

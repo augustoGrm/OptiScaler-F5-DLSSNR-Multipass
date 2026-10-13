@@ -3034,6 +3034,41 @@ static void RenderInputPage(Config* config, float menuResScale, const NrCommon& 
         HelpMarker("Filter used to reduce NR output when Model resolution exceeds 100%.\nSharper filters may introduce ringing around edges.");
     }
 
+    // Experimental input style (Config.h DlssNrInputStyle): restyle the picture the model is shown.
+    {
+        static const char* styleNames[] = { "Off", "Watercolour", "Structure hint", "Smooth canvas" };
+        int style = (int) std::min(config->DlssNrInputStyle.value_or_default(), 3u);
+
+        if (ImGui::Combo("Input style (experimental)", &style, styleNames, IM_ARRAYSIZE(styleNames)))
+            config->DlssNrInputStyle = (uint32_t) style;
+
+        HelpMarker("A/B test: restyle the picture NR is shown before it runs. The game's own picture is not changed.\n"
+                   "Watercolour flattens texture into washes and keeps edges (can look blocky).\nStructure hint raises "
+                   "local contrast (brightness only) so NR has more structure to follow; high strength blurs with a "
+                   "composed curve.\nSmooth canvas shows NR skin like an untextured old-game surface: pores and fine "
+                   "shading flattened, contours kept, so NR paints its own skin detail.\nWith a composed curve only "
+                   "what NR paints differently shows; with a replace curve you see NR's painting as it is.\nNo effect "
+                   "above 100% Model resolution.");
+
+        if (style != 0)
+        {
+            // Watercolour and smooth canvas are a blend (0..1); the structure hint's boost goes to 3x.
+            const float most = style == 2 ? 3.0f : 1.0f;
+            float strength = std::min(config->DlssNrInputStyleStrength.value_or_default(), most);
+
+            if (ImGui::SliderFloat("Input style strength", &strength, 0.0f, most, "%.2f"))
+                config->DlssNrInputStyleStrength = strength;
+
+            bool facesOnly = config->DlssNrInputStyleFacesOnly.value_or_default();
+
+            if (ImGui::Checkbox("Faces only (skin colours)##inputstyle", &facesOnly))
+                config->DlssNrInputStyleFacesOnly = facesOnly;
+
+            HelpMarker("Apply the input style only where the colour looks like skin (the same colour test as Skin "
+                       "protection; warm materials can match too, coloured light can hide skin).");
+        }
+    }
+
     RenderEdgeCompression(config, menuResScale, nr);
 
     RenderLutSection(config);

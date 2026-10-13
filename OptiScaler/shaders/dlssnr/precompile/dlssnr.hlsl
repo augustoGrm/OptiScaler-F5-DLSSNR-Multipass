@@ -893,6 +893,14 @@ float3 ApplyReplaceGuard(float3 v, float3 nativeOriginal, float referenceLuma, f
     return v * (boundedRatio / max(ratio, 1e-6));
 }
 
+// The input styles' "faces only" weight of a stored proxy value: the skin-colour test on the colour as it would be
+// displayed, as the resolve's skin protection classifies the frame (a tone-mapped frame's stored values are that already;
+// a linear HDR frame's are decoded and sRGB-encoded first, so every proxy curve classifies alike).
+float StyleSkinWeight(float3 stored)
+{
+    return SkinColourWeight(gPassthrough != 0 ? stored : LinearToSrgb(saturate(DecodeProxyToLinear(stored))));
+}
+
 // Automatic exposure uses the same 8x8 group as every other mode, but spreads the expensive work
 // across all 64 lanes. Only 1 KiB of groupshared memory is reserved, so the ordinary encode/resolve
 // passes keep effectively the same occupancy.
@@ -1074,6 +1082,11 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
         // black-tile rule as below, a different statistic: the log-average of the tiles between two percentiles of
         // brightness. DlssNrExposureMeter::PercentileSceneLuma is the host mirror; change them together. Every lane
         // takes this branch or none does, so the barriers stay uniform.
+        //
+        // DLSSNR_NO_PERCENTILE_METER is for headless tests only: Windows' WARP rasterizer crashes running this shader
+        // with the branch in, whatever mode it is dispatched for, so the WARP tests that do not test the meter leave it
+        // out. The shipped binaries are built without the define.
+#ifndef DLSSNR_NO_PERCENTILE_METER
         if (gExposureTrimAnchorCount == 1u)
         {
             gMeterHistCount[lane] = 0u;
@@ -1148,6 +1161,7 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
             }
             return;
         }
+#endif
 
         float weightedBufferLuma = 0.0;
         float weightedSceneLogLuma = 0.0;
@@ -1297,6 +1311,167 @@ void CSMain(uint3 id : SV_DispatchThreadID, uint3 groupId : SV_GroupID, uint3 gr
     if (gMode == 11)
     {
         gTarget[id.xy] = 0;
+        return;
+    }
+    if (gMode == 15)
+    {
+        // Experimental input style ([DlssNr] InputStyle = 2), the structure hint: raise the local contrast of the
+        // picture the model is shown, so it has more structure to follow. CAS-like, on luminance only:
+        //   L' = L + amount * (L - mean3x3(L)), clamped to the 3x3 neighbourhood's own min and max widened by a
+        // quarter of that range per unit of strength -- a hard clamp at the range itself (no halo at all) stops the
+        // boost exactly on smooth texture's peaks and troughs, where it would show (a 4-pixel weave gained 3%);
+        // the pixel is then scaled by L' / L so its chromaticity stays. amount = 2 * gTransferStrength, which runs
+        // 0..3 (the user found 1 weak in NBA; Composed cancels whatever part of the boost the model only copies).
+        // Works on the stored values (roughly perceptual), where a step reads the same in shadow and highlight.
+        uint w, h;
+        gSource.GetDimensions(w, h);
+        const int2 last = int2((int) w - 1, (int) h - 1);
+
+        const float4 centre = gSource.Load(int3(id.xy, 0));
+        const float3 c = saturate(centre.rgb);
+        const float l = dot(c, kLuma);
+        float sum = 0.0, lo = 1e30, hi = -1e30;
+
+        [unroll] for (int dy = -1; dy <= 1; ++dy)
+        {
+            [unroll] for (int dx = -1; dx <= 1; ++dx)
+            {
+                const float3 n = saturate(gSource.Load(int3(clamp((int2) id.xy + int2(dx, dy), int2(0, 0), last), 0)).rgb);
+                const float ln = dot(n, kLuma);
+                sum += ln;
+                lo = min(lo, ln);
+                hi = max(hi, ln);
+            }
+        }
+
+        const float strength = clamp(gTransferStrength, 0.0, 3.0);
+        const float amount = 2.0 * strength;
+        const float margin = 0.25 * strength * (hi - lo);
+        const float boosted = clamp(l + amount * (l - sum / 9.0), lo - margin, hi + margin);
+        // One scale on the triple, capped so no channel passes 1 (a clipped channel would shift the hue).
+        // Black stays black: with no luminance there is no chromaticity to keep.
+        const float peak = max(max(c.r, c.g), c.b);
+        float3 hinted = l > 1e-6 ? c * min(boosted / l, 1.0 / max(peak, 1e-6)) : c;
+
+        // Faces only (the style pass's SkinProtection): as much of the style as the pixel looks like skin
+        if (gSkinProtection != 0)
+            hinted = lerp(c, hinted, StyleSkinWeight(c));
+
+        gTarget[id.xy] = float4(saturate(hinted), centre.a);
+        return;
+    }
+    if (gMode == 16)
+    {
+        // Experimental input style ([DlssNr] InputStyle = 3), the smooth canvas: a cross bilateral filter over the
+        // picture the model is shown, so skin reads like an untextured old-game surface (pores, fine shading and
+        // shimmer flattened) while contours stay -- a neighbour counts less the further away it is (Gaussian, sigma
+        // 3 px, 11x11) and the more its brightness differs. Brightness is compared in light, as exposure steps
+        // (log2 of the decoded luminance), so every proxy curve filters alike (PQ's stored values bunch steps together
+        // that the other curves keep apart): sigma 0.35 EV -- a +-20% skin texture (0.26 EV) keeps 75% weight, a 1 EV
+        // lip line about 2%, a hard edge nothing. No quadrant switching as in the watercolour, so no blocks. Averaged in
+        // light and re-encoded once. gTransferStrength blends with the picture as it was (0..1); faces only scales it
+        // by the pixel's skin-colour weight.
+        uint w, h;
+        gSource.GetDimensions(w, h);
+        const int2 last = int2((int) w - 1, (int) h - 1);
+
+        const float4 centre = gSource.Load(int3(id.xy, 0));
+        const float3 storedCentre = saturate(centre.rgb);
+        const float evCentre = log2(max(dot(DecodeProxyToLinear(storedCentre), kLuma), 1e-4));
+
+        const float spatialScale = -1.0 / (2.0 * 3.0 * 3.0);
+        const float rangeScale = -1.0 / (2.0 * 0.35 * 0.35);
+        float3 sum = 0;
+        float weights = 0.0;
+
+        [loop] for (int dy = -5; dy <= 5; ++dy)
+        {
+            [loop] for (int dx = -5; dx <= 5; ++dx)
+            {
+                const float3 light = DecodeProxyToLinear(
+                    saturate(gSource.Load(int3(clamp((int2) id.xy + int2(dx, dy), int2(0, 0), last), 0)).rgb));
+                const float difference = log2(max(dot(light, kLuma), 1e-4)) - evCentre;
+                const float weight =
+                    exp((float) (dx * dx + dy * dy) * spatialScale + difference * difference * rangeScale);
+                sum += light * weight;
+                weights += weight;
+            }
+        }
+
+        // The centre's own weight is 1, so weights >= 1
+        const float3 smoothed = EncodeLinearToProxy(sum / weights);
+        float amount = saturate(gTransferStrength);
+
+        if (gSkinProtection != 0)
+            amount *= StyleSkinWeight(storedCentre);
+
+        gTarget[id.xy] = float4(lerp(centre.rgb, smoothed, amount), centre.a);
+        return;
+    }
+    if (gMode == 14)
+    {
+        // Experimental input style ([DlssNr] InputStyle = 1): a Kuwahara filter over the picture the model is
+        // shown, the classic painterly / watercolour look. Each pixel takes the mean of whichever of the four 4x4
+        // corners around it is most uniform, so texture flattens into washes while edges stay where they are.
+        // The question it asks: does the model paint its own detail onto a flat canvas? gTransferStrength blends
+        // it with the picture as it was (1 = full watercolour).
+        //
+        // The means are taken in light (DecodeProxyToLinear) and re-encoded once; uniformity is judged on the
+        // stored value's luma, which is roughly perceptual, so a bright corner does not always look busiest.
+        uint w, h;
+        gSource.GetDimensions(w, h);
+        const int2 last = int2((int) w - 1, (int) h - 1);
+
+        float3 sum[4] = { (float3) 0, (float3) 0, (float3) 0, (float3) 0 };
+        float lumaSum[4] = { 0, 0, 0, 0 };
+        float lumaSq[4] = { 0, 0, 0, 0 };
+
+        [loop] for (int dy = -3; dy <= 3; ++dy)
+        {
+            [loop] for (int dx = -3; dx <= 3; ++dx)
+            {
+                const float3 stored = gSource.Load(int3(clamp((int2) id.xy + int2(dx, dy), int2(0, 0), last), 0)).rgb;
+                const float3 light = DecodeProxyToLinear(saturate(stored));
+                const float l = dot(saturate(stored), kLuma);
+
+                // Corners: 0 up-left, 1 up-right, 2 down-left, 3 down-right; the centre row and column count
+                // in both corners they touch, as in the classic filter.
+                [unroll] for (int q = 0; q < 4; ++q)
+                {
+                    const bool inX = (q & 1) ? dx >= 0 : dx <= 0;
+                    const bool inY = (q & 2) ? dy >= 0 : dy <= 0;
+                    if (inX && inY)
+                    {
+                        sum[q] += light;
+                        lumaSum[q] += l;
+                        lumaSq[q] += l * l;
+                    }
+                }
+            }
+        }
+
+        float best = 1e30;
+        float3 mean = 0;
+        [unroll] for (int q = 0; q < 4; ++q)
+        {
+            const float m = lumaSum[q] / 16.0;
+            const float variance = lumaSq[q] / 16.0 - m * m;
+            if (variance < best)
+            {
+                best = variance;
+                mean = sum[q] / 16.0;
+            }
+        }
+
+        const float4 centre = gSource.Load(int3(id.xy, 0));
+        const float3 painted = EncodeLinearToProxy(mean);
+        float amount = saturate(gTransferStrength);
+
+        // Faces only (the style pass's SkinProtection): as much of the style as the pixel looks like skin
+        if (gSkinProtection != 0)
+            amount *= StyleSkinWeight(saturate(centre.rgb));
+
+        gTarget[id.xy] = float4(lerp(centre.rgb, painted, amount), centre.a);
         return;
     }
     if (gMode == 12)
