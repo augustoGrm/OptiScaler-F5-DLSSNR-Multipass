@@ -616,6 +616,7 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
 
         auto module = NtdllProxy::LoadLibraryExW_Ldr(libName.c_str(), NULL, NULL);
 
+#ifdef LOW_LATENCY_INPUTS
         auto setTickStartCallback =
             (PFN_setTickCallback) KernelBaseProxy::GetProcAddress_()(module, "setTickStartCallback");
         auto setTickEndCallback =
@@ -626,6 +627,9 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
 
         if (setTickEndCallback)
             setTickEndCallback(InputUeLowLatency::tickEnd);
+#else
+        LOG_WARN("UE Low Latency mod found: its ticks need the low latency inputs, not on in this build");
+#endif
 
         return module;
     }

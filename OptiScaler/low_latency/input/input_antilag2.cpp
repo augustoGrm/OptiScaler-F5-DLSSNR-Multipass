@@ -1,10 +1,17 @@
 #include "pch.h"
+
+// Upstream's low latency input layer, absorbed in phases (.ai-os plan 2026-10-14-absorb-upstream-low-latency): built once LOW_LATENCY_INPUTS is on.
+#ifdef LOW_LATENCY_INPUTS
 #include "input_antilag2.h"
 #include "input_common.h"
 #include <proxies/FfxApi_Proxy.h>
 
 HRESULT STDMETHODCALLTYPE AmdExtAntiLagApi::UpdateAntiLagState(VOID* pData)
 {
+    // AntiLag 2 never passes its device, without one the output can't start
+    if (device == nullptr)
+        device = State::Instance().currentD3D12Device;
+
     // That's the mark to insert a delay...
     if (!pData)
     {
@@ -89,8 +96,7 @@ HRESULT STDMETHODCALLTYPE AmdExtAntiLagApi::UpdateAntiLagState(VOID* pData)
         }
 
         // TODO: This doesn't get unset if the game stops sending FG markers
-        inputContext.markerMode = InputMarkerMode::PresentStartOnly;
-
+        inputContext.markerMode = InputMarkerMode::SimStartAndPresentStart;
         const uint64_t frameId = ver2Struct->iiFrameIdx; // Usually not used
 
         if (ver2Struct->flags.signalEndOfFrameIdx == 1)
@@ -120,8 +126,10 @@ HRESULT STDMETHODCALLTYPE AmdExtAntiLagApi::UpdateAntiLagState(VOID* pData)
             markerParams.marker_type = MarkerType::OUT_OF_BAND_PRESENT_START;
             markerParams.frame_id = pseudoFrameId;
 
-            // Mainly to mimic what Reflex does, so that we can convert this back to AL2 later
+            // The frame type is known, the pseudo frame ids are only for the other outputs
             const bool fakeFrame = ver2Struct->flags.isInterpolatedFrame == 1;
+            markerParams.interpolated = fakeFrame;
+
             if (!fakeFrame)
                 pseudoFrameId++;
 
@@ -179,3 +187,5 @@ void InputAntiLag2::injectAl2Context(IDXGISwapChain* pSwapChain, bool fg_state)
         pSwapChain->SetPrivateData(IID_IFfxAntiLag2Data, 0, nullptr);
     }
 }
+
+#endif // LOW_LATENCY_INPUTS
