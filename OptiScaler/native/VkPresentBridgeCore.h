@@ -143,6 +143,7 @@ class VkPresentBridgeCore
     ReleaseOutputFn _release;
 
     HWND _hidden = nullptr;
+    DWORD _hiddenThread = 0; // the thread that made the hidden window (owns it; its exit destroys the window)
     VkSurfaceKHR _surface = VK_NULL_HANDLE;
     Microsoft::WRL::ComPtr<IDXGISwapChain4> _output;
     bool _tearingSwapchain = false;

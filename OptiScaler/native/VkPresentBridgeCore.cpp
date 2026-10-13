@@ -24,6 +24,24 @@ LRESULT CALLBACK HiddenProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+// For a hidden surface that stopped working: is its window still there, and is the thread that made it (which owns it,
+// and whose exit destroys it) still running? Tells a window taken down with its thread from a lost display.
+std::string HiddenWindowState(HWND hidden, DWORD madeOn)
+{
+    const bool window = hidden != nullptr && IsWindow(hidden);
+    bool threadRuns = false;
+
+    if (HANDLE thread = OpenThread(THREAD_QUERY_LIMITED_INFORMATION, FALSE, madeOn); thread != nullptr)
+    {
+        DWORD code = 0;
+        threadRuns = GetExitCodeThread(thread, &code) && code == STILL_ACTIVE;
+        CloseHandle(thread);
+    }
+
+    return std::format("hidden window {}, made on thread {} ({}), asked on thread {}", window ? "there" : "gone", madeOn,
+                       threadRuns ? "running" : "ended", GetCurrentThreadId());
+}
+
 bool WaitFence(ID3D12Fence* fence, uint64_t value)
 {
     if (fence == nullptr || fence->GetCompletedValue() >= value)
@@ -178,6 +196,7 @@ bool VkPresentBridgeCore::MakeSurface(std::string& why)
         return false;
     }
 
+    _hiddenThread = GetCurrentThreadId();
     ShowWindow(_hidden, SW_HIDE);
 
     VkWin32SurfaceCreateInfoKHR surfaceInfo {};
@@ -318,7 +337,8 @@ bool VkPresentBridgeCore::Patch(const VkSwapchainCreateInfoKHR& game, VkSwapchai
     if (const VkResult result = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(_target.physical, _surface, &caps);
         result != VK_SUCCESS)
     {
-        why = std::format("the hidden surface reports no capabilities ({})", (int) result);
+        why = std::format("the hidden surface reports no capabilities ({}; {})", (int) result,
+                          HiddenWindowState(_hidden, _hiddenThread));
         return false;
     }
 
