@@ -234,8 +234,8 @@ bool KernelHooks::AnswerXellLookup(DWORD dwFlags, HMODULE* phModule, BOOL* resul
     if (!logged.exchange(true))
         LOG_INFO("libxell.dll lookup answered with OptiScaler's XeLL: one XeLL for XeFG and OptiScaler");
 
-    *result = o_K32_GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCSTR>(module),
-                                       phModule);
+    *result =
+        o_K32_GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCSTR>(module), phModule);
     return true;
 #endif
 }

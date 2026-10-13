@@ -254,8 +254,7 @@ void UpscalerInputsDx12::UpscaleEnd(ID3D12GraphicsCommandList* InCmdList, NVSDK_
         return;
 
     // FG Dispatch
-    if (fg->IsActive() && Config::Instance()->IsFGEnabled() &&
-        State::Instance().currentSwapchain != nullptr)
+    if (fg->IsActive() && Config::Instance()->IsFGEnabled() && State::Instance().currentSwapchain != nullptr)
     {
         if (Config::Instance()->FGHUDFix.value_or_default())
         {
