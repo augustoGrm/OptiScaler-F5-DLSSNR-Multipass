@@ -1437,18 +1437,20 @@ static bool RenderDetailReuseToggle(Config* config)
     if (detailReuse)
     {
         // 0 = Auto: none at every other frame (as it shipped), over 3 at every 3rd frame (DlssNrDetailReuse::SpreadFor)
-        int spread = (int) std::min(config->DlssNrDetailReuseSpread.value_or_default(), 3u);
+        // Never longer than the interval (DlssNrDetailReuse::SpreadFor): no "over 3" at every other frame
+        const unsigned int every = choice == 2 ? 3u : 2u;
+        int spread = (int) std::min(config->DlssNrDetailReuseSpread.value_or_default(), every);
         char autoLabel[48];
-        const unsigned int autoSpread = DlssNrDetailReuse::SpreadFor(choice == 2 ? 3u : 2u, 0);
+        const unsigned int autoSpread = DlssNrDetailReuse::SpreadFor(every, 0);
         std::snprintf(autoLabel, sizeof(autoLabel), autoSpread > 1 ? "Auto (over %u frames)" : "Auto (off)",
                       autoSpread);
         const char* spreads[] = { autoLabel, "Off", "Over 2 frames", "Over 3 frames" };
-        if (ImGui::Combo("Smooth the model's frames", &spread, spreads, IM_ARRAYSIZE(spreads)))
+        if (ImGui::Combo("Smooth the model's frames", &spread, spreads, (int) every + 1))
             config->DlssNrDetailReuseSpread = (uint32_t) spread;
         HelpMarker("Each time the model runs, its new detail differs a little from the moved old one, and the light "
                    "can pulse at that rate (more at every 3rd frame). Smoothed, the model's frame and the frames after "
-                   "it blend from what was shown toward the new detail. Only what is shown is blended, so trails do not "
-                   "build up.");
+                   "it blend from what was shown toward the new detail. Only what is shown is blended, so trails do "
+                   "not build up.");
     }
 
     // The edit cache: ini only (EditCache=true), not offered here

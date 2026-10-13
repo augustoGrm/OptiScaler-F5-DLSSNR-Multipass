@@ -68,11 +68,15 @@ struct Tex
 
 DlssNrEditCache::Cadence cadence;
 DlssNrEditCache::Step step;
-Tex ring, anchorEdit, anchorPrint, context, carried, valid[2], atlasEdit, atlasLuma, shown, fadeSource, composed;
+// level0Edit / level0Luma: a copy of the cell atlases after level 0, which the coarser levels are built from
+Tex ring, anchorEdit, anchorPrint, context, carried, valid[2], atlasEdit, atlasLuma, level0Edit, level0Luma, shown,
+    fadeSource, composed;
 unsigned int curValid = 0;
 unsigned int sizeW = 0, sizeH = 0, ringW = 0, ringH = 0, composedW = 0, composedH = 0;
 DlssNrEditCacheConstants params {};
-bool failed = false;       // allocation failed this session: stays off
+bool failed = false;       // allocation failed at this size: stays off until a size changes
+unsigned int failedW = 0, failedH = 0, failedRingW = 0, failedRingH = 0;
+bool lastCached = false;   // the last frame skipped the model (its history is that many frames old)
 float modelShare = 0.0f;   // for the menu: share of frames the model ran on, refreshed every second
 std::chrono::steady_clock::time_point shareSince {};
 const char* loggedAside = "";
@@ -81,8 +85,8 @@ std::atomic<bool> publishedRunning { false };
 std::atomic<float> publishedShare { 0.0f };
 std::atomic<const char*> publishedAside { nullptr }; // a string literal of DlssNrEditCache::StandAsideReason
 
-Tex* AllTextures[] = { &ring, &anchorEdit, &anchorPrint, &context, &carried, &valid[0], &valid[1],
-                       &atlasEdit, &atlasLuma, &shown, &fadeSource, &composed };
+Tex* AllTextures[] = { &ring,      &anchorEdit, &anchorPrint, &context,    &carried, &valid[0],   &valid[1],
+                       &atlasEdit, &atlasLuma,  &level0Edit,  &level0Luma, &shown,   &fadeSource, &composed };
 
 void ParkAll()
 {
@@ -94,12 +98,42 @@ void ParkAll()
 
 uint32_t Cells(uint32_t size, uint32_t level) { return (size + kDlssNrEditCacheCellSize[level] - 1) / kDlssNrEditCacheCellSize[level]; }
 
+// The cell levels' fields of the constants, by level (separate members, so not indexed as an array)
+void SetLevel(DlssNrEditCacheConstants& c, uint32_t level, uint32_t atlasX, uint32_t countX, uint32_t countY)
+{
+    uint32_t* const x[] = { &c.CellAtlasX0, &c.CellAtlasX1, &c.CellAtlasX2 };
+    uint32_t* const w[] = { &c.CellCountX0, &c.CellCountX1, &c.CellCountX2 };
+    uint32_t* const h[] = { &c.CellCountY0, &c.CellCountY1, &c.CellCountY2 };
+    *x[level] = atlasX;
+    *w[level] = countX;
+    *h[level] = countY;
+}
+
+uint32_t LevelCountX(const DlssNrEditCacheConstants& c, uint32_t level)
+{
+    return level == 0 ? c.CellCountX0 : level == 1 ? c.CellCountX1 : c.CellCountX2;
+}
+
+uint32_t LevelCountY(const DlssNrEditCacheConstants& c, uint32_t level)
+{
+    return level == 0 ? c.CellCountY0 : level == 1 ? c.CellCountY1 : c.CellCountY2;
+}
+
+// One slice of the ring: the motion texture's allocation (the subrect moves inside it as the render size changes, so a
+// dynamic-resolution game does not rebuild), grown only.
+unsigned int RingWidthFor(const Frame& f) { return std::max({ f.motionAllocWidth, f.inputs.motionWidth, ringW }); }
+unsigned int RingHeightFor(const Frame& f) { return std::max({ f.motionAllocHeight, f.inputs.motionHeight, ringH }); }
+
+// Whether the textures fit this frame; if not, they are made anew (and the cadence starts over, before it plans the
+// frame: see BeforeModel).
 bool Allocate(const Frame& f)
 {
     const auto& in = f.inputs;
     const unsigned int wantComposedW = std::max(f.motionAllocWidth, in.motionWidth);
     const unsigned int wantComposedH = std::max(f.motionAllocHeight, in.motionHeight);
-    if (sizeW == in.width && sizeH == in.height && ringW == in.motionWidth && ringH == in.motionHeight &&
+    const unsigned int wantRingW = RingWidthFor(f);
+    const unsigned int wantRingH = RingHeightFor(f);
+    if (sizeW == in.width && sizeH == in.height && ringW == wantRingW && ringH == wantRingH &&
         composedW == wantComposedW && composedH == wantComposedH && ring.r != nullptr)
         return true;
 
@@ -113,7 +147,11 @@ bool Allocate(const Frame& f)
     unsigned int atlasW = 0;
     for (uint32_t level = 0; level < kDlssNrEditCacheCellLevels; ++level)
         atlasW += Cells(in.width, level);
-    bool ok = make(ring, DXGI_FORMAT_R32G32_FLOAT, in.motionWidth, in.motionHeight * kDlssNrEditCacheRingSlices);
+    // 4 slices across, 2 down: inside D3D12's 16384-texel limit up to 4096 x 8192 vectors a slice
+    const unsigned int ringTexW = wantRingW * kDlssNrEditCacheRingColumns;
+    const unsigned int ringTexH = wantRingH * kDlssNrEditCacheRingRows;
+    bool ok = ringTexW <= D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION && ringTexH <= D3D12_REQ_TEXTURE2D_U_OR_V_DIMENSION &&
+              make(ring, DXGI_FORMAT_R32G32_FLOAT, ringTexW, ringTexH);
     ok = ok && make(anchorEdit, DXGI_FORMAT_R16G16B16A16_FLOAT, in.width, in.height);
     ok = ok && make(anchorPrint, DXGI_FORMAT_R16G16B16A16_FLOAT, in.width, in.height);
     ok = ok && make(context, DXGI_FORMAT_R32_FLOAT, (in.width + 3) / 4, (in.height + 3) / 4);
@@ -122,6 +160,8 @@ bool Allocate(const Frame& f)
     ok = ok && make(valid[1], DXGI_FORMAT_R16_FLOAT, in.width, in.height);
     ok = ok && make(atlasEdit, DXGI_FORMAT_R32G32B32A32_FLOAT, atlasW, Cells(in.height, 0));
     ok = ok && make(atlasLuma, DXGI_FORMAT_R32_FLOAT, atlasW, Cells(in.height, 0));
+    ok = ok && make(level0Edit, DXGI_FORMAT_R32G32B32A32_FLOAT, atlasW, Cells(in.height, 0));
+    ok = ok && make(level0Luma, DXGI_FORMAT_R32_FLOAT, atlasW, Cells(in.height, 0));
     ok = ok && make(shown, DXGI_FORMAT_R16G16B16A16_FLOAT, in.width, in.height);
     ok = ok && make(fadeSource, DXGI_FORMAT_R16G16B16A16_FLOAT, in.width, in.height);
     ok = ok && make(composed, DXGI_FORMAT_R32G32_FLOAT, wantComposedW, wantComposedH);
@@ -129,13 +169,18 @@ bool Allocate(const Frame& f)
     {
         ParkAll();
         failed = true;
-        LOG_ERROR("DLSS-NR edit cache: could not allocate its textures; every frame runs the model");
+        failedW = in.width;
+        failedH = in.height;
+        failedRingW = wantRingW;
+        failedRingH = wantRingH;
+        LOG_ERROR("DLSS-NR edit cache: could not allocate its textures for {}x{} (vectors {}x{}); every frame runs the "
+                  "model until a size changes", in.width, in.height, wantRingW, wantRingH);
         return false;
     }
     sizeW = in.width;
     sizeH = in.height;
-    ringW = in.motionWidth;
-    ringH = in.motionHeight;
+    ringW = wantRingW;
+    ringH = wantRingH;
     composedW = wantComposedW;
     composedH = wantComposedH;
     curValid = 0;
@@ -176,13 +221,13 @@ void Common(const Frame& f, DlssNrEditCacheMode mode)
     uint32_t atlasX = 0;
     for (uint32_t level = 0; level < kDlssNrEditCacheCellLevels; ++level)
     {
-        (&params.CellAtlasX0)[level] = atlasX;
-        (&params.CellCountX0)[level] = Cells(in.width, level);
-        (&params.CellCountY0)[level] = Cells(in.height, level);
+        SetLevel(params, level, atlasX, Cells(in.width, level), Cells(in.height, level));
         atlasX += Cells(in.width, level);
     }
     params.ComposeWidth = composedW;
     params.ComposeHeight = composedH;
+    params.RingWidth = ringW;
+    params.RingHeight = ringH;
 }
 
 bool Run(const Frame& f, unsigned int w, unsigned int h, std::initializer_list<ID3D12Resource*> inputs, Tex& out0,
@@ -229,7 +274,21 @@ void Say(const Frame& f, const DlssNrEditCache::Step& s)
     publishedAside = s.standsAside;
 }
 
+Plan Decide(const Frame& f);
+
 Plan BeforeModel(const Frame& f)
+{
+    Plan plan = Decide(f);
+    // A frame after a skipped one that does not hand the model vectors back to its last run (the cache stood aside,
+    // was turned off, or failed) starts the model's history over: it is that many frames old, and this frame's
+    // vectors cover one.
+    if (lastCached && !plan.cached && plan.motion == f.motion)
+        plan.resetModel = true;
+    lastCached = plan.cached;
+    return plan;
+}
+
+Plan Decide(const Frame& f)
 {
     Plan plan;
     plan.motion = f.motion;
@@ -237,7 +296,15 @@ Plan BeforeModel(const Frame& f)
     plan.motionBaseY = f.motionBaseY;
 
     DlssNrEditCache::Inputs in = f.inputs;
+    // A failed allocation is tried again once a size changes
+    if (failed && (in.width != failedW || in.height != failedH || RingWidthFor(f) != failedRingW ||
+                   RingHeightFor(f) != failedRingH))
+        failed = false;
     in.enabled = in.enabled && !failed && f.pass->EditCacheReady();
+    // The textures before the cadence plans the frame: new ones hold nothing, and Allocate's ParkAll starts the cadence
+    // over, so the frame planned is a refresh
+    if (in.enabled && DlssNrEditCache::StandAsideReason(in) == nullptr && !Allocate(f))
+        in.enabled = false;
     step = cadence.Next(in);
     Say(f, step);
     if (!step.runs)
@@ -246,15 +313,10 @@ Plan BeforeModel(const Frame& f)
             ParkAll();
         return plan;
     }
-    if (!Allocate(f))
-    {
-        step = {};
-        return plan;
-    }
 
     // Every frame: its vectors into the ring
     Common(f, DlssNrEditCache_Ring);
-    if (!Run(f, in.motionWidth, in.motionHeight, { f.motion, f.depth != nullptr ? f.depth : f.motion }, ring))
+    if (!Run(f, ringW, ringH, { f.motion, f.depth != nullptr ? f.depth : f.motion }, ring))
     {
         cadence.Drop();
         step = {};
@@ -301,17 +363,32 @@ Plan BeforeModel(const Frame& f)
     curValid ^= 1u;
     carried.Read(f.cmdList);
 
+    // Level 0 from the pixels, then a copy of it, then the coarser levels from the copy's cells (each level writes its
+    // own region of the atlases; they are read only by Apply)
     Common(f, DlssNrEditCache_Cells);
     for (uint32_t level = 0; ok && level < kDlssNrEditCacheCellLevels; ++level)
     {
         params.CellLevel = level;
         atlasEdit.Write(f.cmdList);
         atlasLuma.Write(f.cmdList);
-        // One cell level after the other into the same atlases: a UAV barrier between them is not needed (each
-        // level writes its own region), only before Apply reads them
-        ok = f.pass->DispatchEditCache(f.cmdList, params, (&params.CellCountX0)[level], (&params.CellCountY0)[level],
-                                       { f.frame, carried.r, f.frame, f.frame, f.frame, f.frame }, atlasEdit.r,
-                                       atlasLuma.r);
+        if (level == 1)
+        {
+            atlasEdit.To(f.cmdList, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            atlasLuma.To(f.cmdList, D3D12_RESOURCE_STATE_COPY_SOURCE);
+            level0Edit.To(f.cmdList, D3D12_RESOURCE_STATE_COPY_DEST);
+            level0Luma.To(f.cmdList, D3D12_RESOURCE_STATE_COPY_DEST);
+            f.cmdList->CopyResource(level0Edit.r, atlasEdit.r);
+            f.cmdList->CopyResource(level0Luma.r, atlasLuma.r);
+            level0Edit.Read(f.cmdList);
+            level0Luma.Read(f.cmdList);
+            atlasEdit.Write(f.cmdList);
+            atlasLuma.Write(f.cmdList);
+        }
+        // Level 0 reads no copy (it is not made yet, and not in a readable state): the frame stands in
+        ok = f.pass->DispatchEditCache(f.cmdList, params, LevelCountX(params, level), LevelCountY(params, level),
+                                       { f.frame, carried.r, level == 0 ? f.frame : level0Edit.r,
+                                         level == 0 ? f.frame : level0Luma.r, f.frame, f.frame },
+                                       atlasEdit.r, atlasLuma.r);
     }
     if (!ok)
     {

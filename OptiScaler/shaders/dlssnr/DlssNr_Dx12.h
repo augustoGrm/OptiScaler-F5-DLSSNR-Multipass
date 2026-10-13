@@ -37,8 +37,9 @@
 // A frame records the meter, its reduce, eye adaptation, the exposure courier, encode, downsample, one clamp per
 // extra model pass, resolve and, during a Tune run, the stats pass: about ten with the default passes. The model
 // layers themselves are NGX evaluates and do not consume this ring; their A/B resources and feature histories are
-// persistent. Reuse detail between frames (DlssNr_DetailReuse.inl) adds up to four more on a full frame (compose,
-// estimate, steady, capture) and four on a reused one (estimate, fill, save motion, capture), which skips the clamps.
+// persistent. Reuse detail between frames (DlssNr_DetailReuse.inl) adds up to six more on a full frame (compose,
+// estimate, coverage, steady or the spread, capture, the spread's shown capture) and seven on a reused one (estimate,
+// coverage, fill, save motion, the spread's estimate and blend, capture), which skips the clamps.
 // Compress screen edges (DlssNr_Spatial.inl) adds three (colour pack, depth + motion pack, unpack), and replaces Reuse
 // detail's, which does not run beside it. The edit cache (DlssNr_EditCache.inl) adds seven on a cached frame (ring,
 // context, carry, three cell levels, apply) and up to five on a refresh (ring, compose, context, capture, a crossfade).

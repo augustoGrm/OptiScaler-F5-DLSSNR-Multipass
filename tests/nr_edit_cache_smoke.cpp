@@ -138,7 +138,18 @@ int main()
         check("a clock that went back", [](Inputs& in) { in.clock = 0; });
         check("a settings change", [](Inputs& in) { in.revision = 8; });
         check("a resize", [](Inputs& in) { in.width = 1920; });
-        check("a render-size change", [](Inputs& in) { in.motionWidth = 1280; });
+    }
+
+    // A render-size change (dynamic resolution) goes on: the ring keeps uv displacements on a grid of its own
+    {
+        Cadence c;
+        for (int t = 0; t < 2; ++t)
+            c.Next(On(t));
+        Inputs in = On(2);
+        in.motionWidth = 1280;
+        in.motionHeight = 720;
+        const Step s = c.Next(in);
+        expect(s.cached && s.traceSteps == 2, "a render-size change does not start over");
     }
 
     // Stands aside, and starts over when it comes back

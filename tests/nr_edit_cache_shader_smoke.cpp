@@ -14,6 +14,10 @@
 //   8. Crossfade: the shown edit is the fade source carried here, blended toward the new one by FadeWeight, only where
 //      the frame it was shown on still matches this one (else the new edit alone).
 //   9. Compose: the vectors back to the anchor in the game's raw units (3 frames of -1 px = -3 px).
+//  10. The ring is a grid of its own: vectors at half size land on it by uv (a render-size change does not disturb it).
+//  11. The coarser cell levels, built from level 0's cells, equal the sums over their pixels.
+//  12. Validity is read at its texel: a dropped pixel does not drop its neighbours on a sub-pixel pan.
+//  13. Near black: the edit is applied as (frame + eps) x 2^edit - eps, so the model's lift there is kept.
 // cl /nologo /std:c++20 /EHsc /W4 /wd4324 tests\nr_edit_cache_shader_smoke.cpp d3d11.lib d3dcompiler.lib
 // nr_edit_cache_shader_smoke.exe OptiScaler\shaders\dlssnr\precompile\dlssnr_edit_cache.hlsl
 #define NOMINMAX
@@ -183,19 +187,56 @@ static DlssNrEditCacheConstants Base(DlssNrEditCacheMode mode)
     c.ContextTolerance = kDlssNrEditCacheContextTolerance;
     c.FillSigma = kDlssNrEditCacheFillSigma;
     c.FadeWeight = 1.0f;
-    for (uint32_t level = 0; level < kDlssNrEditCacheCellLevels; ++level)
-    {
-        const uint32_t size = kDlssNrEditCacheCellSize[level];
-        (&c.CellCountX0)[level] = (W + size - 1) / size;
-        (&c.CellCountY0)[level] = (H + size - 1) / size;
-    }
+    const auto cells = [](unsigned size, unsigned cell) { return (size + cell - 1) / cell; };
+    c.CellCountX0 = cells(W, kDlssNrEditCacheCellSize[0]);
+    c.CellCountX1 = cells(W, kDlssNrEditCacheCellSize[1]);
+    c.CellCountX2 = cells(W, kDlssNrEditCacheCellSize[2]);
+    c.CellCountY0 = cells(H, kDlssNrEditCacheCellSize[0]);
+    c.CellCountY1 = cells(H, kDlssNrEditCacheCellSize[1]);
+    c.CellCountY2 = cells(H, kDlssNrEditCacheCellSize[2]);
     c.CellAtlasX0 = 0;
     c.CellAtlasX1 = c.CellCountX0;
     c.CellAtlasX2 = c.CellCountX0 + c.CellCountX1;
+    c.RingWidth = W;
+    c.RingHeight = H;
     return c;
 }
 
 static unsigned AtlasWidth(const DlssNrEditCacheConstants& c) { return c.CellCountX0 + c.CellCountX1 + c.CellCountX2; }
+static unsigned LevelCountX(const DlssNrEditCacheConstants& c, uint32_t level)
+{
+    return level == 0 ? c.CellCountX0 : level == 1 ? c.CellCountX1 : c.CellCountX2;
+}
+static unsigned LevelCountY(const DlssNrEditCacheConstants& c, uint32_t level)
+{
+    return level == 0 ? c.CellCountY0 : level == 1 ? c.CellCountY1 : c.CellCountY2;
+}
+
+// The ring: 4 slices across, 2 down, each RingWidth x RingHeight (W x H here)
+static Img RingOf(const Px& v)
+{
+    return Fill([=](unsigned, unsigned) { return v; }, W * kDlssNrEditCacheRingColumns, H * kDlssNrEditCacheRingRows);
+}
+static Px RingAt(const Img& ring, unsigned slice, unsigned x, unsigned y)
+{
+    return ring.at((slice % kDlssNrEditCacheRingColumns) * W + x, (slice / kDlssNrEditCacheRingColumns) * H + y);
+}
+
+// The surface fill's three levels, as the host records them: level 0 from the pixels, then the coarser ones from a
+// copy of level 0
+static void BuildCells(Gpu& gpu, const Img& frame, const Img& carried, Img& atlasEdit, Img& atlasLuma)
+{
+    auto c = Base(DlssNrEditCache_Cells);
+    c.CellLevel = 0;
+    gpu.Run(c, { &frame, &carried }, atlasEdit, atlasLuma, LevelCountX(c, 0), LevelCountY(c, 0));
+    const Img level0Edit = atlasEdit, level0Luma = atlasLuma;
+    for (uint32_t level = 1; level < kDlssNrEditCacheCellLevels; ++level)
+    {
+        c.CellLevel = level;
+        gpu.Run(c, { &frame, &carried, &level0Edit, &level0Luma }, atlasEdit, atlasLuma, LevelCountX(c, level),
+                LevelCountY(c, level));
+    }
+}
 
 int wmain(int argc, wchar_t** argv)
 try
@@ -224,22 +265,23 @@ try
 
     // 1. Ring: slice 2 gets this frame's displacement, the other slices keep what they had
     {
-        Img ring = Fill([](unsigned, unsigned) { return Px { 9, 9, 0, 0 }; }, W, H * kDlssNrEditCacheRingSlices);
+        Img ring = RingOf(Px { 9, 9, 0, 0 });
         const Img motion = Fill([](unsigned, unsigned) { return Px { -2.0f, 1.0f, 0, 0 }; });
         auto c = Base(DlssNrEditCache_Ring);
         c.RingSlice = 2;
         c.MvScaleX = 0.5f; // the game's scale: -2 raw = -1 pixel
         gpu.Run(c, { &motion, &zeroDepth }, ring, scratch, W, H);
         bool slice = true, others = true;
-        for (unsigned y = 0; y < ring.h; ++y)
-            for (unsigned x = 0; x < W; ++x)
-            {
-                const Px p = ring.at(x, y);
-                if (y / H == 2)
-                    slice = slice && Near(p.r, -1.0f / W, 1e-7f) && Near(p.g, 1.0f / H, 1e-7f);
-                else
-                    others = others && p.r == 9 && p.g == 9;
-            }
+        for (unsigned s = 0; s < kDlssNrEditCacheRingSlices; ++s)
+            for (unsigned y = 0; y < H; ++y)
+                for (unsigned x = 0; x < W; ++x)
+                {
+                    const Px p = RingAt(ring, s, x, y);
+                    if (s == 2)
+                        slice = slice && Near(p.r, -1.0f / W, 1e-7f) && Near(p.g, 1.0f / H, 1e-7f);
+                    else
+                        others = others && p.r == 9 && p.g == 9;
+                }
         expect(slice, "ring: the frame's vectors land in their slice as uv displacement");
         expect(others, "ring: the other slices are untouched");
 
@@ -280,7 +322,7 @@ try
                "capture: the fingerprint is log luma and log chroma");
     }
 
-    Img ring = Blank(W, H * kDlssNrEditCacheRingSlices);
+    Img ring = RingOf(Px { 0, 0, 0, 0 });
     Img validPrev = Blank(W, H);
     {
         // Still: no motion, the edit comes back exactly and is believed everywhere
@@ -343,7 +385,7 @@ try
     // 5. The fingerprint: a block that got much brighter is dropped, and stays dropped after it returns
     {
         const Img still = Fill([](unsigned, unsigned) { return Px { 0, 0, 0, 0 }; });
-        Img stillRing = Blank(W, H * kDlssNrEditCacheRingSlices);
+        Img stillRing = RingOf(Px { 0, 0, 0, 0 });
         for (unsigned s = 0; s < kDlssNrEditCacheRingSlices; ++s)
         {
             auto c = Base(DlssNrEditCache_Ring);
@@ -386,15 +428,13 @@ try
         carried.at(10, 8) = { 0, 0, 0, 0 };
         auto c = Base(DlssNrEditCache_Cells);
         Img atlasEdit = Blank(AtlasWidth(c), c.CellCountY0), atlasLuma = Blank(AtlasWidth(c), c.CellCountY0);
-        for (uint32_t level = 0; level < kDlssNrEditCacheCellLevels; ++level)
-        {
-            c.CellLevel = level;
-            gpu.Run(c, { &frame, &carried }, atlasEdit, atlasLuma, (&c.CellCountX0)[level], (&c.CellCountY0)[level]);
-        }
+        BuildCells(gpu, frame, carried, atlasEdit, atlasLuma);
         c = Base(DlssNrEditCache_Apply);
         Img out = Blank(W, H), shown = Blank(W, H);
         gpu.Run(c, { &frame, &carried, &atlasEdit, &atlasLuma, &frame, &ring }, out, shown, W, H);
-        expect(Near(out.at(3, 3).r, 0.2f * std::exp2(0.3f), 1e-5f), "apply: a believed pixel shows frame x 2^edit");
+        const float eps = 1.0f / 512.0f;
+        expect(Near(out.at(3, 3).r, (0.2f + eps) * std::exp2(0.3f) - eps, 1e-5f),
+               "apply: a believed pixel shows (frame + eps) x 2^edit - eps");
         expect(Near(shown.at(10, 8).r, 0.3f, 0.01f),
                "apply: a dropped pixel takes its own surface's edit (" + std::to_string(shown.at(10, 8).r) + ")");
 
@@ -402,12 +442,7 @@ try
         Img lonely = carried;
         Img odd = frame;
         odd.at(10, 8) = { 3.0f, 3.0f, 3.0f, 1 };
-        c = Base(DlssNrEditCache_Cells);
-        for (uint32_t level = 0; level < kDlssNrEditCacheCellLevels; ++level)
-        {
-            c.CellLevel = level;
-            gpu.Run(c, { &odd, &lonely }, atlasEdit, atlasLuma, (&c.CellCountX0)[level], (&c.CellCountY0)[level]);
-        }
+        BuildCells(gpu, odd, lonely, atlasEdit, atlasLuma);
         c = Base(DlssNrEditCache_Apply);
         gpu.Run(c, { &odd, &lonely, &atlasEdit, &atlasLuma, &odd, &ring }, out, shown, W, H);
         expect(std::abs(shown.at(10, 8).r) < 0.01f, "apply: nothing similar near, no edit");
@@ -441,7 +476,7 @@ try
                                         const float then = uncovered ? 0.02f : Luma(frame.at(x, y));
                                         return Px { -0.5f, -0.5f, -0.5f, std::log2(then + eps) };
                                     });
-        Img stillRing = Blank(W, H * kDlssNrEditCacheRingSlices);
+        Img stillRing = RingOf(Px { 0, 0, 0, 0 });
         auto c = Base(DlssNrEditCache_Apply);
         c.RingSlice = 3;
         c.FadeSteps = 1;
@@ -468,13 +503,109 @@ try
                "compose: the vectors back to the anchor in raw units (" + std::to_string(composed.at(20, 8).r) + ")");
     }
 
+
+    // 10. The ring's own grid: vectors at half size (16 x 8 inside a padded texture at 2, 1) land on the W x H ring by
+    //     uv; raw -1 at half size is -1/16 of the width wherever it is read
+    {
+        Img ring = RingOf(Px { 0, 0, 0, 0 });
+        const Img half = Fill([](unsigned x, unsigned y)
+                              { return x >= 2 && x < 18 && y >= 1 && y < 9 ? Px { -1.0f, 0, 0, 0 } : Px { 50, 50, 0, 0 }; },
+                              20, 10);
+        auto c = Base(DlssNrEditCache_Ring);
+        c.RingSlice = 5;
+        c.MotionWidth = W / 2;
+        c.MotionHeight = H / 2;
+        c.MotionBaseX = 2;
+        c.MotionBaseY = 1;
+        gpu.Run(c, { &half, &zeroDepth }, ring, scratch, W, H);
+        bool all = true;
+        for (unsigned y = 0; y < H; ++y)
+            for (unsigned x = 0; x < W; ++x)
+                all = all && Near(RingAt(ring, 5, x, y).r, -1.0f / (W / 2), 1e-7f);
+        expect(all, "ring: vectors at another size land on the ring's own grid by uv");
+    }
+
+    // 11. The coarser levels from level 0's cells equal the sums over their pixels (partly validated, two brightnesses)
+    {
+        const Img frame = Fill([](unsigned x, unsigned y) { const float v = 0.1f + 0.02f * x + 0.01f * y; return Px { v, v, v, 1 }; });
+        const Img carried = Fill([](unsigned x, unsigned y)
+                                 { const float e = 0.01f * x - 0.02f * y; return Px { e, -e, 0.5f * e, (x + y) % 3 == 0 ? 0.0f : 1.0f }; });
+        auto c = Base(DlssNrEditCache_Cells);
+        Img atlasEdit = Blank(AtlasWidth(c), c.CellCountY0), atlasLuma = Blank(AtlasWidth(c), c.CellCountY0);
+        BuildCells(gpu, frame, carried, atlasEdit, atlasLuma);
+        float worst = 0.0f;
+        for (uint32_t level = 1; level < kDlssNrEditCacheCellLevels; ++level)
+        {
+            const unsigned size = kDlssNrEditCacheCellSize[level];
+            const unsigned atlasX = level == 1 ? c.CellAtlasX1 : c.CellAtlasX2;
+            for (unsigned cy = 0; cy < LevelCountY(c, level); ++cy)
+                for (unsigned cx = 0; cx < LevelCountX(c, level); ++cx)
+                {
+                    double e = 0.0, l = 0.0, w = 0.0;
+                    for (unsigned y = cy * size; y < std::min(H, (cy + 1) * size); ++y)
+                        for (unsigned x = cx * size; x < std::min(W, (cx + 1) * size); ++x)
+                        {
+                            const Px p = carried.at(x, y);
+                            e += p.r * p.a;
+                            l += std::log2(Luma(frame.at(x, y)) + 1.0f / 512.0f) * p.a;
+                            w += p.a;
+                        }
+                    const Px got = atlasEdit.at(atlasX + cx, cy);
+                    worst = std::max({ worst, (float) std::abs(got.r - e / w), (float) std::abs(got.a - w / (size * size)),
+                                       (float) std::abs(atlasLuma.at(atlasX + cx, cy).r - l / w) });
+                }
+        }
+        expect(worst < 1e-4f, "cells: the coarser levels from level 0 equal the sums over their pixels (worst " +
+                                  std::to_string(worst) + ")");
+    }
+
+    // 12. Validity at its texel: a pan of a third of a pixel over a dropped column leaves its neighbours believed
+    {
+        Img thirdRing = RingOf(Px { 0, 0, 0, 0 });
+        const Img third = Fill([](unsigned, unsigned) { return Px { -1.0f / 3.0f, 0, 0, 0 }; });
+        auto c = Base(DlssNrEditCache_Ring);
+        c.RingSlice = 2;
+        gpu.Run(c, { &third, &zeroDepth }, thirdRing, scratch, W, H);
+        Img lastValid = Fill([](unsigned x, unsigned) { return Px { x == 10 ? 0.0f : 1.0f, 0, 0, 0 }; });
+        const Img frame = Frame(0);
+        Img ctxNow = Blank(context.w, context.h);
+        gpu.Run(Base(DlssNrEditCache_Context), { &frame }, ctxNow, scratch, ctxNow.w, ctxNow.h);
+        c = Base(DlssNrEditCache_Carry);
+        c.RingSlice = 2;
+        c.TraceSteps = 1;
+        c.FirstCarried = 0;
+        Img carried = Blank(W, H), valid = Blank(W, H);
+        gpu.Run(c, { &frame, &thirdRing, &anchorEdit, &anchorPrint, &ctxNow, &lastValid }, carried, valid, W, H);
+        // Pixel 11 came from 10.83: a blend there would mix in the dropped column 10; its own texel is 11
+        expect(valid.at(11, 4).r == 1.0f && valid.at(9, 4).r == 1.0f && valid.at(10, 4).r == 0.0f,
+               "carry: a dropped pixel stays dropped, its neighbours stay believed on a sub-pixel pan");
+    }
+
+    // 13. Near black: a pixel at a tenth of eps the model lifted to 4 eps keeps the lift
+    {
+        const float eps = 1.0f / 512.0f;
+        const Img dark = Fill([=](unsigned, unsigned) { return Px { 0.1f * eps, 0.1f * eps, 0.1f * eps, 1 }; });
+        const Img lifted = Fill([=](unsigned, unsigned) { return Px { 4.0f * eps, 4.0f * eps, 4.0f * eps, 1 }; });
+        Img edit = Blank(W, H), print = Blank(W, H);
+        Img ctx = Blank(context.w, context.h);
+        gpu.Run(Base(DlssNrEditCache_Context), { &dark }, ctx, scratch, ctx.w, ctx.h);
+        gpu.Run(Base(DlssNrEditCache_Capture), { &dark, &lifted, &dark, &dark, &ctx }, edit, print, W, H);
+        auto c = Base(DlssNrEditCache_Apply);
+        Img out = Blank(W, H), shown = Blank(W, H);
+        Img atlas = Blank(AtlasWidth(c), c.CellCountY0);
+        gpu.Run(c, { &dark, &edit, &atlas, &atlas, &dark, &ring }, out, shown, W, H);
+        expect(Near(out.at(4, 4).r, 4.0f * eps, 1e-6f), "apply: near black the model's lift is kept (" +
+                                                              std::to_string(out.at(4, 4).r / eps) + " eps)");
+    }
+
     if (fails != 0)
     {
         std::printf("%d check(s) failed\n", fails);
         return 1;
     }
     std::puts("PASS: ring, capture, carry (still and panning), fingerprint drop and hold, apply and surface fill, "
-              "display-encoded round trip, crossfade, compose (WARP HLSL)");
+              "display-encoded round trip, crossfade, compose, ring grid, cell levels, validity at its texel, near black "
+              "(WARP HLSL)");
     return 0;
 }
 catch (const std::exception& e)

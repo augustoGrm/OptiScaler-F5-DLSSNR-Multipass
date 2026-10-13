@@ -85,7 +85,7 @@ inline const char* StandAsideReason(const Inputs& in)
     if (in.blocked)
         return "Tune, frame hold or a capture needs the model on every frame";
     if (in.debugOrCompare)
-        return "a debug view or Compare is on";
+        return "a debug view, Compare or the skin mask preview is on";
     if (in.width == 0 || in.height == 0 || in.motionWidth == 0 || in.motionHeight == 0)
         return "no size";
     return nullptr;
@@ -112,8 +112,9 @@ class Cadence
         const uint32_t interval = Clamp(in.interval, kMinInterval, kMaxInterval);
         const uint32_t crossfade = CrossfadeFor(interval, in.crossfade);
         const bool gap = _seen && (in.clock < _clock || in.clock - _clock > kMaxClockStep);
-        const bool changed = _seen && (in.revision != _revision || in.width != _width || in.height != _height ||
-                                       in.motionWidth != _motionWidth || in.motionHeight != _motionHeight);
+        // Not a render-size change: the ring keeps uv displacements on a grid of its own (a dynamic-resolution game
+        // changes it often, and starting over each time would reset the model's history with it)
+        const bool changed = _seen && (in.revision != _revision || in.width != _width || in.height != _height);
 
         _slice = _seen ? (_slice + 1) % kRingSlices : 0;
         s.runs = true;
@@ -161,8 +162,6 @@ class Cadence
         _revision = in.revision;
         _width = in.width;
         _height = in.height;
-        _motionWidth = in.motionWidth;
-        _motionHeight = in.motionHeight;
         ++_frames;
         _modelFrames += s.refresh ? 1 : 0;
         return s;
@@ -196,7 +195,7 @@ class Cadence
     uint32_t _fadeFrom = kNoFade;
     unsigned long long _clock = 0;
     unsigned long long _revision = 0;
-    uint32_t _width = 0, _height = 0, _motionWidth = 0, _motionHeight = 0;
+    uint32_t _width = 0, _height = 0;
     unsigned long long _frames = 0, _modelFrames = 0;
 };
 } // namespace DlssNrEditCache

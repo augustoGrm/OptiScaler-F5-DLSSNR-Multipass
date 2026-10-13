@@ -4709,7 +4709,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
         ci.edgeCompression = spatial;
         ci.convertedEncoding = frame.InputEncoding != 0;
         ci.blocked = calibrationPinned || g_nr.heldActive || g_capture.isActive() || CalibrationActive();
-        ci.debugOrCompare = cfg.DlssNrDebugView.value_or_default() != 0 || cfg.DlssNrCompare.value_or_default() != 0;
+        // The skin mask preview is painted by the resolve: carried, it would be taken for the model's edit
+        ci.debugOrCompare = cfg.DlssNrDebugView.value_or_default() != 0 || cfg.DlssNrCompare.value_or_default() != 0 ||
+                            cfg.DlssNrShowSkinMask.value_or_default();
         ci.reset = g_nr.reset;
         ci.revision = reuseFrame.revision;
         ci.width = width;

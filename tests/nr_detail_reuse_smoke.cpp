@@ -537,6 +537,87 @@ static void Spread()
     CHECK(q.Next(f).spreadStep == -1);
 }
 
+// The auto spread and its bounds: none at every other frame (what shipped), over 3 at every 3rd; never longer than
+// the interval.
+static void SpreadSettings()
+{
+    CHECK(SpreadFor(2, 0) == 1 && SpreadFor(3, 0) == 3);
+    CHECK(SpreadFor(2, 1) == 1 && SpreadFor(3, 1) == 1);
+    CHECK(SpreadFor(2, 2) == 2 && SpreadFor(2, 3) == 2 && SpreadFor(2, 9) == 2);
+    CHECK(SpreadFor(3, 2) == 2 && SpreadFor(3, 3) == 3 && SpreadFor(3, 9) == 3);
+}
+
+// What the backends run: the cadence's spread, unless the debug view paints the answer, the reuse fell back to the
+// model, the textures are missing, or a later step has nothing saved to move.
+static void PlanOfSpread()
+{
+    Decision full;
+    full.kind = Kind::Full;
+    full.spreadStep = 0;
+    full.spreadAmount = 2.0f / 3.0f;
+    full.saveShown = true;
+    SpreadPlan p = PlanSpread(full, false, true, false, false);
+    CHECK(p.run && !p.moveShown && p.saveShown && p.amount == full.spreadAmount);
+    CHECK(!PlanSpread(full, false, true, false, true).run);  // debug view
+    CHECK(!PlanSpread(full, false, false, false, false).run); // no textures
+
+    Decision reuse;
+    reuse.kind = Kind::Reuse;
+    reuse.spreadStep = 1;
+    reuse.spreadAmount = 0.5f;
+    p = PlanSpread(reuse, true, true, true, false);
+    CHECK(p.run && p.moveShown && !p.saveShown);
+    CHECK(!PlanSpread(reuse, true, true, false, false).run); // nothing saved to move
+    CHECK(!PlanSpread(reuse, false, true, true, false).run); // the reuse fell back to the model
+
+    Decision none;
+    CHECK(!PlanSpread(none, true, true, true, false).run);
+}
+
+// The interval changed from 3 to 2 after two reused frames: the next frame runs the model and composes; a failed
+// second reused frame starts clean (no compose: the host resets the model's history).
+static void IntervalChangeAndFailure()
+{
+    Cadence c;
+    for (int i = 0; i < 3; ++i) // F R R
+    {
+        FrameFacts f = Facts(700 + i);
+        f.reuseRun = 2;
+        c.Next(f);
+        c.Captured(true);
+    }
+    FrameFacts two = Facts(703); // now every other frame
+    Decision d = c.Next(two);
+    c.Captured(true);
+    CHECK(d.kind == Kind::Full && d.composeMotion);
+    d = c.Next(Facts(704));
+    c.Captured(true);
+    CHECK(d.kind == Kind::Reuse && !d.accumulateMotion);
+
+    Cadence e;
+    for (int i = 0; i < 2; ++i) // F R
+    {
+        FrameFacts f = Facts(800 + i);
+        f.reuseRun = 2;
+        f.spread = 3;
+        e.Next(f);
+        e.Captured(true);
+    }
+    FrameFacts second = Facts(802);
+    second.reuseRun = 2;
+    second.spread = 3;
+    d = e.Next(second);
+    CHECK(d.kind == Kind::Reuse && d.accumulateMotion);
+    e.ReuseFailed(); // could not be recorded: the model ran instead
+    e.Captured(true);
+    FrameFacts next = Facts(803);
+    next.reuseRun = 2;
+    next.spread = 3;
+    d = e.Next(next);
+    CHECK(d.kind == Kind::Full && !d.historyUsable && !d.composeMotion && d.spreadStep == -1);
+    CHECK(e.Fallback() == 1 && e.Causes().notRecorded == 1);
+}
+
 int main()
 {
     Route();
@@ -556,6 +637,9 @@ int main()
     FrameRate();
     EveryThird();
     Spread();
+    SpreadSettings();
+    PlanOfSpread();
+    IntervalChangeAndFailure();
 
     if (fails == 0)
         printf("nr_detail_reuse_smoke: all passed\n");

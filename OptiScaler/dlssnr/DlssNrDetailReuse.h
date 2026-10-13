@@ -70,7 +70,7 @@ struct Decision
     bool captureHistory = false; // save answer - input, the input colour and the depth for the next frame
     bool composeMotion = false;  // full frame: give the model motion composed over the last two frames
     bool saveMotion = false;     // reuse frame: keep this frame's motion for the next full frame to compose
-    bool accumulateMotion = false; // ... added to what the reuse frame before it kept (the second reused frame in a row)
+    bool accumulateMotion = false; // ... added to what the reuse frame before kept (the second reused frame in a row)
     int spreadStep = -1;         // the k-th frame of a spread (0 = the full frame), or -1: none on this frame
     float spreadAmount = 0.0f;   // how far it pulls toward the moved detail shown before (Steady's amount)
     bool saveShown = false;      // keep what this frame shows (its spread result) for the spread's next frame
@@ -88,6 +88,46 @@ inline float SpreadAmount(unsigned int k, unsigned int spread)
     if (k == 0)
         return 1.0f - 1.0f / s;
     return (1.0f - (float) (k + 1) / s) / (1.0f - (float) k / s);
+}
+
+// DetailReuseSpread for this interval. 0 (auto): none at every other frame, as it shipped; over 3 at every 3rd frame,
+// where the measured pulse is largest. Never longer than the interval: a spread the next full frame interrupts starts
+// over from the unblended detail, and what it had blended in drops out at once (a jump, the thing it is there to stop).
+inline unsigned int SpreadFor(unsigned int interval, unsigned int spread)
+{
+    const unsigned int longest = interval >= 3 ? 3u : 2u;
+    if (spread == 0)
+        return interval >= 3 ? 3u : 1u;
+    return std::clamp(spread, 1u, longest);
+}
+
+// The spread on this frame, as the backends run it. Planned by the cadence, it is not run where it cannot be: the
+// debug view paints the answer, a reuse frame that could not be recorded fell back to the model (a fresh start, not a
+// step of the spread), the textures are missing, or a later step has no saved shown detail to move. Then Steady runs
+// as it would have, and the cadence is told (Cadence::EndSpread).
+struct SpreadPlan
+{
+    bool run = false;
+    float amount = 0.0f;    // Steady's amount
+    bool moveShown = false; // move what the spread showed last frame (k >= 1), not last frame's saved detail
+    bool saveShown = false; // keep what this frame shows for the spread's next frame
+};
+
+inline SpreadPlan PlanSpread(const Decision& d, bool reusedAsDecided, bool haveTextures, bool shownValid,
+                             bool debugView)
+{
+    SpreadPlan p;
+    if (d.spreadStep < 0 || debugView || !haveTextures)
+        return p;
+    if (d.kind == Kind::Reuse && !reusedAsDecided)
+        return p;
+    if (d.spreadStep > 0 && !shownValid)
+        return p;
+    p.run = true;
+    p.amount = d.spreadAmount;
+    p.moveShown = d.spreadStep > 0;
+    p.saveShown = d.saveShown;
+    return p;
 }
 
 // How far the frame number steps between two NR frames when NR runs on every rendered frame. With frame generation

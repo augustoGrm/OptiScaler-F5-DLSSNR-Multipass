@@ -3,8 +3,9 @@
 // Every other frame (or two of every three, DetailReuseInterval 3) skips the model -- all passes -- and moves the
 // previous frame's detail (model answer minus model input, in the proxy domain at the working size) onto this frame's
 // input instead; the resolve then composes it like any model answer. The spread (DetailReuseSpread) blends what was
-// shown before a full frame into it and the reused frames after it, on the display only. The cadence is dlssnr/DlssNrDetailReuse.h, the GPU work precompile/dlssnr_detail_reuse.hlsl, and
-// what does not depend on the API (when it may run, the constants, the status) dlssnr/DlssNrDetailReuseHost.h.
+// shown before a full frame into it and the reused frames after it, on the display only. The cadence is
+// dlssnr/DlssNrDetailReuse.h, the GPU work precompile/dlssnr_detail_reuse.hlsl, and what does not depend on the API
+// (when it may run, the constants, the status) dlssnr/DlssNrDetailReuseHost.h.
 // NR after SR only; frames that must see the real model (reset, settings change, Tune, frame hold) run it, and none of
 // it runs while frame generation makes frames unless asked to (A/B testing): generated frames are built from real
 // ones, and alternating full and reused frames can flicker under it.
@@ -48,8 +49,9 @@ ID3D12Resource* detail[2] = {};      // work size, RGBA16F: answer - input, a = 
 ID3D12Resource* colourDepth[2] = {}; // work size, RGBA32F: that frame's input colour, a = far-is-zero depth
                                      // (32-bit: far reversed-Z values fall below half precision's range)
 unsigned int cur = 0;
-// work size: the reused frames' vectors as uv displacement, back to the last full frame. Two, so the second reused frame
-// in a row (every 3rd frame) can add its own to what the first kept: savedMotion is the one holding them.
+// work size: the reused frames' vectors as uv displacement, back to the last full frame. Two at every 3rd frame, so the
+// second reused frame in a row can add its own to what the first kept (savedMotion is the one holding them); the
+// second exists only then.
 ID3D12Resource* prevMotion[2] = {};
 unsigned int savedMotion = 0;
 // work size, RGBA16F: the detail a spread frame showed (answer - input, a = valid), for the spread's next frame to move
@@ -294,7 +296,8 @@ void ParkAll()
 
 // Allocates or parks the textures for this frame. Returns whether reuse can run. keep: reuse is held off for now
 // (frame generation, the frame rate), so the textures stay.
-bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, bool measure, unsigned int spread)
+bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, bool measure, unsigned int spread,
+             unsigned int interval)
 {
     // Everything that follows the working size, rebuilt only when that changes.
     if (wanted && (detail[0] == nullptr || workWidth != f.workWidth || workHeight != f.workHeight))
@@ -307,11 +310,8 @@ bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, b
             colourDepth[i] = CreateScratch(f.device, DXGI_FORMAT_R32G32B32A32_FLOAT, f.workWidth, f.workHeight);
             allocated = allocated && detail[i] != nullptr && colourDepth[i] != nullptr;
         }
-        for (unsigned int i = 0; i < 2; ++i)
-        {
-            prevMotion[i] = CreateScratch(f.device, DXGI_FORMAT_R32G32_FLOAT, f.workWidth, f.workHeight);
-            allocated = allocated && prevMotion[i] != nullptr;
-        }
+        prevMotion[0] = CreateScratch(f.device, DXGI_FORMAT_R32G32_FLOAT, f.workWidth, f.workHeight);
+        allocated = allocated && prevMotion[0] != nullptr;
         savedMotion = 0;
         if (!allocated)
         {
@@ -331,6 +331,24 @@ bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, b
         if (detail[0] != nullptr && !keep)
             ParkAll();
         return false;
+    }
+
+    // The second saved-vector texture, every 3rd frame only. Without it the cadence runs every other frame
+    // (BeforeModel).
+    if (interval >= 3 && prevMotion[1] == nullptr && !host.ExtrasFailed())
+    {
+        prevMotion[1] = CreateScratch(f.device, DXGI_FORMAT_R32G32_FLOAT, f.workWidth, f.workHeight);
+        if (prevMotion[1] == nullptr)
+        {
+            host.AllocationFailed(f, true);
+            LOG_WARN("DLSS-NR detail reuse: could not allocate its second motion texture; every other frame instead");
+        }
+    }
+    else if (interval < 3 && prevMotion[1] != nullptr)
+    {
+        ParkNrResource(prevMotion[1]);
+        savedMotion = 0;
+        cadence.Drop(); // what was saved may have been in the one just parked
     }
 
     // The composed vectors go to the model in the motion subrect's place, so they are sized like the motion texture's
@@ -401,7 +419,8 @@ bool Prepare(const Frame& f, bool wanted, bool keep, float steady, float fill, b
         if (shownDetail == nullptr)
         {
             host.AllocationFailed(f, true);
-            LOG_WARN("DLSS-NR detail reuse: could not allocate the spread's texture; the model's frames are not spread");
+            LOG_WARN("DLSS-NR detail reuse: could not allocate the spread's texture; the model's frames are not "
+                     "spread");
         }
     }
     else if (!spreading && shownDetail != nullptr)
@@ -448,12 +467,14 @@ bool EstimateThen(const Frame& f, DlssNrDetailReuseMode mode, ID3D12Resource* se
         moved = detail[cur];
     MakeHistoryReadable(f.cmdList, true);
     if (moved != detail[cur])
-        Barrier(f.cmdList, moved, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Barrier(f.cmdList, moved, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
     params.Mode = DlssNrDetailReuse_Estimate;
     bool ok = f.pass->DispatchDetailReuse(f.cmdList, params, f.workWidth, f.workHeight, f.modelInput, moved,
                                           colourDepth[cur], f.motion, f.depth, estimate, nullptr, HistoryDistrust(f));
     if (moved != detail[cur])
-        Barrier(f.cmdList, moved, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Barrier(f.cmdList, moved, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     MakeHistoryReadable(f.cmdList, false);
     if (!ok)
         return false;
@@ -501,9 +522,14 @@ Plan BeforeModel(const Frame& f)
     facts.finishedPicture = f.info->FinishedPicture;
     facts.motionMatchesPicture = f.info->MotionMatchesPicture;
     facts.present = State::Instance().frameCount;
-    const DlssNrDetailReuse::Wanted want = host.Gate(
+    DlssNrDetailReuse::Wanted want = host.Gate(
         facts, [&]() -> const char* { return f.pass->DetailReuseReady() ? nullptr : "its shader could not be built"; });
-    plan.active = Prepare(f, want.wanted, want.keep, want.steady, want.fill, want.measure, want.spread);
+    plan.active = Prepare(f, want.wanted, want.keep, want.steady, want.fill, want.measure, want.spread, want.interval);
+    if (want.interval >= 3 && prevMotion[1] == nullptr)
+    {
+        want.interval = 2;
+        want.spread = DlssNrDetailReuse::SpreadFor(2, f.cfg->DlssNrDetailReuseSpread.value_or_default());
+    }
     host.Decide(facts, plan.active, want);
     params.HistoryDistrust = HistoryDistrust(f) != nullptr ? 1u : 0u;
 
@@ -586,11 +612,13 @@ Plan BeforeModel(const Frame& f)
     if (!plan.reused && decision.kind == DlssNrDetailReuse::Kind::Full && decision.composeMotion)
     {
         ID3D12Resource* saved = prevMotion[savedMotion];
-        Barrier(f.cmdList, saved, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Barrier(f.cmdList, saved, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
+                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
         params.Mode = DlssNrDetailReuse_Compose;
         const bool ok = f.pass->DispatchDetailReuse(f.cmdList, params, f.motionWidth, f.motionHeight, f.motion,
                                                     nullptr, nullptr, f.motion, saved, composed, nullptr);
-        Barrier(f.cmdList, saved, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+        Barrier(f.cmdList, saved, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE,
+                D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
         if (ok)
         {
             Barrier(f.cmdList, composed, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
@@ -618,16 +646,17 @@ void AfterModel(const Frame& f, const Plan& plan, bool succeeded, ID3D12Resource
     // -- last frame's saved detail on the full frame, what the spread showed last frame after it -- while the history
     // below keeps the unblended answer. displayed: what the resolve shows instead, once the history is saved.
     ID3D12Resource* displayed = nullptr;
-    const int spreadStep = decision.spreadStep;
-    if (spreadStep >= 0 && succeeded && finalAnswer != nullptr && params.DebugView == 0 && estimate != nullptr &&
-        steadied != nullptr && (spreadStep == 0 || (shownValid && shownDetail != nullptr)))
+    const DlssNrDetailReuse::SpreadPlan spread = DlssNrDetailReuse::PlanSpread(
+        decision, plan.reused, succeeded && finalAnswer != nullptr && estimate != nullptr && steadied != nullptr,
+        shownValid && shownDetail != nullptr, params.DebugView != 0);
+    if (spread.run)
     {
         const float steady = params.Steady;
-        params.Steady = decision.spreadAmount;
-        const bool spread = EstimateThen(f, DlssNrDetailReuse_Steady, finalAnswer, steadied,
-                                         spreadStep == 0 && measureWithSteady, spreadStep == 0 ? nullptr : shownDetail);
+        params.Steady = spread.amount;
+        const bool ok = EstimateThen(f, DlssNrDetailReuse_Steady, finalAnswer, steadied,
+                                     !spread.moveShown && measureWithSteady, spread.moveShown ? shownDetail : nullptr);
         params.Steady = steady;
-        if (spread)
+        if (ok)
         {
             Barrier(f.cmdList, steadied, D3D12_RESOURCE_STATE_UNORDERED_ACCESS,
                     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
@@ -636,12 +665,12 @@ void AfterModel(const Frame& f, const Plan& plan, bool succeeded, ID3D12Resource
         }
     }
     shownValid = false;
-    if (displayed == nullptr && spreadStep >= 0)
+    if (displayed == nullptr && decision.spreadStep >= 0)
         cadence.EndSpread();
 
     // A full frame with last frame's history: pull the model's new detail toward the moved previous detail, as far as
-    // that is trusted, so this frame and the reused one next to it differ less. Not where the spread runs.
-    if (displayed == nullptr && spreadStep < 0 && !plan.reused && succeeded && finalAnswer != nullptr &&
+    // that is trusted, so this frame and the reused one next to it differ less. Wherever the spread did not run.
+    if (displayed == nullptr && !plan.reused && succeeded && finalAnswer != nullptr &&
         decision.historyUsable && params.Steady > 0.0f && estimate != nullptr && steadied != nullptr &&
         EstimateThen(f, DlssNrDetailReuse_Steady, finalAnswer, steadied, measureWithSteady))
     {
@@ -669,12 +698,12 @@ void AfterModel(const Frame& f, const Plan& plan, bool succeeded, ID3D12Resource
         cadence.Captured(captured);
 
         // The spread's next frame moves what this one showed (tested with this frame's colour, just saved)
-        if (displayed != nullptr && decision.saveShown)
+        if (displayed != nullptr && spread.saveShown)
         {
-            params.Mode = DlssNrDetailReuse_Capture;
+            params.Mode = DlssNrDetailReuse_CaptureShown;
             shownValid = captured && shownDetail != nullptr &&
                          f.pass->DispatchDetailReuse(f.cmdList, params, f.workWidth, f.workHeight, f.modelInput,
-                                                     displayed, f.depth, nullptr, nullptr, shownDetail, colourDepth[cur]);
+                                                     displayed, nullptr, nullptr, nullptr, shownDetail, nullptr);
             if (!shownValid)
                 cadence.EndSpread();
         }

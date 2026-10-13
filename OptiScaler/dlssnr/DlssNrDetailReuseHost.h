@@ -88,14 +88,6 @@ struct Wanted
     unsigned int spread = 1;   // frames the full frame's jump is spread over (1 = none)
 };
 
-// DetailReuseSpread 0 (auto): none at every other frame, as it shipped; over 3 at every 3rd frame, where the measured
-// pulse is largest (dlssnr/DlssNrDetailReuse.h).
-inline unsigned int SpreadFor(unsigned int interval, unsigned int spread)
-{
-    if (spread == 0)
-        return interval >= 3 ? 3u : 1u;
-    return std::clamp(spread, 1u, 3u);
-}
 
 // Frame generation is built from two real frames, so reused frames next to full ones show under it: the edges of the
 // screen flickered in fast motion (NBA 2K27 with OptiFG 2026-09-28, The Witcher 3 2026-09-30) until MotionGuard stopped

@@ -65,6 +65,8 @@ cbuffer Params : register(b0)
     uint composeWidth;
     uint composeHeight;
     float age;
+    uint ringWidth;
+    uint ringHeight;
 };
 
 EC_BINDING(1) Texture2D<float4> t0 : register(t0);
@@ -78,6 +80,7 @@ EC_BINDING(7) EC_ANY_FORMAT RWTexture2D<float4> u1 : register(u1);
 EC_BINDING(8) SamplerState gLinear : register(s0);
 
 static const uint kRingSlices = 8;
+static const uint kRingColumns = 4;
 static const float3 kLuma = float3(0.2126, 0.7152, 0.0722);
 
 // ---- colour ----
@@ -117,11 +120,14 @@ float FarIsZero(float d) { return depthInverted != 0 ? d : 1.0 - d; }
 
 bool HasDepth() { return depthWidth != 0 && depthHeight != 0; }
 
+// Where slice `slice` starts in the ring (4 across, 2 down)
+int2 SliceOrigin(uint slice) { return int2((slice % kRingColumns) * ringWidth, (slice / kRingColumns) * ringHeight); }
+
 // This frame's displacement at uv, from ring slice `slice` (in `ring`)
 float2 RingDisplacement(Texture2D<float4> ring, float2 uv, uint slice)
 {
-    const int2 texel = TexelAt(uv, uint2(motionWidth, motionHeight));
-    return ring.Load(int3(texel.x, (int) (slice * motionHeight) + texel.y, 0)).rg;
+    const int2 texel = TexelAt(uv, uint2(ringWidth, ringHeight));
+    return ring.Load(int3(SliceOrigin(slice) + texel, 0)).rg;
 }
 
 // From uv on the frame of ring slice `slice`, `steps` frames back: where it was then, and whether it stayed on screen
@@ -160,10 +166,13 @@ void CSMain(uint3 id : SV_DispatchThreadID)
     if (mode == 0)
     {
         // Ring: this frame's vectors as uv displacement, each texel's taken from the nearest surface of its 3x3 (the
-        // largest far-is-zero depth), so an edge's vector stays with the object in front
-        if (id.x >= motionWidth || id.y >= motionHeight)
+        // largest far-is-zero depth), so an edge's vector stays with the object in front. The ring's own grid reads
+        // the vectors at its uv.
+        if (id.x >= ringWidth || id.y >= ringHeight)
             return;
-        int2 pick = int2(id.xy);
+        const float2 ringUv = (float2(id.xy) + 0.5) / float2(ringWidth, ringHeight);
+        const int2 centre = TexelAt(ringUv, uint2(motionWidth, motionHeight));
+        int2 pick = centre;
         if (HasDepth())
         {
             float best = -1.0;
@@ -171,7 +180,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
             {
                 [unroll] for (int dx = -1; dx <= 1; ++dx)
                 {
-                    const int2 m = clamp(int2(id.xy) + int2(dx, dy), int2(0, 0), int2(motionWidth, motionHeight) - 1);
+                    const int2 m = clamp(centre + int2(dx, dy), int2(0, 0), int2(motionWidth, motionHeight) - 1);
                     const float2 uv = (float2(m) + 0.5) / float2(motionWidth, motionHeight);
                     const int2 d = TexelAt(uv, uint2(depthWidth, depthHeight));
                     const float depth = FarIsZero(t1.Load(int3(d + int2(depthBaseX, depthBaseY), 0)).r);
@@ -187,7 +196,7 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         float2 displacement = raw * float2(mvScaleX, mvScaleY) / float2(motionWidth, motionHeight);
         if (!all(isfinite(displacement)))
             displacement = 0.0;
-        u0[uint2(id.x, ringSlice * motionHeight + id.y)] = float4(displacement, 0.0, 0.0);
+        u0[uint2(SliceOrigin(ringSlice) + int2(id.xy))] = float4(displacement, 0.0, 0.0);
         return;
     }
 
@@ -220,18 +229,42 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         const uint size = CellSize(level);
         float3 edit = 0.0;
         float luma = 0.0, weight = 0.0;
-        for (uint y = 0; y < size; ++y)
+        if (level == 0)
         {
-            for (uint x = 0; x < size; ++x)
+            for (uint y = 0; y < size; ++y)
             {
-                const uint2 p = id.xy * size + uint2(x, y);
-                if (p.x >= width || p.y >= height)
-                    continue;
-                const float4 carried = t1.Load(int3(p, 0));
-                const float w = carried.a;
-                edit += carried.rgb * w;
-                luma += LogLuma(ToLight(t0.Load(int3(p, 0)).rgb)) * w;
-                weight += w;
+                for (uint x = 0; x < size; ++x)
+                {
+                    const uint2 p = id.xy * size + uint2(x, y);
+                    if (p.x >= width || p.y >= height)
+                        continue;
+                    const float4 carried = t1.Load(int3(p, 0));
+                    const float w = carried.a;
+                    edit += carried.rgb * w;
+                    luma += LogLuma(ToLight(t0.Load(int3(p, 0)).rgb)) * w;
+                    weight += w;
+                }
+            }
+        }
+        else
+        {
+            // From level 0's cells: each holds its means and the share of its 64 pixels that were validated, so the
+            // weighted sums come back exactly (and a thread reads 16 or 256 cells, not 1024 or 16384 pixels)
+            const uint children = size / CellSize(0);
+            const float childArea = float(CellSize(0) * CellSize(0));
+            for (uint y = 0; y < children; ++y)
+            {
+                for (uint x = 0; x < children; ++x)
+                {
+                    const uint2 c = id.xy * children + uint2(x, y);
+                    if (c.x >= cellCountX0 || c.y >= cellCountY0)
+                        continue;
+                    const float4 child = t2.Load(int3(cellAtlasX0 + c.x, c.y, 0));
+                    const float w = child.a * childArea;
+                    edit += child.rgb * w;
+                    luma += t3.Load(int3(cellAtlasX0 + c.x, c.y, 0)).r * w;
+                    weight += w;
+                }
             }
         }
         const uint2 at = uint2(CellAtlasX(level) + id.x, id.y);
@@ -306,11 +339,13 @@ void CSMain(uint3 id : SV_DispatchThreadID)
         // The surroundings: light an object left behind on the ground changes them, not the pixel's own range
         believed = believed && abs(anchorPrint.w - ContextAt(t4, uv)) <= contextTolerance;
 
-        // Only a refresh restores a dropped pixel: last frame's validity, where this pixel was, must still hold
+        // Only a refresh restores a dropped pixel: last frame's validity, where this pixel was, must still hold. Read
+        // at its texel, not blended: a blend with a dropped neighbour would drop this one too, and the dropped area
+        // would grow by a pixel every frame.
         if (firstCarried == 0)
         {
             const float2 previousUv = uv + RingDisplacement(t1, uv, ringSlice);
-            believed = believed && t5.SampleLevel(gLinear, saturate(previousUv), 0).r > 0.999;
+            believed = believed && t5.Load(int3(TexelAt(previousUv, uint2(width, height)), 0)).r > 0.999;
         }
         believed = believed && onScreen && all(isfinite(edit));
 
@@ -383,7 +418,9 @@ void CSMain(uint3 id : SV_DispatchThreadID)
                 shown = lerp(before.rgb, shown, fadeWeight);
         }
 
-        float3 output = light * exp2(shown);
+        // The inverse of the capture's ratio, epsilon and all: near black, where the frame is below epsilon, the model's
+        // lift is kept rather than scaled away
+        float3 output = max((light + epsilon) * exp2(shown) - epsilon, 0.0);
         if (debugView == 1 && valid < 1.0)
             output = lerp(output, float3(1.0, 0.1, 0.1) * max(dot(light, kLuma), 0.05), 0.6);
         else if (debugView == 2)
