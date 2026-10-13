@@ -2232,6 +2232,25 @@ void Config::CheckUpscalerFiles()
     }
 }
 
+bool Config::FGCanFollowGame()
+{
+    const auto& state = State::Instance();
+    return FGFollowGame::CanFollow(state.activeFgInput == FGInput::DLSSG, state.streamlineVersion.major);
+}
+
+bool Config::FGFollowsGame() const { return FGFollowGame::Follows(FGEnabled.has_value(), FGCanFollowGame()); }
+
+bool Config::IsFGEnabled() const
+{
+    return FGFollowGame::Enabled(FGFollowsGame(), State::Instance().dlssgInputGameRequest.load(),
+                                 FGEnabled.value_or_default());
+}
+
+int Config::FGInterpolationCount(int menuCount, int outputMax) const
+{
+    return FGFollowGame::Count(FGFollowsGame(), State::Instance().dlssgInputGameRequest.load(), menuCount, outputMax);
+}
+
 std::vector<std::string> Config::GetConfigLog() { return _log; }
 
 std::optional<std::string> Config::readString(std::string section, std::string key, bool lowercase)

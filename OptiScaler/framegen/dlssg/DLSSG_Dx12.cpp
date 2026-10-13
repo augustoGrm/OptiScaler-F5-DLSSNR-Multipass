@@ -360,12 +360,15 @@ bool DLSSG_Dx12::Dispatch()
                  _maxInterpolationCount);
     }
 
-    if (_framesToInterpolate != Config::Instance()->FGDLSSGInterpolationCount.value_or_default())
-    {
-        LOG_INFO("Interpolation count changed {} -> {}", _framesToInterpolate,
-                 Config::Instance()->FGDLSSGInterpolationCount.value_or_default());
+    // The game's count while following its DLSS FG (FG Input DLSSG), clamped here and never saved; else the menu's
+    const int targetCount = Config::Instance()->FGInterpolationCount(
+        Config::Instance()->FGDLSSGInterpolationCount.value_or_default(), _maxInterpolationCount);
 
-        _framesToInterpolate = Config::Instance()->FGDLSSGInterpolationCount.value_or_default();
+    if (_framesToInterpolate != targetCount)
+    {
+        LOG_INFO("Interpolation count changed {} -> {}", _framesToInterpolate, targetCount);
+
+        _framesToInterpolate = targetCount;
     }
 
     sl::DLSSGOptions options {};
@@ -602,7 +605,7 @@ void DLSSG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
     _constants = fgConstants;
 
     // If FG Enabled from menu
-    if (Config::Instance()->FGEnabled.value_or_default())
+    if (Config::Instance()->IsFGEnabled())
     {
         if (_device == nullptr)
         {

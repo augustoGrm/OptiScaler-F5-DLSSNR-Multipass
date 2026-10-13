@@ -374,7 +374,8 @@ bool XeFG_Dx12::CreateSwapchain(IDXGIFactory* factory, ID3D12CommandQueue* cmdQu
 
     // For old libxess_fg versions we use max to control interpolation count
     if (XeFGProxy::SetNumInterpolatedFrames() == nullptr)
-        intTarget = Config::Instance()->FGXeFGInterpolationCount.value_or_default();
+        intTarget = Config::Instance()->FGInterpolationCount(
+            Config::Instance()->FGXeFGInterpolationCount.value_or_default(), _maxInterpolationCount);
 
     if (intTarget < 1 || intTarget > _maxInterpolationCount)
     {
@@ -542,7 +543,8 @@ bool XeFG_Dx12::CreateSwapchain1(IDXGIFactory* factory, ID3D12CommandQueue* cmdQ
 
     // For old libxess_fg versions we use max to control interpolation count
     if (XeFGProxy::SetNumInterpolatedFrames() == nullptr)
-        intTarget = Config::Instance()->FGXeFGInterpolationCount.value_or_default();
+        intTarget = Config::Instance()->FGInterpolationCount(
+            Config::Instance()->FGXeFGInterpolationCount.value_or_default(), _maxInterpolationCount);
 
     if (intTarget < 1 || intTarget > _maxInterpolationCount)
     {
@@ -794,10 +796,13 @@ bool XeFG_Dx12::Dispatch()
                      _maxInterpolationCount);
         }
 
-        if (_framesToInterpolate != Config::Instance()->FGXeFGInterpolationCount.value_or_default())
+        // The game's count while following its DLSS FG (FG Input DLSSG), clamped here and never saved; else the menu's
+        const int targetCount = Config::Instance()->FGInterpolationCount(
+            Config::Instance()->FGXeFGInterpolationCount.value_or_default(), _maxInterpolationCount);
+
+        if (_framesToInterpolate != targetCount)
         {
-            LOG_INFO("Interpolation count changed {} -> {}", _framesToInterpolate,
-                     Config::Instance()->FGXeFGInterpolationCount.value_or_default());
+            LOG_INFO("Interpolation count changed {} -> {}", _framesToInterpolate, targetCount);
 
             state.WAR_xefgRequestFGToggle = true;
 
@@ -805,10 +810,9 @@ bool XeFG_Dx12::Dispatch()
             ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
 #endif // !DONT_USE_XMX
 
-            auto intResult = XeFGProxy::SetNumInterpolatedFrames()(
-                _swapChainContext, Config::Instance()->FGXeFGInterpolationCount.value_or_default());
+            auto intResult = XeFGProxy::SetNumInterpolatedFrames()(_swapChainContext, targetCount);
 
-            _framesToInterpolate = Config::Instance()->FGXeFGInterpolationCount.value_or_default();
+            _framesToInterpolate = targetCount;
 
             if (intResult != XEFG_SWAPCHAIN_RESULT_SUCCESS)
             {
@@ -1074,7 +1078,7 @@ void XeFG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
     _infiniteDepth = static_cast<bool>(fgConstants.flags & FG_Flags::InfiniteDepth);
 
     // If FG Enabled from menu
-    if (Config::Instance()->FGEnabled.value_or_default())
+    if (Config::Instance()->IsFGEnabled())
     {
         // If FG context is nullptr
         if (_fgContext == nullptr)

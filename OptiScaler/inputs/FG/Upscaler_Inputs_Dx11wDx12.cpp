@@ -191,7 +191,7 @@ void UpscalerInputsDx11wDx12::UpscaleStart(NVSDK_NGX_Parameter* InParameters, IF
     fg->SetReset(reset);
     fg->SetInterpolationRect(feature->DisplayWidth(), feature->DisplayHeight());
 
-    if (State::Instance().isShuttingDown || !fg->IsActive() || !Config::Instance()->FGEnabled.value_or_default() ||
+    if (State::Instance().isShuttingDown || !fg->IsActive() || !Config::Instance()->IsFGEnabled() ||
         State::Instance().currentSwapchain == nullptr)
     {
         return;
@@ -300,7 +300,7 @@ void UpscalerInputsDx11wDx12::UpscaleEnd(NVSDK_NGX_Parameter* InParameters, IFea
     if (fg == nullptr || State::Instance().activeFgInput != FGInput::Upscaler || _dx12Device == nullptr)
         return;
 
-    if (fg->IsActive() && Config::Instance()->FGEnabled.value_or_default() &&
+    if (fg->IsActive() && Config::Instance()->IsFGEnabled() &&
         State::Instance().currentSwapchain != nullptr)
         LOG_DEBUG("(FG Dx11wDx12) running, frame: {}", feature->FrameCount());
 }
