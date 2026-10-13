@@ -224,30 +224,20 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
     if (InterfaceId == GET_ID(NvAPI_D3D_SetSleepMode) || InterfaceId == GET_ID(NvAPI_D3D_Sleep) ||
         InterfaceId == GET_ID(NvAPI_D3D_GetLatency) || InterfaceId == GET_ID(NvAPI_D3D_SetLatencyMarker) ||
         InterfaceId == GET_ID(NvAPI_D3D12_SetAsyncFrameMarker) || InterfaceId == GET_ID(NvAPI_Vulkan_GetLatency) ||
-        InterfaceId == GET_ID(NvAPI_Vulkan_SetLatencyMarker) || InterfaceId == GET_ID(NvAPI_Vulkan_SetSleepMode)
-#ifdef LOW_LATENCY_INPUTS
-        || InterfaceId == GET_ID(NvAPI_D3D_GetSleepStatus)
-#endif
-    )
+        InterfaceId == GET_ID(NvAPI_Vulkan_SetLatencyMarker) || InterfaceId == GET_ID(NvAPI_Vulkan_SetSleepMode))
     {
-#ifdef LOW_LATENCY_INPUTS
-        if (InterfaceId == GET_ID(NvAPI_D3D_SetSleepMode))
-            return InputReflex::D3D_SetSleepMode;
-        if (InterfaceId == GET_ID(NvAPI_D3D_GetSleepStatus))
-            return InputReflex::D3D_GetSleepStatus;
-        else if (InterfaceId == GET_ID(NvAPI_D3D_Sleep))
-            return InputReflex::D3D_Sleep;
-        else if (InterfaceId == GET_ID(NvAPI_D3D_GetLatency))
-            return InputReflex::D3D_GetLatency;
-        else if (InterfaceId == GET_ID(NvAPI_D3D_SetLatencyMarker))
-            return InputReflex::D3D_SetLatencyMarker;
-        else if (InterfaceId == GET_ID(NvAPI_D3D12_SetAsyncFrameMarker))
-            return InputReflex::D3D12_SetAsyncFrameMarker;
-#endif
-
         // LOG_DEBUG("counter: {}, hookReflex()", qiCounter);
         ReflexHooks::hookReflex(o_NvAPI_QueryInterface);
-        return ReflexHooks::getHookedReflex(InterfaceId);
+        auto hooked = ReflexHooks::getHookedReflex(InterfaceId);
+
+        // The D3D calls enter as the Reflex low latency input, which hands them to the same hooks
+        if (hooked != nullptr)
+        {
+            if (auto input = InputReflex::ForInterface(InterfaceId))
+                return input;
+        }
+
+        return hooked;
     }
 
     ReflexHooks::hookReflex(o_NvAPI_QueryInterface);

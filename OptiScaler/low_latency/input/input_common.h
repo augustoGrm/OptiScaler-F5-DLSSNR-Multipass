@@ -193,6 +193,10 @@ class InputCommon
     // OptiScaler's own Streamline
     static LowLatencyInput default_input();
 
+    // An input whose calls ReflexHooks' router still delivers (input_reflex.h): the game's Reflex. While it is the
+    // active input no output of InputCommon's runs, as it would be a second one next to the router's.
+    static constexpr bool routed_input(LowLatencyInput input) { return input == LowLatencyInput::Reflex; }
+
     // The GPU vendor's own low latency output
     static LowLatencyMode default_output(API api);
 

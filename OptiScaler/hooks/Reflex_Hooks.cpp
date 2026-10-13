@@ -513,7 +513,7 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_SetSleepMode(IUnknown* pDev, NV_SET_SLEEP_
 #endif
     std::scoped_lock lock(_sleepModeMutex);
 
-    if (isGameCall(_ReturnAddress()))
+    if (_routedGameCall && !_ownCall)
     {
         _gameCalledReflex = true;
         _gameCalledSetSleepMode = true;
@@ -563,7 +563,7 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_Sleep(IUnknown* pDev)
     LOG_FUNC();
 #endif
 
-    if (isGameCall(_ReturnAddress()))
+    if (_routedGameCall && !_ownCall)
         _gameCalledReflex = true;
 
     static bool skip = false;
@@ -659,7 +659,7 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_SetLatencyMarker(IUnknown* pDev,
 
     _updatesWithoutMarker = 0;
 
-    if (isGameCall(_ReturnAddress()))
+    if (_routedGameCall && !_ownCall)
         _gameCalledReflex = true;
 
     // LOG_DEBUG("frameID: {}, markerType: {}", pSetLatencyMarkerParams->frameID,
@@ -845,7 +845,7 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D12_SetAsyncFrameMarker(ID3D12CommandQueue* 
     LOG_FUNC();
 #endif
 
-    if (isGameCall(_ReturnAddress()))
+    if (_routedGameCall && !_ownCall)
         _gameCalledReflex = true;
 
     _lastAsyncMarkerFrameId = pSetAsyncFrameMarkerParams->frameID;
@@ -1814,6 +1814,49 @@ NvAPI_Status ReflexHooks::ownGetLatency(IUnknown* pDev, NV_LATENCY_RESULT_PARAMS
 {
     OwnCallScope scope(_ownCall);
     return hkNvAPI_D3D_GetLatency(pDev, pParams);
+}
+
+namespace
+{
+// Whose call the router is running: kept per thread and put back afterwards, as a Sleep for DLSS frame generation runs
+// OptiScaler's Streamline, whose own calls come back in through InputReflex on the same thread
+struct RoutedCallScope
+{
+    RoutedCallScope(bool& flag, bool game) : _flag(flag), _previous(flag) { _flag = game; }
+    ~RoutedCallScope() { _flag = _previous; }
+    bool& _flag;
+    bool _previous;
+};
+} // namespace
+
+NvAPI_Status ReflexHooks::routeSetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* pParams, bool game)
+{
+    RoutedCallScope scope(_routedGameCall, game);
+    return hkNvAPI_D3D_SetSleepMode(pDev, pParams);
+}
+
+NvAPI_Status ReflexHooks::routeSleep(IUnknown* pDev, bool game)
+{
+    RoutedCallScope scope(_routedGameCall, game);
+    return hkNvAPI_D3D_Sleep(pDev);
+}
+
+NvAPI_Status ReflexHooks::routeGetLatency(IUnknown* pDev, NV_LATENCY_RESULT_PARAMS* pParams)
+{
+    return hkNvAPI_D3D_GetLatency(pDev, pParams);
+}
+
+NvAPI_Status ReflexHooks::routeSetLatencyMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* pParams, bool game)
+{
+    RoutedCallScope scope(_routedGameCall, game);
+    return hkNvAPI_D3D_SetLatencyMarker(pDev, pParams);
+}
+
+NvAPI_Status ReflexHooks::routeSetAsyncFrameMarker(ID3D12CommandQueue* pQueue, NV_ASYNC_FRAME_MARKER_PARAMS* pParams,
+                                                   bool game)
+{
+    RoutedCallScope scope(_routedGameCall, game);
+    return hkNvAPI_D3D12_SetAsyncFrameMarker(pQueue, pParams);
 }
 
 void ReflexHooks::forgetSleepDeviceVulkan(HANDLE vkDevice)

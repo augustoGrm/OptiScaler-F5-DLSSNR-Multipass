@@ -93,6 +93,8 @@ class ReflexHooks
     // The game's own Reflex calls versus OptiScaler's (ownSetSleepMode and friends, Optical F5Low's low latency): ours
     // go through the same wrappers, so they take the same routing, but they are not "the game sends markers".
     inline static thread_local bool _ownCall = false;
+    // Set by route*: the D3D call InputReflex hands over is the game's (its caller told apart there)
+    inline static thread_local bool _routedGameCall = false;
     inline static std::atomic<bool> _gameCalledReflex = false;
     inline static std::atomic<bool> _timingEstimated = false;
     inline static std::atomic<bool> _gameCalledSetSleepMode = false;
@@ -148,6 +150,17 @@ class ReflexHooks
     static bool isReflexHooked();
     static void* getHookedReflex(unsigned int InterfaceId);
     static bool updateTimingData();
+
+    // The D3D Reflex calls that reach the nvapi hooks enter as a low latency input
+    // (low_latency/input/input_reflex.cpp), which tells the game's apart (`game`: not OptiScaler's own Streamline) and
+    // hands them here. The routing to the driver, fakenvapi, XeFG's XeLL and the split's other side is the same as
+    // before InputCommon knew them.
+    static NvAPI_Status routeSetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* pParams, bool game);
+    static NvAPI_Status routeSleep(IUnknown* pDev, bool game);
+    static NvAPI_Status routeGetLatency(IUnknown* pDev, NV_LATENCY_RESULT_PARAMS* pParams);
+    static NvAPI_Status routeSetLatencyMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* pParams, bool game);
+    static NvAPI_Status routeSetAsyncFrameMarker(ID3D12CommandQueue* pQueue, NV_ASYNC_FRAME_MARKER_PARAMS* pParams,
+                                                 bool game);
     // The last timings came from fakenvapi (XeFG's XeLL, or fakenvapi as the nvapi): its report has no GPU, driver or
     // queue times, only the markers' own
     static bool timingEstimated() { return _timingEstimated.load(std::memory_order_relaxed); }
