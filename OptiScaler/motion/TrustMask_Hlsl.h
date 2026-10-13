@@ -23,6 +23,8 @@ cbuffer P : register(b0)
     uint debugView;      // 0 the mask, 1 depth, 2 revealed, 3 flow consistency, 4 luma, 5 out of the picture (no memory)
     uint depthBoth;      // this frame and the one before both had depth: the depth checks have two real depths to compare
     uint sceneCutEnabled; // the scene-cut flag (CutFlag, t7) is there to be read
+    uint guideSurface;    // GuideMotion: each picture pixel takes the motion of the flow texels on its own surface (t2, t3)
+    uint3 padding;
 };
 
 SamplerState Linear : register(s0);
@@ -204,6 +206,14 @@ void GuideDepth(uint3 id : SV_DispatchThreadID)
 }
 
 // The flow enlarged to the picture's size; its values are already in picture pixels.
+//
+// A flow texel covers 2x2 picture pixels, and a plain bilinear read mixes the motion of the texels around a pixel: at
+// the outline of a thing that moves differently from what is behind it, a band of pixels gets a motion between the two,
+// which a frame generator draws as a see-through or haloed edge. With guideSurface each of the four texels counts by
+// its bilinear weight and by how near its depth (DepthBefore, t3: this frame's depth proxy at the flow's size) is to
+// this pixel's (DepthNow, t2: the guide depth at the picture's size, raw), measured against the nearest of the four, so
+// the pixel takes its own surface's motion and a pixel whose surface no texel has takes the nearest surface's (joint
+// bilateral upsampling).
 [numthreads(8, 8, 1)]
 void GuideMotion(uint3 id : SV_DispatchThreadID)
 {
@@ -211,7 +221,55 @@ void GuideMotion(uint3 id : SV_DispatchThreadID)
         return;
 
     float2 uv = (float2(id.xy) + 0.5) / float2(size);
-    OutFlow[id.xy] = float4(Flow.SampleLevel(Linear, uv, 0).xy, 0.0, 0.0);
+
+    if (guideSurface == 0)
+    {
+        OutFlow[id.xy] = float4(Flow.SampleLevel(Linear, uv, 0).xy, 0.0, 0.0);
+        return;
+    }
+
+    uint flowWidth, flowHeight;
+    Flow.GetDimensions(flowWidth, flowHeight);
+    const int2 flowHi = int2(flowWidth, flowHeight) - 1;
+
+    // This pixel's distance, as the depth proxy has it (larger is farther).
+    const float raw = DepthNow.Load(int3(id.xy, 0));
+    const float here = min(1.0 / max(reversed != 0 ? raw : 1.0 - raw, 1e-6), 1e6);
+
+    const float2 f = uv * float2(flowWidth, flowHeight) - 0.5;
+    const int2 f0 = int2(floor(f));
+    const float2 t = f - float2(f0);
+
+    float2 motion[4];
+    float bilinear[4], apart[4];
+    float closest = 1e30;
+
+    [unroll] for (int k = 0; k < 4; ++k)
+    {
+        const int2 o = int2(k & 1, k >> 1);
+        const int2 q = clamp(f0 + o, 0, flowHi);
+        const float z = DepthBefore.Load(int3(q, 0));
+        const float rel = abs(z - here) / max(min(z, here), 1e-6);
+
+        motion[k] = Flow.Load(int3(q, 0)).xy;
+        bilinear[k] = (o.x != 0 ? t.x : 1.0 - t.x) * (o.y != 0 ? t.y : 1.0 - t.y);
+        apart[k] = rel * rel;
+        closest = min(closest, apart[k]);
+    }
+
+    float2 sum = 0.0;
+    float total = 0.0;
+
+    [unroll] for (int k2 = 0; k2 < 4; ++k2)
+    {
+        // The small floor keeps a texel the pixel sits exactly beside (bilinear weight 0) in the running when it is the
+        // only one on the pixel's surface.
+        const float w = (bilinear[k2] + 1e-3) * exp(-(apart[k2] - closest) / 0.01);
+        sum += w * motion[k2];
+        total += w;
+    }
+
+    OutFlow[id.xy] = float4(sum / total, 0.0, 0.0);
 }
 
 [numthreads(8, 8, 1)]

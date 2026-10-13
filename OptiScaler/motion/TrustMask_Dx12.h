@@ -60,9 +60,9 @@ class TrustMaskDx12
     bool Dispatch(ID3D12GraphicsCommandList* list, const Inputs& in);
 
     // The guides the DLSS-NR seam takes (Story 4), at the picture's size: the depth (raw, in the convention it came in,
-    // the nearest over the copies) as R32_FLOAT, and the flow bilinearly enlarged as RGBA16F in picture pixels towards
-    // the previous frame. Both rest in NON_PIXEL_SHADER_RESOURCE. The inputs are those of Dispatch(). GuideDepth() is
-    // null after a call without depth.
+    // the nearest over the copies) as R32_FLOAT, and the flow enlarged as RGBA16F in picture pixels towards the previous
+    // frame (bilinearly, or with depth by surface: Settings::guideSurface). Both rest in NON_PIXEL_SHADER_RESOURCE. The
+    // inputs are those of the Dispatch() just before. GuideDepth() is null after a call without depth.
     bool BuildGuides(ID3D12GraphicsCommandList* list, const Inputs& in, uint32_t width, uint32_t height);
     ID3D12Resource* GuideDepth() const { return _guideDepthValid ? _guideDepth.resource : nullptr; }
     ID3D12Resource* GuideMotion() const { return _guideMotion.resource; }
@@ -94,6 +94,10 @@ class TrustMaskDx12
         float decay = 0.5f;                // how much of last frame's distrust is kept
         int debugView = 0;                 // 0 the mask; 1 depth, 2 revealed, 3 flow consistency, 4 luma, 5 outside, one check alone
         float cutShare = 0.98f;            // share of fully distrusted pixels that is called a scene cut (real cuts reach 0.99, fast camera turns 0.95)
+        // The motion guide, with depth: each picture pixel takes the motion of the flow texels on its own surface
+        // instead of a bilinear mix of the texels around it, so a thing's outline carries its own motion and the
+        // background beside it the background's (off: plain bilinear, as without depth).
+        bool guideSurface = true;
     };
 
     Settings& Tuning() { return _settings; }
@@ -115,6 +119,8 @@ class TrustMaskDx12
         uint32_t reversed, hasHistory;
         float fullPerFlow, revealTolerance;
         uint32_t depthCount, debugView, depthBoth, sceneCutEnabled;
+        uint32_t guideSurface; // GuideMotion: enlarge by surface (Settings::guideSurface, with depth)
+        uint32_t padding[3];
     };
 
     bool CreateTexture(Tex& tex, uint32_t width, uint32_t height, DXGI_FORMAT format, const wchar_t* name);

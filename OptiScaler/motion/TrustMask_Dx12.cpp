@@ -539,9 +539,17 @@ bool TrustMaskDx12::BuildGuides(ID3D12GraphicsCommandList* list, const Inputs& i
     }
 
     {
-        // The flow sits in its combined read state between frames; the pass reads it as a texture.
-        ID3D12Resource* const srv[8] = { in.flow, in.flow, in.flow, in.flow, in.flow, in.flow, in.flow, in.flow };
-        const DXGI_FORMAT formats[8] = { kFlowFormat, kFlowFormat, kFlowFormat, kFlowFormat,
+        // The flow sits in its combined read state between frames; the pass reads it as a texture. By surface it also
+        // reads the depth guide just written (t2) and this frame's depth proxy at the flow's size (t3, left by Dispatch).
+        const bool surface = _settings.guideSurface && _guideDepthValid && _hadDepth;
+        constants.guideSurface = surface ? 1 : 0;
+
+        ID3D12Resource* const depthHere = surface ? _guideDepth.resource : in.flow;
+        ID3D12Resource* const depthFlow = surface ? _depth[_depthIndex].resource : in.flow;
+        const DXGI_FORMAT depthFormat = surface ? kDepthFormat : kFlowFormat;
+
+        ID3D12Resource* const srv[8] = { in.flow, in.flow, depthHere, depthFlow, in.flow, in.flow, in.flow, in.flow };
+        const DXGI_FORMAT formats[8] = { kFlowFormat, kFlowFormat, depthFormat, depthFormat,
                                          kFlowFormat, kFlowFormat, kFlowFormat, kFlowFormat };
         Pass(list, _guideMotionPso, srv, formats, _guideMotion, kFlowFormat, groupsX, groupsY, constants);
     }
