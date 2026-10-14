@@ -228,8 +228,8 @@ float CalibrationVkFollowedBase()
 // own metering, following the game's exposure or not (Cal::RelearnFollowOnStart has why).
 float CalibrationVkBase(const Config& cfg)
 {
-    if (cfg.DlssNrWhitePointSource.value_or_default() == 1)
-        return g_vk.gameExposure > 1e-6f ? DlssNrGameScale::WhiteBase(cfg.DlssNrGameExposureScale.value_or_default(),
+    if (DlssNr::WhitePointSourceEffective(cfg) == 1)
+        return g_vk.gameExposure > 1e-6f ? DlssNrGameScale::WhiteBase(DlssNr::GameExposureScaleEffective(cfg),
                                                                       g_vk.gamePreExposure, g_vk.gameExposure)
                                          : 0.0f;
 
@@ -242,7 +242,7 @@ Cal::Situation CalibrationVkSituation(const Config& cfg, bool linearHdr, bool au
                                       bool colourConverted)
 {
     Cal::Situation s;
-    s.source = cfg.DlssNrWhitePointSource.value_or_default();
+    s.source = DlssNr::WhitePointSourceEffective(cfg);
     s.anchorKey = DlssNrGameScale::AnchorKey(g_vk.gamePreExposure, g_vk.gameExposure);
     s.hdr = linearHdr;
     s.colourConverted = colourConverted;

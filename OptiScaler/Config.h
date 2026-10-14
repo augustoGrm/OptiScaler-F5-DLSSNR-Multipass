@@ -607,13 +607,18 @@ class Config
     // was a button the notice never mentioned -- and then by clearing, which silently undid a
     // setting the user had made. Both were attempts to stop an illegal state being REACHED. A single
     // choice cannot reach it: there is nothing to keep consistent, because there is only one value.
-    // Default 3 (Automatic, at +1.5 EV): it needs nothing from the game; Game exposure left NBA 2K27 far too dark.
-    CustomOptional<uint32_t> DlssNrWhitePointSource { 3 };
+    //   4  auto (the default): Game exposure when the game hands one over, else Automatic (user decision 2026-10-14),
+    //      with Game exposure's scale per game (GameExposureScale auto). shaders/dlssnr/DlssNr_ExposureDefault.h; every
+    //      reader goes through DlssNr::WhitePointSourceEffective (DlssNr_GameDefaults.h).
+    // Before 2026-10-14 the default was 3 (Automatic, at +1.5 EV): Game exposure on the game's-setting scale left NBA
+    // 2K27 far too dark, which the per-game scale now covers.
+    CustomOptional<uint32_t> DlssNrWhitePointSource { 4 };
 
     // Game exposure's scale: what its Trim multiplies. 0 = with the game's exposure (PreExposure / exposure, the value
     // the game reports to DLSS SR), 1 = the game's colour as is (a base of exactly 1, as games with built-in DLSS-NR
-    // feed the model). Only read with WhitePointSource 1. See DlssNr_GameScale.h.
-    CustomOptional<uint32_t> DlssNrGameExposureScale { 0 };
+    // feed the model), 2 = auto (the default): as is for a game measured to need it (NBA 2K27), else the game's
+    // setting. Only read with Game exposure in force. See DlssNr_GameScale.h and DlssNr_ExposureDefault.h.
+    CustomOptional<uint32_t> DlssNrGameExposureScale { 2 };
 
     // OptiScaler-owned automatic exposure controls. When active, automatic exposure uses the
     // linear-HDR NR input. Finished-picture mode bypasses this calculation and keeps its own

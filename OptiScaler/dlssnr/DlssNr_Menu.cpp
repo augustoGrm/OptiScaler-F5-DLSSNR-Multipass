@@ -608,9 +608,9 @@ static void ApplyPassPreset(Config* config, unsigned int passes)
     // Upscale Method, Upscale Mode and Final Image Composition are deliberately not set here: the Pre-SR/Post-SR
     // tiers and the looks set them. Reuse bottleneck is not set here either: it is a speed/quality choice per kernel
     // set, not part of a look, so a preset leaves both checkboxes as the user had them.
-    // Automatic exposure at its default brightness (DlssNr_AutoTrimDefault.h). Game exposure at 1x, which
-    // this used to set, gave NBA 2K27 a model input with a median of 0.07-0.32 (measured 2026-09-25).
-    config->DlssNrWhitePointSource = 3u;        // Automatic exposure
+    // Exposure back to its default (DlssNr_ExposureDefault.h: Game exposure when the game hands one over, on the scale
+    // measured for the game, else Automatic at its default brightness).
+    config->DlssNrWhitePointSource = DlssNrExposureDefault::kSourceAuto;
     config->DlssNrAutoExposureTrim = std::nullopt;
     config->DlssNrMaxRatio = 2.0f;               // Highlight guard
 }
@@ -1664,7 +1664,7 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
     ImGui::SameLine();
     if (PresetButton("3 Pass", PassPresetActive(config, 3u)))
         ApplyPassPreset(config, 3u);
-    HelpMarker("Sets the pass count, with NR on FP8 and automatic exposure. How each pass looks is the Look "
+    HelpMarker("Sets the pass count, with NR on FP8 and the default exposure. How each pass looks is the Look "
                "presets'. Green = in effect; changing the pass count clears it.");
 
     // Directly under the pass presets, since those buttons set this slider's value. This page
@@ -1822,21 +1822,30 @@ static void RenderExposureSection(Config* config, float menuResScale)
                                              "Scanned exposure (experimental)",
                                              "Automatic exposure from HDR frame" };
 
-        int source = (int) config->DlssNrWhitePointSource.value_or_default();
+        // Auto first, naming what it is now; the other entries are the values 0-3
+        const uint32_t configuredSource = config->DlssNrWhitePointSource.value_or_default();
+        const std::string autoSource =
+            std::string("Auto (") + sourceNames[DlssNr::WhitePointSourceEffective(*config)] + ")";
+        const char* sourceItems[] = { autoSource.c_str(), sourceNames[0], sourceNames[1], sourceNames[2],
+                                      sourceNames[3] };
+        int sourceItem = configuredSource == DlssNrExposureDefault::kSourceAuto
+                             ? 0
+                             : (int) std::min(configuredSource, DlssNrExposureDefault::kSourceAutomatic) + 1;
 
-        if (source < 0 || source > 3)
-            source = 0;
-
-        if (ImGui::Combo("White point source", &source, sourceNames, IM_ARRAYSIZE(sourceNames)))
+        if (ImGui::Combo("White point source", &sourceItem, sourceItems, IM_ARRAYSIZE(sourceItems)))
         {
-            config->DlssNrWhitePointSource = (uint32_t) source;
+            config->DlssNrWhitePointSource =
+                sourceItem == 0 ? DlssNrExposureDefault::kSourceAuto : (uint32_t) (sourceItem - 1);
 
             // Nothing else to set. The scan asks the source whether it is wanted, so choosing
             // it here is the whole of switching it on -- there is no second flag to keep in
             // step, and so no way for the two to disagree.
         }
 
+        const int source = (int) DlssNr::WhitePointSourceEffective(*config);
+
         HelpMarker("Where NR's brightness reference comes from.\n"
+                   "Auto: the game's exposure when the game gives one, else Automatic exposure.\n"
                    "Manual: Paper white.\n"
                    "Game exposure: the game's own value.\n"
                    "Scanned exposure: read from game buffers; needs calibration.\n"
@@ -1862,7 +1871,7 @@ static void RenderExposureSection(Config* config, float menuResScale)
                         DlssNrTrim::Parse(config->DlssNrGameExposureTrimAnchors.value_or_default());
                     const float trim = DlssNrTrim::TrimForKey(
                         anchorKey, config->DlssNrWhitePointTrim.value_or_default(), trimAnchors, false);
-                    const bool asIs = config->DlssNrGameExposureScale.value_or_default() == DlssNrGameScale::kAsIs;
+                    const bool asIs = DlssNr::GameExposureScaleEffective(*config) == DlssNrGameScale::kAsIs;
                     const float whiteAsIs =
                         DlssNrGameScale::WhiteBase(DlssNrGameScale::kAsIs, ex.preExposure, ex.exposure) * trim;
                     const float whiteWithExposure =
@@ -1981,7 +1990,7 @@ static void RenderExposureSection(Config* config, float menuResScale)
     // The scan before it is anchored is the exception, and it has to be: anchoring captures an
     // absolute white point, so there must be an absolute slider to set. Showing a trim there
     // asked people to "set paper white below" next to a control that was not paper white.
-    const int wpSource = (int) config->DlssNrWhitePointSource.value_or_default();
+    const int wpSource = (int) DlssNr::WhitePointSourceEffective(*config);
 
     // Which anchor row the paper-white slider edits, or -1 for the live unanchored point. Menu-
     // local and not persisted; the anchor block below sets it when a row is clicked. Declared
@@ -2071,19 +2080,24 @@ static void RenderExposureSection(Config* config, float menuResScale)
         // stops around 1x, which is why the slider runs further towards darker than towards brighter.
         // Index = DlssNrGameScale value: 0 with the game's exposure, 1 as is.
         static const char* scaleNames[] = { "Game's setting", "Native look" };
-        int scale = (int) config->DlssNrGameExposureScale.value_or_default();
+        // Auto first, naming what it is for this game; the other entries are the values 0-1
+        const uint32_t configuredScale = config->DlssNrGameExposureScale.value_or_default();
+        const std::string autoScale =
+            std::string("Auto (") + scaleNames[DlssNr::GameExposureScaleEffective(*config)] + ")";
+        const char* scaleItems[] = { autoScale.c_str(), scaleNames[0], scaleNames[1] };
+        int scale = configuredScale == DlssNrExposureDefault::kScaleAuto
+                        ? 0
+                        : (int) std::min(configuredScale, DlssNrExposureDefault::kScaleAsIs) + 1;
 
-        if (scale < 0 || scale > 1)
-            scale = 0;
-
-        if (ImGui::Combo("Starting point##gameexposure", &scale, scaleNames, IM_ARRAYSIZE(scaleNames)))
+        if (ImGui::Combo("Starting point##gameexposure", &scale, scaleItems, IM_ARRAYSIZE(scaleItems)))
         {
-            config->DlssNrGameExposureScale = (uint32_t) scale;
+            config->DlssNrGameExposureScale = scale == 0 ? DlssNrExposureDefault::kScaleAuto : (uint32_t) (scale - 1);
             // A Trim set on one scale means something else on the other, so the slider starts again at 0 EV.
             config->DlssNrWhitePointTrim = DlssNrExposureCalibrate::kGameExposureNeutralTrim;
         }
 
-        HelpMarker("Native look: like games with built-in NR (e.g. NBA 2K27). Try first.\n"
+        HelpMarker("Auto: Native look for games measured to need it (NBA 2K27), else Game's setting.\n"
+                   "Native look: like games with built-in NR (e.g. NBA 2K27).\n"
                    "Game's setting: the game's brightness value. Use if Native look is far too dark (e.g. RDR2).\n"
                    "Changing it resets the brightness slider to 0.");
 
