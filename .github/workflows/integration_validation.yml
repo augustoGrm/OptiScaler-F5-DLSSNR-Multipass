@@ -2,6 +2,8 @@ name: Validate master and built-in SM86 integration
 
 on:
   workflow_dispatch:
+  push:
+    branches: [integrate/optiscaler-master-v0.1.30]
   pull_request:
     branches: [main]
 
