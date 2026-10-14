@@ -21,7 +21,7 @@ bool Reflex::init(IUnknown* pDevice)
 
     auto queryInterface = NvApiHooks::o_NvAPI_QueryInterface;
 
-    // Our own Reflex calls (ReflexHooks::own*) run the hooked wrappers without counting as the game's
+    // Its calls go to the driver past the hooks (ReflexHooks::nvapi*)
     if (!ReflexHooks::ensureTable(queryInterface))
         return false;
 
@@ -49,7 +49,7 @@ void Reflex::deinit()
     {
         NV_SET_SLEEP_MODE_PARAMS params {};
         params.version = NV_SET_SLEEP_MODE_PARAMS_VER;
-        ReflexHooks::ownSetSleepMode(device, &params);
+        ReflexHooks::nvapiSetSleepMode(device, &params);
     }
 
     device = nullptr;
@@ -75,7 +75,7 @@ void Reflex::apply_sleep_mode()
     params.bUseMarkersToOptimize = sleep_mode.use_markers_to_optimize;
     params.bUseMinQueueTime = sleep_mode.use_min_queue_time;
 
-    auto result = ReflexHooks::ownSetSleepMode(device, &params);
+    auto result = ReflexHooks::nvapiSetSleepMode(device, &params);
     applied_enabled = params.bLowLatencyMode;
 
     LOG_INFO("Reflex sleep mode, low latency: {}, boost: {}, interval: {} us, result: {}", (int) params.bLowLatencyMode,
@@ -123,7 +123,7 @@ void Reflex::sleep(std::optional<uint32_t> frame_id)
     if (sleep_mode_known && is_enabled() != applied_enabled)
         apply_sleep_mode();
 
-    ReflexHooks::ownSleep(device);
+    ReflexHooks::nvapiSleep(device);
 }
 
 void Reflex::set_marker(IUnknown* pDevice, const MarkerParams& marker_params)
@@ -134,7 +134,7 @@ void Reflex::set_marker(IUnknown* pDevice, const MarkerParams& marker_params)
     params.markerType = (NV_LATENCY_MARKER_TYPE) marker_params.marker_type; // Enums match
 
     if (auto target = pDevice != nullptr ? pDevice : device)
-        ReflexHooks::ownSetLatencyMarker(target, &params);
+        ReflexHooks::nvapiSetLatencyMarker(target, &params);
 }
 
 void Reflex::set_async_marker(IUnknown* pCommandQueue, const MarkerParams& marker_params)
@@ -172,5 +172,5 @@ NvAPI_Status Reflex::get_latency(NV_LATENCY_RESULT_PARAMS* latency_params) const
     if (device == nullptr)
         return NVAPI_INVALID_ARGUMENT;
 
-    return ReflexHooks::ownGetLatency(device, latency_params);
+    return ReflexHooks::nvapiGetLatency(device, latency_params);
 }

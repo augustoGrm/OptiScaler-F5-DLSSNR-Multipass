@@ -4,6 +4,9 @@
 
 #include <low_latency/low_latency_tech/low_latency_tech.h>
 #include <Config.h>
+#include <nvapi/NvApiTypes.h>
+
+#include "OutputRule.h"
 
 enum class InputMarkerMode
 {
@@ -57,31 +60,25 @@ class InputCommon
     inline static std::atomic<std::shared_ptr<LowLatencyTech>> currently_active_tech;
     inline static std::mutex create_tech_mutex {};
 
-    // OptiScaler's XeFG paces with an XeLL context. With the XeLL output it's that output's own (which then stays the
-    // output until XeFG lets go of it), with a Reflex or AntiLag 2 output XeFG gets one of its own that follows the
-    // game's markers while the output does the sleeping.
+    // OptiScaler's XeFG paces with an XeLL context of ours (acquire_xefg_xell). While XeLL lowers latency it is the
+    // output itself; next to a Reflex or AntiLag 2 output it stays XeFG's with low latency off (forced mode: no sleeps,
+    // no markers) while the output does the sleeping.
     inline static std::atomic<std::shared_ptr<LowLatencyTech>> xefg_xell;
-    inline static std::atomic_bool xefg_uses_output_xell = false;
-    // The output XeFG started with, None while it doesn't run
-    inline static std::atomic<LowLatencyMode> xefg_started_output = LowLatencyMode::None;
-    static LowLatencyMode xefg_output(LowLatencyMode configured);
 
+    // The frame reports of the input's markers: the game's threads write them, the overlay and GetLatency read them
     inline static FrameReport frame_reports[FRAME_REPORTS_BUFFER_SIZE] {};
+    inline static std::mutex report_mutex {};
     inline static std::array<std::atomic_uint64_t, 6> last_marker_frame_ids {}; // Simulation start to present end
-    inline static LowLatencyMode failed_output = LowLatencyMode::None;
-    inline static std::chrono::steady_clock::time_point failed_time {};
+    inline static std::atomic<LowLatencyMode> failed_output = LowLatencyMode::None;
+    inline static std::atomic<std::chrono::steady_clock::rep> failed_time = 0; // steady_clock ticks
     inline static std::atomic_uint64_t last_present_start_frame_id = 0;
     inline static std::atomic_uint32_t delay_deinit = 0;
     inline static std::array<SleepMode, static_cast<size_t>(LowLatencyInput::_)> sleep_mode_copies {};
-    inline static std::atomic_uint32_t presents_without_input = 0;
+    inline static std::mutex sleep_copy_mutex {};
     inline static std::atomic_uint32_t fps_limit_interval_us = 0; // OptiScaler's FPS limit for the output, 0 = none
-    inline static std::atomic_bool limits_fps = false;
     // The present each input last reported the game's own frame generation on (async markers), 0 = never
     inline static std::atomic_uint64_t present_count = 0;
     inline static std::array<std::atomic_uint64_t, static_cast<size_t>(LowLatencyInput::_)> last_fg_present {};
-    // Game frame id of the frames the FG presenter shows next, and whether a new batch of them started
-    inline static std::atomic_uint64_t fg_frame_id = 0;
-    inline static std::atomic_bool fg_new_batch = false;
     // OptiScaler's XeFG's present queue for its out of band markers (referenced), and the game frame id of the batch
     // it last marked
     inline static std::atomic<ID3D12CommandQueue*> xefg_present_queue = nullptr;
@@ -100,34 +97,74 @@ class InputCommon
 
     static bool xefg_paced();
 
-    inline static flag_set<LowLatencyInput> avaliableInputs {};
-    inline static LowLatencyInput activeInput = LowLatencyInput::None;
-    inline static LowLatencyMode activeOutput = LowLatencyMode::None;
+    // Each input's calls come from the game's threads, the UE mod's tick and OptiScaler's present: one bit per input
+    inline static std::atomic<uint32_t> available_inputs = 0;
+    inline static std::atomic<LowLatencyInput> activeInput = LowLatencyInput::None;
+    inline static std::atomic<LowLatencyMode> activeOutput = LowLatencyMode::None;
+
+    static bool available(LowLatencyInput input)
+    {
+        return (available_inputs.load(std::memory_order_relaxed) & (1u << static_cast<uint32_t>(input))) != 0;
+    }
     inline static bool enabled = false;
 
     // The API of each input's device, the output runs on the active input's
     inline static std::array<std::atomic<API>, static_cast<size_t>(LowLatencyInput::_)> input_api {};
     inline static std::atomic<API> output_api = API::NotSelected;
 
+    // OptiScaler's own low latency (native/NativeLowLatency.cpp) runs: its calls are the OptiScaler input while it
+    // does. Not a lasting availability like the game's: it stops and starts.
+    inline static std::atomic_bool optiscaler_running = false;
+    // The inputs that have set a sleep mode, one bit each (a game may only mark frames)
+    inline static std::atomic<uint32_t> sleep_modes_set = 0;
+    // XeFG's XeLL contexts made so far (a new one gets its sleep mode again)
+    inline static std::atomic<uint32_t> xefg_generation = 0;
+    // The device the output was started on (null: XeFG's XeLL, or none)
+    inline static std::atomic<IUnknown*> output_device = nullptr;
+    // Anti-Lag 2 could not start next to XeFG's XeLL: XeLL keeps lowering latency (native::lowlatency::XefgSide)
+    inline static std::atomic_bool antilag2_failed = false;
+
+    // An Anti-Lag 2 output FSR FG may still use: fakenvapi::reportFGPresent hands its context to FSR through the swap
+    // chain on every present, so it is deinited a few presents after it stopped (retire, update). create_tech_mutex.
+    inline static std::shared_ptr<LowLatencyTech> retired_antilag2 {};
+    inline static std::atomic_uint32_t retired_presents = 0;
+    static void retire(std::shared_ptr<LowLatencyTech> tech);
+
     static bool deinit_current_tech();
-    static bool init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMode);
-    // `callerRouted`: the call is from an input ReflexHooks' router delivers (routed_input)
-    static bool update_low_latency_tech(IUnknown* pDevice, API api, std::optional<LowLatencyMode> mode = std::nullopt,
-                                        bool callerRouted = false);
-    // The same for an input's call, which also marks the input as available
-    static bool update_for_call(const InputContext& inputContext, IUnknown* pDevice);
+    static bool init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMode, const lloutput::OutputPlan& plan);
+    static LowLatencyMode to_mode(lloutput::Tech tech);
+    static lloutput::OutputPlan plan_output();
+    static void use_output(std::shared_ptr<LowLatencyTech> tech);
+    static SleepMode shaped_sleep_mode(lloutput::Role role);
+    static void apply_xefg_xell_mode(const LowLatencyTech* output);
+    static bool update_low_latency_tech(IUnknown* pDevice, API api, std::optional<LowLatencyMode> mode = std::nullopt);
+    // The same for an input's call, which also marks the input as available unless it only asks (`query`: GetLatency,
+    // GetSleepStatus). A game that only reads latency runs no low latency of its own: it must not push OptiScaler's
+    // calls aside (default_input), and nobody would sleep (NBA 2K27 reads it for seconds before its first marker).
+    static bool update_for_call(const InputContext& inputContext, IUnknown* pDevice, bool query = false);
     static void add_marker_to_report(const MarkerParams& marker_params);
     static bool copy_frame_reports(FrameReport* reports); // NVAPI_BUFFER_SIZE reports, oldest first
+    static void clear_reports();
 
     // The API of the call's device
     static API device_api(const InputContext& inputContext, IUnknown* pDevice);
 
-    // Marks the game's input as available, returns the call's API
-    static API register_call(const InputContext& inputContext, IUnknown* pDevice);
+    // Marks the game's input as available (not for a `query`), returns the call's API
+    static API register_call(const InputContext& inputContext, IUnknown* pDevice, bool query = false);
 
     // The output that does the same on the call's API: AntiLag Vk on Vulkan, AntiLag 2 on D3D, XeLL is D3D12 only
     static LowLatencyMode for_api(LowLatencyMode mode, API api);
-    static SleepMode& get_sleep_copy(LowLatencyInput input) { return sleep_mode_copies[static_cast<size_t>(input)]; }
+    static SleepMode get_sleep_copy(LowLatencyInput input)
+    {
+        std::scoped_lock lock(sleep_copy_mutex);
+        return sleep_mode_copies[static_cast<size_t>(input)];
+    }
+
+    static void set_sleep_copy(LowLatencyInput input, const SleepMode& mode)
+    {
+        std::scoped_lock lock(sleep_copy_mutex);
+        sleep_mode_copies[static_cast<size_t>(input)] = mode;
+    }
     static void apply_sleep_mode(LowLatencyTech* tech);
 
   public:
@@ -149,15 +186,26 @@ class InputCommon
     static InputResult get_frame_reports(const InputContext& inputContext, IUnknown* pDev, FrameReport* reports);
     static bool get_timing_data(TimingData& timingDataOut);
     static uint64_t get_last_present_start_frame_id() { return last_present_start_frame_id; };
-    static flag_set<LowLatencyInput> get_avaliable_inputs() { return avaliableInputs; };
+    static flag_set<LowLatencyInput> get_avaliable_inputs()
+    {
+        flag_set<LowLatencyInput> inputs;
+
+        for (uint32_t i = 0; i < static_cast<uint32_t>(LowLatencyInput::_); i++)
+        {
+            if (available(static_cast<LowLatencyInput>(i)))
+                inputs |= static_cast<LowLatencyInput>(i);
+        }
+
+        return inputs;
+    }
     static LowLatencyMode active_output() { return activeOutput; }
 
     // The active input's API, the swapchain's without one
     static API uses_api();
     static void get_currently_active(LowLatencyInput& activeInput, LowLatencyMode& activeOutput)
     {
-        activeInput = InputCommon::activeInput;
-        activeOutput = InputCommon::activeOutput;
+        activeInput = InputCommon::activeInput.load();
+        activeOutput = InputCommon::activeOutput.load();
     }
 
     static InputResult mark_present_start(IUnknown* pDevice);
@@ -166,26 +214,18 @@ class InputCommon
     // to its device, for a device that is gone.
     static void stop_output(bool release = true);
 
-    // Meant for every present (only with LOW_LATENCY_INPUTS for now, nothing calls it otherwise): Force State and
-    // OptiScaler's FPS limit for the active output. The Reflex output is limited through the Reflex hooks.
+    // Every present of a D3D game (ReflexHooks::update): Force State, and who keeps OptiScaler's frame cap
+    // (OutputRule.h CapForGame) with the rate it goes in at.
     static void update();
-    static bool can_limit_fps() { return limits_fps; }
 
-    // OptiScaler's own frame generation presenter (FSR-FG, XeFG) gives the Reflex output the async calls DLSSG makes,
-    // with XeFG AntiLag 2 also gets the out of band presents
-    static void fg_game_present(ID3D12CommandQueue* gameQueue, bool presented, uint32_t frameMultiplier);
-    static void fg_output_present(ID3D12CommandQueue* presentQueue, bool presented, uint32_t frameMultiplier);
-    // The game's DLSSG presents through the wrapped swapchain, AntiLag 2 gets the frame type of each present there
-    static bool dlssg_types_presents();
-    static void dlssg_present();
+    // Around each of OptiScaler's XeFG's presents (wrapped swap chain): next to a Reflex or AntiLag 2 output, out of
+    // band present markers with the frame id of the batch XeFG marked, as DLSSG sends them; AntiLag 2 takes the frame
+    // type from them
+    static void fg_output_present(ID3D12CommandQueue* presentQueue, bool presented);
 
-    // The Reflex output reports that frame multiplier to the driver (Reflex Sync), which then applies the FPS limit
-    // to the output frames itself
-    static bool output_reports_fg_multiplier();
-
-    // XeFG's own XeLL markers: 80860000 and 80860001 around the interpolation work it submits in its proxy swapchain's
-    // Present, with the game's last present start frame id (xellGetLastPresentStartFrameId). DLSSG's out of band render
-    // submit markers for the Reflex output.
+    // XeFG's own XeLL markers (from the XeLL hook): 80860000 and 80860001 around the interpolation work it submits in
+    // its proxy swapchain's Present, with the game's last present start frame id. DLSSG's out of band render submit
+    // markers for a Reflex or AntiLag 2 output next to XeFG.
     static void xefg_marker(void* xellContext, uint32_t frame_id, uint32_t marker);
 
     // Around the game's present on XeFG's proxy swapchain: the batch XeFG marked during it (a new frame id) and how
@@ -193,15 +233,42 @@ class InputCommon
     static uint64_t xefg_marked_frame_id() { return xefg_frame_id; }
     static void xefg_present_status(uint64_t frameIdBefore, uint32_t framesPresented);
 
-    // The best of the inputs the game sends: Reflex, XeLL enabled in the game, AntiLag 2, UE, XeLL, then
-    // OptiScaler's own Streamline
+    // The input whose calls get through (OutputRule.h ChooseInput)
     static LowLatencyInput default_input();
 
-    // An input whose calls ReflexHooks' router still delivers (input_reflex.h): the game's Reflex. InputCommon only
-    // tracks its calls. While it is the active input no output of InputCommon's runs, as it would be a second sleeper
-    // next to the router, and its calls never start one (RoutedInputRule.h ForCall; an output asked for by name is
-    // not covered yet: nothing asks for one).
-    static constexpr bool routed_input(LowLatencyInput input) { return input == LowLatencyInput::Reflex; }
+    // OptiScaler's own low latency starts or stops being an input (native::lowlatency)
+    static void set_optiscaler_running(bool running);
+
+    // OptiScaler's own calls moved to a Vulkan device (dxvk's, with XeFG's Output Reflex or Anti-Lag 2): no longer an
+    // input here, and the output its D3D calls started stops (no low latency left on in the bridge's D3D12 device)
+    static void optiscaler_left_d3d();
+
+    // The game's device is being released: an output on it stops without a call to it
+    static void device_released(IUnknown* pDevice);
+
+    // The output's own context (an Anti-Lag 2 context for FSR FG, the XeLL one), null without one
+    static void* output_context();
+    // The output lowers latency now (Force State included)
+    static bool output_enabled();
+    // What lowers latency for the menu and the logs: InputCommon's output, else (a Vulkan game, until its calls are
+    // InputCommon's too) fakenvapi's own context
+    static LowLatencyMode current_mode();
+    static bool low_latency_active();
+    // The output's latency report (the driver's for Reflex, `estimated` false; the inputs' markers for the others)
+    static NvAPI_Status output_latency(NV_LATENCY_RESULT_PARAMS* params, bool* estimated);
+    // OptiScaler's FSR FG presents a frame (fakenvapi::reportFGPresent): the output knows frame generation runs and,
+    // for Anti-Lag 2 without FSR's own context, whether this one is generated
+    static void report_fg_present(bool fgState, bool interpolated);
+    static bool antilag2_could_not_start() { return antilag2_failed.load(); }
+
+    // XeFG's XeLL contexts made so far: a new one needs the sleep mode again
+    static uint32_t xefg_xell_generation() { return xefg_generation.load(); }
+    // A Vulkan game's own Reflex on the Vulkan present bridge goes to XeFG's XeLL on the bridge's D3D12 device
+    // (hooks/Reflex_Hooks.cpp shapes it). Each answers NVAPI_ERROR without XeFG's XeLL.
+    static NvAPI_Status xefg_xell_set_sleep_mode(const native::xefgreflex::SleepMode& mode);
+    static NvAPI_Status xefg_xell_sleep();
+    static void xefg_xell_marker(ID3D12Device* device, uint64_t frame_id, uint32_t nvapiMarker);
+    static NvAPI_Status xefg_xell_latency(NV_LATENCY_RESULT_PARAMS* params);
 
     // The GPU vendor's own low latency output
     static LowLatencyMode default_output(API api);
@@ -227,7 +294,4 @@ class InputCommon
     // The XeLL context OptiScaler's XeFG paces with (see xefg_xell), released after XeFG's context is destroyed
     static xell_context_handle_t acquire_xefg_xell(IUnknown* pDevice);
     static void release_xefg_xell();
-
-    // A changed output that waits for XeFG to start again
-    static bool xefg_output_change_pending();
 };

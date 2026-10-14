@@ -7,10 +7,9 @@
 #include <vulkan/vulkan.h>
 #endif
 
-// The game's Reflex as a low latency input. The D3D calls that reach the nvapi hooks come in here: the game's own are
-// told apart from OptiScaler's Streamline (DLSS frame generation output), InputCommon learns the Reflex input from them
-// (sleep mode, markers, which input is active), and ReflexHooks' router delivers them as before. Until InputCommon's
-// outputs take over from the router, the game's Reflex runs no output of InputCommon's (InputCommon::routed_input).
+// The game's Reflex as a low latency input. The D3D calls that reach the nvapi hooks come in here: the game's own go to
+// InputCommon's output after the hooks' bookkeeping and game quirks (ReflexHooks::pre*); the ones of the Streamline
+// OptiScaler loads for its DLSS frame generation output reach the nvapi through the hooks as before.
 class InputReflex
 {
     const static inline InputContext inputContext { .caller = LowLatencyInput::Reflex,
@@ -27,6 +26,9 @@ class InputReflex
     // The game waits on it after each sleep
     static inline VkSemaphore vkSemaphore = VK_NULL_HANDLE;
 #endif
+
+    // The game's marker, after the hooks' quirks (ReflexHooks::MarkerSend: Hitman's added markers come back here)
+    static NvAPI_Status GameMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* params, bool game);
 
   public:
     // The input's entry point for a hooked nvapi interface, nullptr for the ones it does not take

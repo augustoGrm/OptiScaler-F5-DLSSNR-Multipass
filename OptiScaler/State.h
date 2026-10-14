@@ -192,6 +192,9 @@ class State
 
     // OptiFG
     bool fgPresentIsCalled = false;
+    // Frame generation's last present waited for V-Sync (sync interval after ForceVsync): XeLL with XeFG then lines its
+    // frames up with the refresh rate instead of the frame cap (NativeLowLatencyRule.h XellKeepsCap)
+    std::atomic<bool> fgPresentVsync { false };
     bool fgOnlyGenerated = false;
     bool fgHudlessCompare = false;
     bool fgChanged = false;

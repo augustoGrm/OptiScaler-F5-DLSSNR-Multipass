@@ -777,6 +777,7 @@ struct CapInputs
     bool xefgGenerating = false;     // XeFG is generating frames (not paused, not off, not in exclusive full screen)
     bool fakenvapiXell = false;      // Method::Fakenvapi has picked XeLL (Anti-Lag 2 missing: fakenvapi falls back)
     uint32_t shownPerRendered = 1;   // frames XeFG shows per frame the game renders (1 + generated); 1 when it generates none
+    bool xefgVsync = false;          // frame generation presents with V-Sync (State::fgPresentVsync)
 };
 
 // Frames shown per frame the game renders: 1 + the generated ones, but only while frame generation generates. Stood
@@ -815,6 +816,11 @@ inline bool SplitLimiterKeepsCap(XefgLatency side, bool d3d11Bridge)
 {
     return side == XefgLatency::Reflex && d3d11Bridge;
 }
+
+// Whether XeFG's XeLL can keep the frame cap: not with V-Sync. XeLL then lines its frames up with the refresh rate
+// instead (Arkham Knight, NVIDIA: cap 90 with XeFG 2x gave 60 rendered on a 120 Hz screen, 56 gave about 33); with
+// V-Sync off it held the cap. OptiScaler's limiter keeps it then, XeLL gets no interval and still lowers latency.
+inline bool XellKeepsCap(bool xefgVsync) { return !xefgVsync; }
 
 struct CapPlan
 {
@@ -864,6 +870,10 @@ inline CapPlan PlanCap(const CapInputs& in)
     if (XellIdle(in))
         return { CapOwner::Limiter, 0 };
 
+    // XeFG's XeLL with V-Sync goes by the refresh rate, not the cap
+    if (in.method == Method::XellWithXefg && !XellKeepsCap(in.xefgVsync))
+        return { CapOwner::Limiter, 0 };
+
     if (in.capFps <= 0.0f)
         return { CapOwner::LowLatency, 0 };
 
@@ -894,7 +904,8 @@ struct CapSettle
     bool started = false;
     CapPlan applied;
     CapPlan pending;
-    int held = 0; // presents `pending` has held
+    int held = 0;                       // presents `pending` has held
+    Method method = Method::RealReflex; // the method `applied` was planned for (the overload with a method)
 };
 
 inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, int needed = kCapSettlePresents)
@@ -926,6 +937,19 @@ inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, int needed =
     return settle.applied;
 }
 
+// The same for the method in use. A changed method (XeFG's Output switched) counts frames its own way, XeLL shown ones
+// and the others rendered ones: its plan is taken at once, the interval settled for the method before would be wrong
+// for it (Arkham Knight: XeLL kept Reflex's per-rendered 25000 us, half the cap, for 0.7 s after the switch).
+inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, Method method, int needed = kCapSettlePresents)
+{
+    if (settle.started && settle.method != method)
+        settle.started = false;
+
+    const auto cap = SettleCap(settle, planned, needed);
+    settle.method = method;
+    return cap;
+}
+
 // What one SetSleepMode of ours carried, and whether the method took it
 struct SleepModeCall
 {
@@ -933,7 +957,7 @@ struct SleepModeCall
     const void* device = nullptr;
     uint32_t minimumIntervalUs = 0;
     bool boost = false;
-    uint32_t xellGeneration = 0; // fakenvapi::forcedModeGeneration while XeFG's XeLL is the method, else 0
+    uint32_t xellGeneration = 0; // InputCommon::xefg_xell_generation while XeFG's XeLL is the method, else 0
     uint32_t side = 0;           // XefgLatency in force with XeFG (XeLL, Reflex or Anti-Lag 2), else 0
 };
 
