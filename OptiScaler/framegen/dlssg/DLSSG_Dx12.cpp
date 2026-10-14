@@ -96,7 +96,7 @@ bool DLSSG_Dx12::CreateSwapchainInternal(IDXGIFactory* factory, ID3D12CommandQue
     if (StreamlineProxy::DLSSGGetState()(viewport, dlssgState, &dlssgOptions) == sl::Result::eOk)
     {
         State::Instance().dlssgMfgMax = std::max(dlssgState.numFramesToGenerateMax, MfgUnlock::UnlockedMax());
-        _maxInterpolationCount = State::Instance().dlssgMfgMax;
+        _maxInterpolationCount = State::Instance().dlssgMfgMax.value();
         LOG_INFO("Max supported interpolations: {}", dlssgState.numFramesToGenerateMax);
 
         _supportsDMFG = dlssgState.bIsDynamicMFGSupported == sl::Boolean::eTrue;
@@ -175,7 +175,7 @@ bool DLSSG_Dx12::CreateSwapchain1Internal(IDXGIFactory* factory, ID3D12CommandQu
     if (StreamlineProxy::DLSSGGetState()(viewport, dlssgState, &dlssgOptions) == sl::Result::eOk)
     {
         State::Instance().dlssgMfgMax = std::max(dlssgState.numFramesToGenerateMax, MfgUnlock::UnlockedMax());
-        _maxInterpolationCount = State::Instance().dlssgMfgMax;
+        _maxInterpolationCount = State::Instance().dlssgMfgMax.value();
         LOG_INFO("Max supported interpolations: {}", dlssgState.numFramesToGenerateMax);
 
         _supportsDMFG = dlssgState.bIsDynamicMFGSupported == sl::Boolean::eTrue;

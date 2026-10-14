@@ -239,6 +239,7 @@ class MenuCommon
     inline static bool _bgBlurUsed = false;
 
     inline static void ShowTooltip(const char* tip);
+    static void ShowHelpMarker(const char* tip);
 
     inline static void ShowResetButton(CustomOptional<bool, NoDefault>* initFlag, std::string buttonName);
     inline static void ReInitUpscaler();

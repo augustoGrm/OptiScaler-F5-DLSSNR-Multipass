@@ -15,6 +15,7 @@
 #include <proxies/KernelBase_Proxy.h>
 #include <proxies/Streamline_Proxy.h>
 #include <imgui/ImGuiNotify.hpp>
+#include <menu/menu_overlay_base.h>
 
 #include <json.hpp>
 #include <sl1_reflex.h>

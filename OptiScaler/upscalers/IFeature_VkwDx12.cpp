@@ -2169,7 +2169,6 @@ bool IFeature_VkwDx12::Evaluate(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Parameter
 
     // Optical F5Low stands aside while the game calls an upscaler of its own.
     GenericDepthVk::NoteUpscalerCall();
-    std::scoped_lock evaluateLock(EvaluateMutex);
 
     if (!IsInited())
         return false;

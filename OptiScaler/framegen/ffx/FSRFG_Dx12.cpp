@@ -981,22 +981,6 @@ ffxReturnCode_t FSRFG_Dx12::DispatchCallback(ffxDispatchDescFrameGeneration* par
                           (UINT) callbackDeviceResult);
             }
 
-            // Do not blindly trust the cached _device for callback helper creation
-            ID3D12Device* callbackDevice = nullptr;
-            HRESULT callbackDeviceResult = E_POINTER;
-
-            if (cmdList != nullptr)
-                callbackDeviceResult = cmdList->GetDevice(IID_PPV_ARGS(&callbackDevice));
-
-            if (callbackDevice == nullptr && presentWithHud != nullptr)
-                callbackDeviceResult = presentWithHud->GetDevice(IID_PPV_ARGS(&callbackDevice));
-
-            if (callbackDevice == nullptr)
-            {
-                LOG_ERROR("FSRFG HUD helper failed to resolve callback D3D12 device: {:X}",
-                          (UINT) callbackDeviceResult);
-            }
-
             if (applyHudCutoff)
             {
                 if (_hudCopy[fIndex].get() == nullptr && callbackDevice != nullptr)

@@ -27,6 +27,7 @@
 
 #include <framegen/nvngx/Nvngx_FG.h>
 #include <framegen/reprojection/Reprojection_Dx12.h>
+#include <inputs/FG/XeFG_Inputs_Dx12.h>
 
 #include <nvapi/fakenvapi.h>
 #include <hooks/Reflex_Hooks.h>
@@ -535,6 +536,13 @@ void MenuCommon::ShowTooltip(const char* tip)
         ImGui::TextUnformatted(tip);
         ImGui::EndTooltip();
     }
+}
+
+void MenuCommon::ShowHelpMarker(const char* tip)
+{
+    ImGui::SameLine();
+    ImGui::TextDisabled("(?)");
+    ShowTooltip(tip);
 }
 
 template <typename TOption>
@@ -2631,7 +2639,7 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
 
             if (fg != nullptr && fg->IsGenerating())
             {
-                const double baseFps = frameRate / (double) (interpolatedFrameCount + 1);
+                const double baseFps = frameRate / (double) (fg->GetInterpolatedFrameCount() + 1);
 
                 switch (overlayType)
                 {
@@ -8822,6 +8830,7 @@ void MenuCommon::RenderMainMenuGraphs(RenderMenuContext& ctx)
 void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
+    auto* currentFeature = ctx.currentFeature;
     auto config = ctx.config;
     auto& menuResScale = ctx.menuResScale;
 
@@ -10114,6 +10123,7 @@ void MenuCommon::RenderHudlessResourcesWindow(RenderMenuContext& ctx, ImGuiWindo
 void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
+    auto& io = ctx.io;
     auto config = ctx.config;
     auto& frameTime = ctx.frameTime;
     auto& frameRate = ctx.frameRate;
@@ -10199,7 +10209,7 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
     // Main menu window
     if (windowTitle.empty())
     {
-        windowTitle = StrFmt("%s - %s %s %s %s", VER_PRODUCT_NAME, state.gameExe.c_str(),
+        windowTitle = StrFmt("%s - %s %s %s %s", BuildInfo::ProductName(), state.gameExe.c_str(),
                              state.gameName.empty() ? "" : StrFmt("- %s", state.gameName.c_str()).c_str(),
                              (state.detectedQuirks.size() > 0) ? "(Q)" : "", state.isOptiPatcherSucceed ? "(OP)" : "");
     }

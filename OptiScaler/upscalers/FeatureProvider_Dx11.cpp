@@ -80,19 +80,6 @@ bool FeatureProvider_Dx11::GetFeature(Upscaler upscaler, UINT handleId, NVSDK_NG
             break;
         }
 
-    case Upscaler::DLSS_on12:
-        if (primaryGpu.dlssCapable && state.NVNGX_DLSS_Path.has_value())
-        {
-            *feature = std::make_unique<DLSSFeatureDx11On12>(handleId, parameters);
-            break;
-        }
-        else
-        {
-            *feature = std::make_unique<FSR2FeatureDx11>(handleId, parameters);
-            upscaler = Upscaler::FSR22;
-            break;
-        }
-
     case Upscaler::DLSSD:
         if (primaryGpu.dlssCapable && state.NVNGX_DLSSD_Path.has_value())
         {

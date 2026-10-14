@@ -1441,7 +1441,7 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
 
 #ifdef LOW_LATENCY_INPUTS
     // FSR-FG and XeFG with the Reflex output: the game's present as DLSSG reports it
-    ID3D12CommandQueue* gameQueue = nullptr;
+    ID3D12CommandQueue* lowLatencyGameQueue = nullptr;
     uint32_t frameMultiplier = 1;
     void* xefgContext = nullptr;
     uint64_t xefgFrameId = 0;
@@ -1449,9 +1449,9 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     if (auto fg = state.currentFG; willPresent && fg != nullptr &&
                                    (state.activeFgOutput == FGOutput::FSRFG || state.activeFgOutput == FGOutput::XeFG))
     {
-        gameQueue = fg->GetCommandQueue();
+        lowLatencyGameQueue = fg->GetCommandQueue();
         frameMultiplier = fg->IsActive() && !fg->IsPaused() ? fg->GetInterpolatedFrameCount() + 1 : 1;
-        InputCommon::fg_game_present(gameQueue, false, frameMultiplier);
+        InputCommon::fg_game_present(lowLatencyGameQueue, false, frameMultiplier);
 
         if (state.activeFgOutput == FGOutput::XeFG)
         {
@@ -1493,8 +1493,8 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     }
 
 #ifdef LOW_LATENCY_INPUTS
-    if (gameQueue != nullptr)
-        InputCommon::fg_game_present(gameQueue, true, frameMultiplier);
+    if (lowLatencyGameQueue != nullptr)
+        InputCommon::fg_game_present(lowLatencyGameQueue, true, frameMultiplier);
 
     // How many frames XeFG sends to its presenter for the batch it marked in this present
     if (xefgContext != nullptr && XeFGProxy::GetLastPresentStatus() != nullptr)

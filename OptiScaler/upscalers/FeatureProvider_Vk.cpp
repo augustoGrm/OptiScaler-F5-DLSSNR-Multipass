@@ -82,10 +82,6 @@ bool FeatureProvider_Vk::GetFeature(Upscaler upscaler, UINT handleId, NVSDK_NGX_
         *feature = std::make_unique<FFXFeatureVk>(handleId, parameters);
         break;
 
-    case Upscaler::DLSS_on12:
-        *feature = std::make_unique<DLSSFeatureVkOn12>(handleId, parameters);
-        break;
-
     case Upscaler::FFX_on12:
         *feature = std::make_unique<FFXFeatureVkOn12>(handleId, parameters);
         break;
