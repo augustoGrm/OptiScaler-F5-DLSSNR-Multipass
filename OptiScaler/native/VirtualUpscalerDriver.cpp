@@ -525,7 +525,7 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     // What NR does with this frame (VirtualUpscalerMode.h): nothing (off), runs on the picture in place with the backend
     // only counted, or runs around the backend's pass as for a game's call.
     const auto route = DecideVuNrRoute(
-        cfg.DlssNrEnabled.value_or_default(), frame.space == ColorSpace::Pq,
+        cfg.DlssNrEnabled.value_or_default(),
         VuPassSettingFromIni(cfg.DlssNrNativeUpscalerPass.has_value(), cfg.DlssNrNativeUpscalerPass.value_or_default()));
 
     // DLSS-NR hangs off NVSDK_NGX_D3D12_EvaluateFeature around the upscaler, not off the feature: before it (Run before SR,
@@ -615,9 +615,7 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
                                                "no upscaler pass"
                  : route == VuNrRoute::InPlace ? "Neural Rendering runs on the game's picture; the backend only feeds "
                                                  "frame generation, no upscaler pass"
-                 : frame.space == ColorSpace::Pq ? "upscaler pass on (HDR10 picture: Neural Rendering on the game's "
-                                                   "picture does not support it yet)"
-                                                 : "upscaler pass on");
+                                              : "upscaler pass on");
     }
 
     if (_evaluations < 8 || _evaluations % 300 == 0)

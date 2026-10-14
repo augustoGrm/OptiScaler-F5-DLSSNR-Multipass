@@ -136,6 +136,8 @@ NativeDriver::RunResult NativeDriver::RunFrame(IFrameSource& source, bool flowPr
 
     const auto apply = [this, &source, useVirtualUpscaler](ID3D12GraphicsCommandList* cmd, const NativeFrame& frame)
     {
+        _pictureHdr10.store(frame.space == ColorSpace::Pq, std::memory_order_relaxed);
+
         const DXGI_COLOR_SPACE_TYPE type = frame.space == ColorSpace::ScRgb ? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
                                            : frame.space == ColorSpace::Pq  ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
                                                                             : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
@@ -251,7 +253,8 @@ void NativeDriver::DrawStatus()
     }
     else if (_nativeRan)
     {
-        ImGui::TextDisabled("NR running on this picture.");
+        ImGui::TextDisabled(_pictureHdr10.load(std::memory_order_relaxed) ? "NR running on this picture (HDR10)."
+                                                                          : "NR running on this picture.");
     }
     else
     {

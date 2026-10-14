@@ -5,8 +5,8 @@
 //
 // The backend (DLSS, FSR, XeSS) exists so frame generation has an upscaler feature to take motion and depth from. Its pass
 // over the picture is not needed for that: the picture is already full size and antialiased. With Neural Rendering on, NR
-// therefore runs on the picture in place, as in "NR only" mode, and the backend is only counted as a frame. HDR10 (PQ)
-// has no path in that entry yet, and the ini switch can ask for the backend's pass back (to compare, or as a fallback).
+// therefore runs on the picture in place, as in "NR only" mode (HDR10 included: that entry converts it itself), and the
+// backend is only counted as a frame. The ini switch can ask for the backend's pass back (to compare, or as a fallback).
 
 namespace native
 {
@@ -31,12 +31,12 @@ inline VuPassSetting VuPassSettingFromIni(bool hasValue, bool value)
     return !hasValue ? VuPassSetting::Auto : value ? VuPassSetting::On : VuPassSetting::Off;
 }
 
-inline VuNrRoute DecideVuNrRoute(bool nrEnabled, bool pq, VuPassSetting setting)
+inline VuNrRoute DecideVuNrRoute(bool nrEnabled, VuPassSetting setting)
 {
     if (!nrEnabled)
         return VuNrRoute::None;
 
-    if (setting == VuPassSetting::On || pq)
+    if (setting == VuPassSetting::On)
         return VuNrRoute::BackendPass;
 
     return VuNrRoute::InPlace;

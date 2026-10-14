@@ -3,7 +3,6 @@
 #include "../OptiScaler/native/VirtualUpscalerMode.h"
 
 #include <cstdio>
-#include <initializer_list>
 
 using namespace native;
 
@@ -20,19 +19,16 @@ static int fails = 0;
 
 int main()
 {
-    // NR off: nothing runs on the picture, whatever the switch or the screen says
-    for (bool pq : { false, true })
-        for (auto setting : { VuPassSetting::Auto, VuPassSetting::Off, VuPassSetting::On })
-            CHECK(DecideVuNrRoute(false, pq, setting) == VuNrRoute::None);
+    // NR off: nothing runs on the picture, whatever the switch says
+    CHECK(DecideVuNrRoute(false, VuPassSetting::Auto) == VuNrRoute::None);
+    CHECK(DecideVuNrRoute(false, VuPassSetting::Off) == VuNrRoute::None);
+    CHECK(DecideVuNrRoute(false, VuPassSetting::On) == VuNrRoute::None);
 
-    // NR on, SDR or scRGB: on the game's picture, unless the switch asks for the backend's pass
-    CHECK(DecideVuNrRoute(true, false, VuPassSetting::Auto) == VuNrRoute::InPlace);
-    CHECK(DecideVuNrRoute(true, false, VuPassSetting::Off) == VuNrRoute::InPlace);
-    CHECK(DecideVuNrRoute(true, false, VuPassSetting::On) == VuNrRoute::BackendPass);
-
-    // HDR10 (PQ): native input has no path for it yet, so the backend's pass stays, whatever the switch says
-    for (auto setting : { VuPassSetting::Auto, VuPassSetting::Off, VuPassSetting::On })
-        CHECK(DecideVuNrRoute(true, true, setting) == VuNrRoute::BackendPass);
+    // NR on: on the game's picture (SDR, scRGB and HDR10 alike: native input converts HDR10 itself), unless the switch
+    // asks for the backend's pass
+    CHECK(DecideVuNrRoute(true, VuPassSetting::Auto) == VuNrRoute::InPlace);
+    CHECK(DecideVuNrRoute(true, VuPassSetting::Off) == VuNrRoute::InPlace);
+    CHECK(DecideVuNrRoute(true, VuPassSetting::On) == VuNrRoute::BackendPass);
 
     // The ini value: unset is auto, false is off, true is on
     CHECK(VuPassSettingFromIni(false, false) == VuPassSetting::Auto);

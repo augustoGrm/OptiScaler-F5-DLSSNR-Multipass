@@ -14,7 +14,7 @@
 // Jitter is zero and render size equals output size: there is no upscaling, the backend runs as a temporal stabiliser on the
 // native-resolution picture. With NR off the backend's pass is skipped (the feature is only counted, for frame generation);
 // with NR on it is skipped too and NR runs on the game's picture in place (DlssNr::ApplyVirtualUpscalerInput), unless the
-// picture is HDR10 or [DlssNr] NativeUpscalerPass is true (native/VirtualUpscalerMode.h).
+// [DlssNr] NativeUpscalerPass is true (native/VirtualUpscalerMode.h).
 //
 // The feature is kept out of the real NGX handle tables. Like a game's own feature it makes FeatureProvider_Dx12 record the
 // backend it built in Config::Dx12Upscaler, which is also the backend it builds: the user's choice, FFX when there is none.
