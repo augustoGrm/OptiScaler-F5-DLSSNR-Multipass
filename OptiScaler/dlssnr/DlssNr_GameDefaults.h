@@ -9,6 +9,7 @@
 #include <State.h>
 #include <shaders/dlssnr/DlssNr_AutoTrimDefault.h>
 #include <shaders/dlssnr/DlssNr_DetailReuseConstants.h>
+#include <shaders/dlssnr/DlssNr_ExposureDefault.h>
 #include <shaders/dlssnr/DlssNr_FollowGame.h>
 #include <shaders/dlssnr/DlssNr_ReuseDepthDefault.h>
 
@@ -39,6 +40,58 @@ inline float DetailReuseDepthToleranceEffective(const Config& cfg)
 {
     return DlssNrReuseDepth::Effective(cfg.DlssNrDetailReuseDepthTolerance, KnownRelaxedDepthGame(),
                                         kDlssNrDetailReuseDepthTolerance);
+}
+
+// Whether the running game is on the list of games measured to look right with Game exposure "as is".
+inline bool KnownAsIsGame()
+{
+    static const bool known = DlssNrExposureDefault::IsKnownAsIsGame(State::Instance().gameExe);
+    return known;
+}
+
+// What the game hands over for exposure this session (DlssNr_ExposureDefault.h), updated once per NR frame by the
+// backend running (NoteExposureFrame).
+inline DlssNrExposureDefault::Offer& GameExposureOffer()
+{
+    static DlssNrExposureDefault::Offer offer;
+    return offer;
+}
+
+// The white point source in force: the user's, else Game exposure while the game hands over a usable one, else
+// Automatic.
+inline uint32_t WhitePointSourceEffective(const Config& cfg)
+{
+    return DlssNrExposureDefault::Source(cfg.DlssNrWhitePointSource.value_or_default(), GameExposureOffer().Usable());
+}
+
+// Game exposure's scale in force: the user's, else "as is" for a known game, else the game's setting.
+inline uint32_t GameExposureScaleEffective(const Config& cfg)
+{
+    return DlssNrExposureDefault::Scale(cfg.DlssNrGameExposureScale.value_or_default(), KnownAsIsGame());
+}
+
+// Once per NR frame, before the white point is resolved. `offered`: the game's upscaler call carries an exposure
+// texture. `reading`: the backend holds a clean value of it. Says once what the default became, and when it gave up.
+inline void NoteExposureFrame(const Config& cfg, bool offered, bool reading)
+{
+    auto& offer = GameExposureOffer();
+    const bool usableBefore = offer.Usable();
+    const bool unusableBefore = offer.Unusable();
+    offer.Update(offered, reading, WhitePointSourceEffective(cfg) == DlssNrExposureDefault::kSourceGame);
+
+    if (cfg.DlssNrWhitePointSource.value_or_default() != DlssNrExposureDefault::kSourceAuto)
+        return;
+
+    if (!usableBefore && offer.Usable())
+        LOG_INFO("DLSS-NR exposure: the game hands over its exposure -> Game exposure by default, {} scale ({})",
+                 GameExposureScaleEffective(cfg) == DlssNrExposureDefault::kScaleAsIs ? "Native look"
+                                                                                      : "Game's setting",
+                 KnownAsIsGame() ? "measured for this game" : "the default");
+
+    if (!unusableBefore && offer.Unusable())
+        LOG_WARN("DLSS-NR exposure: the game's exposure gave no clean value in {} frames -> Automatic exposure by "
+                 "default for this session",
+                 DlssNrExposureDefault::kGiveUpFrames);
 }
 
 // Whether Automatic follows the game's exposure: the user's choice, else on for a known unexposed game.

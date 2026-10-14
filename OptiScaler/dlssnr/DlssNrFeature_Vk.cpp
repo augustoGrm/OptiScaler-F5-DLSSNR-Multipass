@@ -852,6 +852,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     }
 
     g_vk.exposureOffered = exposure != nullptr;
+    DlssNr::NoteExposureFrame(cfg, g_vk.exposureOffered, g_vk.gameExposure > 1e-6f);
 
     if (havePre && std::isfinite(preExposure) && preExposure > 0.0f)
         g_vk.gamePreExposure = preExposure;
@@ -1432,7 +1433,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     float debugWhitePoint = 0.0f;
 
     // The ring carries the game's exposure or the automatic one; a change of source starts it over.
-    const uint32_t requestedWhitePointSource = cfg.DlssNrWhitePointSource.value_or_default();
+    const uint32_t requestedWhitePointSource = DlssNr::WhitePointSourceEffective(cfg);
 
     if (requestedWhitePointSource != g_vk.exposureReadbackSource)
     {
@@ -1474,7 +1475,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
         // shader recomputes it from the live image instead (liveGame below), and this value is its fallback.
         // What the Trim multiplies follows the scale (DlssNr_GameScale.h); the points stay keyed by the game's
         // exposure in both scales.
-        const float baseWhitePoint = DlssNrGameScale::WhiteBase(cfg.DlssNrGameExposureScale.value_or_default(),
+        const float baseWhitePoint = DlssNrGameScale::WhiteBase(DlssNr::GameExposureScaleEffective(cfg),
                                                                 g_vk.gamePreExposure, g_vk.gameExposure);
         const float anchorKey = DlssNrGameScale::AnchorKey(g_vk.gamePreExposure, g_vk.gameExposure);
         const auto anchors = DlssNrTrim::Parse(cfg.DlssNrGameExposureTrimAnchors.value_or_default());
@@ -1787,10 +1788,9 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     {
         const bool gameImage = exposure != nullptr && exposure->Type == NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW &&
                                exposure->Resource.ImageViewInfo.ImageView != VK_NULL_HANDLE;
-        const bool liveGame =
-            requestedWhitePointSource == 1 && linearHdr && !displayWhite && gameImage &&
-            DlssNrGameScale::ShaderReadsGameExposure(cfg.DlssNrGameExposureScale.value_or_default()) &&
-            g_vk.gameLiveGate.Trusted();
+        const bool liveGame = requestedWhitePointSource == 1 && linearHdr && !displayWhite && gameImage &&
+                              DlssNrGameScale::ShaderReadsGameExposure(DlssNr::GameExposureScaleEffective(cfg)) &&
+                              g_vk.gameLiveGate.Trusted();
 
         if (liveGame)
         {
@@ -2037,7 +2037,7 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     // but it is still a guess. A user who has not asked for the exposure source never has the game's
     // image touched at all, so if some engine does leave it somewhere unexpected, the blast radius is
     // people who turned the thing on rather than everyone on Vulkan.
-    if (cfg.DlssNrWhitePointSource.value_or_default() == 1 && exposure != nullptr &&
+    if (DlssNr::WhitePointSourceEffective(cfg) == 1 && exposure != nullptr &&
         exposure->Type == NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW &&
         exposure->Resource.ImageViewInfo.ImageView != VK_NULL_HANDLE && g_vk.meter.Valid())
     {

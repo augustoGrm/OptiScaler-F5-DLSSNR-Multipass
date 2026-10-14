@@ -535,7 +535,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrScanExposure.set_from_config(readBool("DlssNr", "ScanExposure"));
             DlssNrWhitePointSource.set_from_config(readUInt("DlssNr", "WhitePointSource"));
             DlssNrGameExposureScale.set_from_config(readUInt("DlssNr", "GameExposureScale"));
-            if (DlssNrGameExposureScale.has_value() && DlssNrGameExposureScale.value() > 1)
+            if (DlssNrGameExposureScale.has_value() && DlssNrGameExposureScale.value() > 2)
                 DlssNrGameExposureScale.reset();
             DlssNrAutoExposureTrim.set_from_config(readFloat("DlssNr", "AutoExposureTrim"));
             DlssNrAutoExposureShadowProtection.set_from_config(readFloat("DlssNr", "AutoExposureShadowProtection"));
