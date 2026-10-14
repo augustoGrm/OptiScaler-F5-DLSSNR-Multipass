@@ -141,8 +141,10 @@ class InputCommon
     static SleepMode shaped_sleep_mode(lloutput::Role role);
     static void apply_xefg_xell_mode(const LowLatencyTech* output);
     static bool update_low_latency_tech(IUnknown* pDevice, API api, std::optional<LowLatencyMode> mode = std::nullopt);
-    // The same for an input's call, which also marks the input as available
-    static bool update_for_call(const InputContext& inputContext, IUnknown* pDevice);
+    // The same for an input's call, which also marks the input as available unless it only asks (`query`: GetLatency,
+    // GetSleepStatus). A game that only reads latency runs no low latency of its own: it must not push OptiScaler's
+    // calls aside (default_input), and nobody would sleep (NBA 2K27 reads it for seconds before its first marker).
+    static bool update_for_call(const InputContext& inputContext, IUnknown* pDevice, bool query = false);
     static void add_marker_to_report(const MarkerParams& marker_params);
     static bool copy_frame_reports(FrameReport* reports); // NVAPI_BUFFER_SIZE reports, oldest first
     static void clear_reports();
@@ -150,8 +152,8 @@ class InputCommon
     // The API of the call's device
     static API device_api(const InputContext& inputContext, IUnknown* pDevice);
 
-    // Marks the game's input as available, returns the call's API
-    static API register_call(const InputContext& inputContext, IUnknown* pDevice);
+    // Marks the game's input as available (not for a `query`), returns the call's API
+    static API register_call(const InputContext& inputContext, IUnknown* pDevice, bool query = false);
 
     // The output that does the same on the call's API: AntiLag Vk on Vulkan, AntiLag 2 on D3D, XeLL is D3D12 only
     static LowLatencyMode for_api(LowLatencyMode mode, API api);

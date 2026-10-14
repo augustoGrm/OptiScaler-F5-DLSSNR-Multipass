@@ -52,6 +52,7 @@ std::atomic<double> g_frameGenerationPresentAt = 0.0; // last PresentSource::Fra
 std::atomic<Decision> g_decision = Decision::NoF5Low;
 std::atomic<CapOwner> g_capOwner = CapOwner::NotOurs; // PlanCap's answer on the last present we ran on
 std::atomic<bool> g_xellIdle = false;                 // XellIdle on the last present we ran on
+std::string g_capLogged;                              // the cap line PresentEnd last logged; cleared to say it again
 std::atomic<RunsFor> g_runsFor = RunsFor::F5Low;      // what Auto runs us for (RunReason): log and menu name it
 // XeLL and XeFG share one frame ID (framegen/xefg/XeFGFrameId.h): the ID of our frame in flight while XeFG runs on our
 // XeLL (0: not)
@@ -342,6 +343,7 @@ void Stop(Api api, IUnknown* device)
     g_xellFrameIdForFrameGeneration = 0;
     g_capOwner = CapOwner::NotOurs;
     g_xellIdle = false;
+    g_capLogged.clear();
     g_sent.reset();
     g_sentRefused = false;
     g_capSettle = {};
@@ -629,9 +631,25 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         }
         else if (!g_sentRefused && (changed || wasRefused))
         {
-            LOG_INFO("{}: {} in {}, Boost {}", LogName(), CapText(capInputs.capFps),
-                     cap.owner == CapOwner::Limiter ? "OptiScaler's limiter" : PathText(api),
-                     call.boost ? "on" : "off");
+            g_capLogged.clear(); // said below
+        }
+    }
+
+    // Who keeps the cap, whenever it or the cap changes: the limiter's changes reach no sleep mode
+    if (!g_sentRefused)
+    {
+        const bool xellVsync = capInputs.method == Method::XellWithXefg && !XellKeepsCap(capInputs.xefgVsync);
+        auto text = std::format("{} in {}{}, Boost {}", CapText(capInputs.capFps),
+                                cap.owner == CapOwner::Limiter ? "OptiScaler's limiter" : PathText(api),
+                                cap.owner == CapOwner::Limiter && xellVsync && capInputs.capFps > 0.0f
+                                    ? " (XeLL goes by the refresh rate with V-Sync)"
+                                    : "",
+                                call.boost ? "on" : "off");
+
+        if (text != g_capLogged)
+        {
+            LOG_INFO("{}: {}", LogName(), text);
+            g_capLogged = std::move(text);
         }
     }
 

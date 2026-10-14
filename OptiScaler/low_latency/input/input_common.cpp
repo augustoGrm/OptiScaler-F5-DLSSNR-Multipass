@@ -319,12 +319,12 @@ API InputCommon::device_api(const InputContext& inputContext, IUnknown* pDevice)
     return lastApi;
 }
 
-API InputCommon::register_call(const InputContext& inputContext, IUnknown* pDevice)
+API InputCommon::register_call(const InputContext& inputContext, IUnknown* pDevice, bool query)
 {
     auto api = device_api(inputContext, pDevice);
 
-    // Ignore context that Opti creates
-    if (!inputContext.localContext)
+    // Ignore context that Opti creates, and calls that only ask
+    if (!inputContext.localContext && !query)
     {
         if (api != API::NotSelected)
             input_api[static_cast<size_t>(inputContext.caller)] = api;
@@ -456,9 +456,9 @@ std::optional<LowLatencyInput> InputCommon::forced_input()
     return std::nullopt;
 }
 
-bool InputCommon::update_for_call(const InputContext& inputContext, IUnknown* pDevice)
+bool InputCommon::update_for_call(const InputContext& inputContext, IUnknown* pDevice, bool query)
 {
-    return update_low_latency_tech(pDevice, register_call(inputContext, pDevice));
+    return update_low_latency_tech(pDevice, register_call(inputContext, pDevice, query));
 }
 
 bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optional<LowLatencyMode> mode)
@@ -810,7 +810,7 @@ InputResult InputCommon::set_sleep_mode(const InputContext& inputContext, IUnkno
 InputResult InputCommon::get_sleep_status(const InputContext& inputContext, IUnknown* pDevice,
                                           SleepParams* sleep_params)
 {
-    if (!update_for_call(inputContext, pDevice))
+    if (!update_for_call(inputContext, pDevice, true))
         return InputResult::LowLatencyUpdateFail;
 
     // Get functions don't really need to worry about this check
@@ -830,7 +830,7 @@ InputResult InputCommon::get_latency(const InputContext& inputContext, IUnknown*
     // if (inputContext.caller != activeInput)
     //     return InputResult::UsingDifferentInput;
 
-    if (!update_for_call(inputContext, pDev))
+    if (!update_for_call(inputContext, pDev, true))
         return InputResult::LowLatencyUpdateFail;
 
     if (!latency_params)
@@ -1502,13 +1502,43 @@ void InputCommon::update(bool fgActive)
 
     const auto interval = cap.outputHoldsCap ? lloutput::IntervalUs(cap.fps) : 0u;
 
-    // The game's: in its sleep mode through the output (and XeFG's XeLL)
-    if (fps_limit_interval_us.exchange(gameInput ? interval : 0u) != (gameInput ? interval : 0u))
-    {
-        LOG_INFO("Frame cap through {}: {} us", magic_enum::enum_name(activeOutput.load()), gameInput ? interval : 0u);
+    // XeFG's Output changed between XeLL and the other side, the output follows on the next call: the new cap is for
+    // the new output (XeLL counts shown frames, the others rendered ones) and goes in when it starts (init_tech,
+    // use_output)
+    const bool outputPending =
+        state.activeFgOutput == FGOutput::XeFG && current_tech != nullptr &&
+        (native::lowlatency::XefgSide() == lloutput::XefgLatency::XeLL) != (activeOutput == LowLatencyMode::XeLL);
 
-        if (current_tech != nullptr)
-            apply_sleep_mode(current_tech.get());
+    // The game's: in its sleep mode through the output (and XeFG's XeLL)
+    if (fps_limit_interval_us.exchange(gameInput ? interval : 0u) != (gameInput ? interval : 0u) && !outputPending &&
+        current_tech != nullptr)
+    {
+        apply_sleep_mode(current_tech.get());
+    }
+
+    // Who keeps the cap, said whenever it or the cap changes (the limiter's changes reach no sleep mode)
+    {
+        static std::string lastText;
+        const float capFps = config->FramerateLimit.value_or_default();
+        std::string text;
+
+        if (gameInput && cap.outputHoldsCap)
+            text = std::format("Frame cap {:.1f} fps through {}: {} us", cap.fps,
+                               magic_enum::enum_name(activeOutput.load()), interval);
+        else if (gameInput && capFps > 0.0f)
+            text =
+                std::format("Frame cap {:.0f} fps in OptiScaler's limiter{}", capFps,
+                            activeOutput == LowLatencyMode::XeLL && state.fgPresentVsync.load(std::memory_order_relaxed)
+                                ? " (XeLL goes by the refresh rate with V-Sync)"
+                                : "");
+
+        if (!outputPending && text != lastText)
+        {
+            if (!text.empty())
+                LOG_INFO("{}", text);
+
+            lastText = std::move(text);
+        }
     }
 
     // Streamline's: in its own Reflex mode
