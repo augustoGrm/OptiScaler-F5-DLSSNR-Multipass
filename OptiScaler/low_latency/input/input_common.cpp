@@ -197,6 +197,7 @@ lloutput::OutputPlan InputCommon::plan_output()
     in.side = native::lowlatency::XefgSide();
     in.forceLatencyFlex = Config::Instance()->FN_ForceLatencyFlex.value_or_default();
     in.multiFrame = state.dlssgDetectedInterpolationCount > 1 || state.dlssgLastSetMode == sl::DLSSGMode::eDynamic;
+    in.inputFeedsXell = incompatibility(activeInput.load(), LowLatencyMode::XeLL) == nullptr;
     return lloutput::PlanOutput(in);
 }
 
@@ -378,45 +379,34 @@ bool InputCommon::xefg_paced()
 
 LowLatencyInput InputCommon::default_input()
 {
+    lloutput::InputChoice in;
 #ifdef LOW_LATENCY_INPUTS
-    // With the XeFG input the game's own low latency for its frame generation is XeLL, Reflex markers it also sends
-    // belong to its other paths. A game that turns XeLL off uses another frame generation, The Witcher 3 its DLSSG
-    // with Reflex.
-    if (State::Instance().activeFgInput == FGInput::XeFG && available(LowLatencyInput::XeLL) &&
-        get_sleep_copy(LowLatencyInput::XeLL).low_latency_enabled)
+    in.lowLatencyInputs = true;
+    in.xefgInput = State::Instance().activeFgInput == FGInput::XeFG;
+    in.xell = available(LowLatencyInput::XeLL);
+    in.xellLowLatency = in.xell && get_sleep_copy(LowLatencyInput::XeLL).low_latency_enabled;
+    in.antiLag2 = available(LowLatencyInput::AntiLag2);
+    in.antiLag2ReportsFg = in.antiLag2 && reports_frame_generation(LowLatencyInput::AntiLag2);
+#endif
+    in.reflex = available(LowLatencyInput::Reflex);
+    in.optiscalerRunning = optiscaler_running;
+    in.ue = available(LowLatencyInput::UeLowLatency);
+
+    switch (lloutput::ChooseInput(in))
     {
-        return LowLatencyInput::XeLL;
-    }
-
-    // The game's FSR-FG only reports its generated frames through AntiLag 2
-    if (available(LowLatencyInput::AntiLag2) && reports_frame_generation(LowLatencyInput::AntiLag2))
-        return LowLatencyInput::AntiLag2;
-#endif
-
-    // The game's own Reflex, then OptiScaler's own low latency while it runs (Optical F5Low, for frame generation),
-    // then the UE Low Latency mod: one sleeper per frame, in the order each stands aside for the one before
-    if (available(LowLatencyInput::Reflex))
+    case lloutput::Input::Reflex:
         return LowLatencyInput::Reflex;
-
-    if (optiscaler_running)
+    case lloutput::Input::OptiScaler:
         return LowLatencyInput::OptiScaler;
-
-    if (available(LowLatencyInput::UeLowLatency))
+    case lloutput::Input::UeLowLatency:
         return LowLatencyInput::UeLowLatency;
-
-#ifdef LOW_LATENCY_INPUTS
-    // A game can have XeLL without it being enabled in its settings, it does nothing until it is
-    if (available(LowLatencyInput::XeLL) && get_sleep_copy(LowLatencyInput::XeLL).low_latency_enabled)
+    case lloutput::Input::XeLL:
         return LowLatencyInput::XeLL;
-
-    if (available(LowLatencyInput::AntiLag2))
+    case lloutput::Input::AntiLag2:
         return LowLatencyInput::AntiLag2;
-
-    if (available(LowLatencyInput::XeLL))
-        return LowLatencyInput::XeLL;
-#endif
-
-    return LowLatencyInput::None;
+    default:
+        return LowLatencyInput::None;
+    }
 }
 
 const char* InputCommon::incompatibility(LowLatencyInput input, LowLatencyMode output)
@@ -1505,9 +1495,9 @@ void InputCommon::update(bool fgActive)
     // XeFG's Output changed between XeLL and the other side, the output follows on the next call: the new cap is for
     // the new output (XeLL counts shown frames, the others rendered ones) and goes in when it starts (init_tech,
     // use_output)
-    const bool outputPending =
-        state.activeFgOutput == FGOutput::XeFG && current_tech != nullptr &&
-        (native::lowlatency::XefgSide() == lloutput::XefgLatency::XeLL) != (activeOutput == LowLatencyMode::XeLL);
+    const bool outputPending = lloutput::OutputSwitchPending(
+        state.activeFgOutput == FGOutput::XeFG, current_tech != nullptr, native::lowlatency::XefgSide(),
+        activeOutput == LowLatencyMode::XeLL, incompatibility(input, LowLatencyMode::XeLL) == nullptr);
 
     // The game's: in its sleep mode through the output (and XeFG's XeLL)
     if (fps_limit_interval_us.exchange(gameInput ? interval : 0u) != (gameInput ? interval : 0u) && !outputPending &&
@@ -1541,11 +1531,12 @@ void InputCommon::update(bool fgActive)
         }
     }
 
-    // Streamline's: in its own Reflex mode
+    // Streamline's: in its own Reflex mode, also next to the game's Reflex output (it sets the same device's mode)
     static uint32_t lastStreamlineInterval = 0;
+    const auto streamlineInterval = lloutput::StreamlineCapUs(streamline.set, interval);
 
-    if (std::exchange(lastStreamlineInterval, streamlineSource ? interval : 0u) != (streamlineSource ? interval : 0u))
-        ReflexHooks::streamlineCap(streamlineSource ? interval : 0u);
+    if (std::exchange(lastStreamlineInterval, streamlineInterval) != streamlineInterval)
+        ReflexHooks::streamlineCap(streamlineInterval);
 }
 
 InputResult InputCommon::mark_present_start(IUnknown* pDevice)

@@ -74,6 +74,79 @@ int main()
         in.side = XefgLatency::AntiLag2;
         p = PlanOutput(in);
         CHECK(p.first() == Tech::AntiLag2 && p.xefgOwnXell);
+
+        // An input that can't feed XeLL (the UE mod, Anti-Lag 2: XL18): never XeLL as the output
+        in.inputFeedsXell = false;
+        CHECK(PlanOutput(in).first() == Tech::AntiLag2); // the split is not XeLL's anyway
+        in.side = XefgLatency::XeLL;
+        p = PlanOutput(in);
+        CHECK(p.first() == Tech::LatencyFlex && p.tries[1] == Tech::None && p.xefgOwnXell); // XeFG keeps its own
+        in.xefgOutput = false;
+        p = PlanOutput(in);
+        CHECK(p.tries[0] == Tech::AntiLag2 && p.tries[1] == Tech::LatencyFlex && p.tries[2] == Tech::None);
+        in.realNvapi = true;
+        CHECK(PlanOutput(in).first() == Tech::Reflex); // Reflex takes any input
+    }
+
+    // ---- ChooseInput ----
+    {
+        InputChoice in;
+        CHECK(ChooseInput(in) == Input::None);
+
+        // The UE mod, then OptiScaler's own while it runs, then the game's Reflex: each stands aside for the next
+        in.ue = true;
+        CHECK(ChooseInput(in) == Input::UeLowLatency);
+        in.optiscalerRunning = true;
+        CHECK(ChooseInput(in) == Input::OptiScaler);
+        in.reflex = true;
+        CHECK(ChooseInput(in) == Input::Reflex);
+
+        // The game's XeLL and Anti-Lag 2 are inputs only with LOW_LATENCY_INPUTS
+        InputChoice xell;
+        xell.xell = xell.xellLowLatency = xell.xefgInput = true;
+        xell.reflex = true;
+        CHECK(ChooseInput(xell) == Input::Reflex);
+        xell.lowLatencyInputs = true;
+        CHECK(ChooseInput(xell) == Input::XeLL); // its XeFG paces with its XeLL
+        xell.xefgInput = false;
+        CHECK(ChooseInput(xell) == Input::Reflex);
+        xell.reflex = false;
+        CHECK(ChooseInput(xell) == Input::XeLL);
+        xell.xellLowLatency = false;
+        xell.antiLag2 = true;
+        CHECK(ChooseInput(xell) == Input::AntiLag2);
+        xell.antiLag2 = false;
+        CHECK(ChooseInput(xell) == Input::XeLL); // low latency off: last, it does nothing until enabled
+
+        InputChoice fsrFg;
+        fsrFg.lowLatencyInputs = fsrFg.antiLag2 = fsrFg.antiLag2ReportsFg = fsrFg.reflex = true;
+        CHECK(ChooseInput(fsrFg) == Input::AntiLag2); // the game's FSR-FG reports its frames only through it
+    }
+
+    // ---- OutputSwitchPending ----
+    {
+        // Not XeFG, or no output yet: nothing pending
+        CHECK(!OutputSwitchPending(false, true, XefgLatency::Reflex, true));
+        CHECK(!OutputSwitchPending(true, false, XefgLatency::Reflex, true));
+
+        // The side and the output agree
+        CHECK(!OutputSwitchPending(true, true, XefgLatency::XeLL, true));
+        CHECK(!OutputSwitchPending(true, true, XefgLatency::Reflex, false));
+
+        // The side moved, the output not yet
+        CHECK(OutputSwitchPending(true, true, XefgLatency::Reflex, true));
+        CHECK(OutputSwitchPending(true, true, XefgLatency::XeLL, false));
+
+        // The UE mod on the XeLL side runs LatencyFlex: nothing pending
+        CHECK(!OutputSwitchPending(true, true, XefgLatency::XeLL, false, false));
+    }
+
+    // ---- StreamlineCapUs ----
+    {
+        // Streamline of OptiScaler's DLSS FG output sets the device's mode too: it carries the output's cap
+        CHECK(StreamlineCapUs(true, 16667) == 16667);
+        CHECK(StreamlineCapUs(true, 0) == 0);
+        CHECK(StreamlineCapUs(false, 16667) == 0);
     }
 
     // ---- SleepModeFor ----

@@ -32,6 +32,9 @@ struct OutputInputs
     XefgLatency side = XefgLatency::XeLL; // with XeFG, what lowers latency (native::lowlatency::XefgSide, in force)
     bool forceLatencyFlex = false;        // fakenvapi's Force LatencyFlex
     bool multiFrame = false; // DLSS FG with more than one generated frame, or Dynamic: no Anti-Lag 2 or XeLL
+    // The input sends XeLL's six markers with frame ids every frame (Intel R9, XL18): not the UE mod (simulation
+    // markers only) or Anti-Lag 2 (no frame ids). XeLL fed half a frame does harm (InputCommon::incompatibility).
+    bool inputFeedsXell = true;
 };
 
 // The output to start, the ones to try when it can't start, in order, and whether XeFG gets an XeLL context of its own
@@ -55,7 +58,11 @@ constexpr OutputPlan PlanOutput(const OutputInputs& in)
         case XefgLatency::AntiLag2:
             return { { Tech::AntiLag2, Tech::None, Tech::None }, true };
         default:
-            // XeFG paces with the XeLL output's own context
+            // XeFG paces with the XeLL output's own context, when the input can feed it; else LatencyFlex lowers
+            // latency and XeFG keeps its own XeLL with low latency off, as next to Reflex
+            if (!in.inputFeedsXell)
+                return { { Tech::LatencyFlex, Tech::None, Tech::None }, true };
+
             return { { Tech::XeLL, Tech::None, Tech::None }, false };
         }
     }
@@ -67,7 +74,96 @@ constexpr OutputPlan PlanOutput(const OutputInputs& in)
     if (in.forceLatencyFlex || in.multiFrame)
         return { { Tech::LatencyFlex, Tech::None, Tech::None }, false };
 
+    if (!in.inputFeedsXell)
+        return { { Tech::AntiLag2, Tech::LatencyFlex, Tech::None }, false };
+
     return { { Tech::AntiLag2, Tech::XeLL, Tech::LatencyFlex }, false };
+}
+
+// The low latency inputs InputCommon chooses among (LowLatencyInput's)
+enum class Input : uint8_t
+{
+    None,
+    Reflex,     // the game's
+    OptiScaler, // OptiScaler's own calls (native::lowlatency)
+    UeLowLatency,
+    XeLL,     // the game's (LOW_LATENCY_INPUTS builds)
+    AntiLag2, // the game's (LOW_LATENCY_INPUTS builds)
+};
+
+struct InputChoice
+{
+    bool lowLatencyInputs = false;  // built with LOW_LATENCY_INPUTS: the game's XeLL and Anti-Lag 2 are inputs too
+    bool reflex = false;            // the game made a Reflex call that runs low latency (not a query)
+    bool optiscalerRunning = false; // native::lowlatency runs (InputCommon::set_optiscaler_running)
+    bool ue = false;                // the UE Low Latency mod calls
+    bool xell = false;              // the game's XeLL
+    bool xellLowLatency = false;    // ... with low latency on
+    bool xefgInput = false;         // the frame generation input is the game's XeFG
+    bool antiLag2 = false;          // the game's Anti-Lag 2
+    bool antiLag2ReportsFg = false; // ... reports its frame generation's frames
+};
+
+// One sleeper per frame: the game's own Reflex, then OptiScaler's own low latency while it runs (Optical F5Low, for
+// frame generation), then the UE Low Latency mod, each standing aside for the one before. With the low latency inputs
+// the game's XeLL for its XeFG and the game's FSR-FG's Anti-Lag 2 come first, its other XeLL and Anti-Lag 2 last.
+constexpr Input ChooseInput(const InputChoice& in)
+{
+    if (in.lowLatencyInputs)
+    {
+        // The game's XeFG paces with its XeLL; Reflex markers it also sends belong to its other paths
+        if (in.xefgInput && in.xell && in.xellLowLatency)
+            return Input::XeLL;
+
+        // The game's FSR-FG only reports its generated frames through Anti-Lag 2
+        if (in.antiLag2 && in.antiLag2ReportsFg)
+            return Input::AntiLag2;
+    }
+
+    if (in.reflex)
+        return Input::Reflex;
+
+    if (in.optiscalerRunning)
+        return Input::OptiScaler;
+
+    if (in.ue)
+        return Input::UeLowLatency;
+
+    if (in.lowLatencyInputs)
+    {
+        // A game can have XeLL without it being enabled in its settings, it does nothing until it is
+        if (in.xell && in.xellLowLatency)
+            return Input::XeLL;
+
+        if (in.antiLag2)
+            return Input::AntiLag2;
+
+        if (in.xell)
+            return Input::XeLL;
+    }
+
+    return Input::None;
+}
+
+// XeFG's Output side changed (XeLL <-> Reflex / Anti-Lag 2) and the output follows on the next call: a cap planned for
+// the new side must not go to the old output (XeLL counts shown frames, the others rendered ones). The new output gets
+// it when it starts. An input that can't feed XeLL has LatencyFlex on the XeLL side (PlanOutput).
+constexpr bool OutputSwitchPending(bool xefgOutput, bool hasOutput, XefgLatency side, bool outputIsXell,
+                                   bool inputFeedsXell = true)
+{
+    if (!xefgOutput || !hasOutput)
+        return false;
+
+    const bool sideIsXell = side == XefgLatency::XeLL && inputFeedsXell;
+    return sideIsXell != outputIsXell;
+}
+
+// The interval the Streamline of OptiScaler's DLSS FG output carries in its own sleep mode. It sets the device's sleep
+// mode itself every frame, also next to the game's Reflex output: it carries the cap the output keeps, or its next call
+// takes the cap off the device (the driver keeps the last mode set). 0 when the output keeps no cap.
+constexpr uint32_t StreamlineCapUs(bool streamlineSet, uint32_t outputIntervalUs)
+{
+    return streamlineSet ? outputIntervalUs : 0u;
 }
 
 // Which tech a sleep mode is for
