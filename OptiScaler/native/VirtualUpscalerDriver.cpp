@@ -562,6 +562,7 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     // on, runs on it below). The HUD fix still reads Output as its HUD-less picture (UpscaleEnd, recorded before the
     // backend's pass would run): the picture is copied there for it, as the game made it (before NR).
     const bool passThrough = route != VuNrRoute::BackendPass;
+    _nrInPlace.store(route == VuNrRoute::InPlace, std::memory_order_relaxed);
 
     if (passThrough && cfg.FGHUDFix.value_or_default())
     {

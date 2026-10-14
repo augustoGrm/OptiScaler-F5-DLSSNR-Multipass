@@ -1052,8 +1052,9 @@ static void RenderNativeMode(Config* config, bool nrEnabled, bool& finishedPictu
 
     HelpMarker("For games that don't call an upscaler: Optical F5Low works out the motion itself so NR can run.\n"
                "NR only: NR on the finished picture. Cheapest; no frame generation.\n"
-               "NR + upscaler & frame generation: adds OptiScaler's upscaler to keep the picture steady; needed for "
-               "frame generation. Costs more.\n"
+               "NR + upscaler & frame generation: adds OptiScaler's upscaler, which gives frame generation its input; "
+               "needed for frame generation. With NR on, NR works on the game's picture and the upscaler does not "
+               "process it.\n"
                "FG only (Vulkan): frame generation for Vulkan games that call DLSS, FSR or XeSS themselves.\n"
                "Needs Enable Neural Rendering. On Vulkan, set up frame generation before the game starts.");
 
@@ -3680,12 +3681,12 @@ bool RenderHeaderBanner(Config* config, HeaderBanner::Feature feature, bool upsc
         ImGui::TextColored(offerColour, "No upscaler files found. Optical F5Low can still run NR without one.");
         break;
     case Line::F5LowNrAndFrameGen:
-        ImGui::TextDisabled("Optical F5Low: NR and frame generation on the finished picture (%s as stabiliser).",
+        ImGui::TextDisabled("Optical F5Low: NR and frame generation on the finished picture (%s gives frame generation "
+                            "its input).",
                             backendName.c_str());
         break;
     case Line::F5LowNrNoFrameGen:
-        ImGui::TextDisabled("Optical F5Low: NR on the finished picture (%s as stabiliser), frame generation off.",
-                            backendName.c_str());
+        ImGui::TextDisabled("Optical F5Low: NR on the finished picture, frame generation off.");
         break;
     case Line::F5LowFrameGenNoNr:
         ImGui::TextDisabled("Optical F5Low: frame generation on the finished picture (%s as stabiliser), NR off.",
@@ -3745,8 +3746,8 @@ bool RenderHeaderBanner(Config* config, HeaderBanner::Feature feature, bool upsc
 void RenderF5LowUpscalerNote()
 {
     ImGui::TextWrapped(
-        "Driven by Optical F5Low (the game makes no upscaler call): this upscaler runs at the same size as a "
-        "stabiliser.");
+        "Driven by Optical F5Low (the game makes no upscaler call): this upscaler runs at the same size as the game's "
+        "picture. With NR on, NR works on the game's picture and this upscaler only gives frame generation its input.");
 
     if (ImGui::SmallButton("Optical F5Low settings##upscalernote"))
         MenuPages::RequestPage(MenuPages::Page::NrF5Low);

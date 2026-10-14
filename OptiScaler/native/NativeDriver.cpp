@@ -236,8 +236,14 @@ void NativeDriver::DrawStatus()
     if (Config::Instance()->DlssNrNativeUpscaler.value_or_default())
     {
         if (_nativeRan && _virtualUpscaler != nullptr && _virtualUpscaler->Active())
-            ImGui::TextDisabled("%s is running as a stabiliser on this picture.",
-                                _virtualUpscaler->BackendName().c_str());
+        {
+            if (_virtualUpscaler->NrInPlace())
+                ImGui::TextDisabled("NR on the game's picture (no upscaler pass); %s gives frame generation its input.",
+                                    _virtualUpscaler->BackendName().c_str());
+            else
+                ImGui::TextDisabled("%s is running as a stabiliser on this picture.",
+                                    _virtualUpscaler->BackendName().c_str());
+        }
         else if (_virtualUpscaler != nullptr && !_virtualUpscaler->Error().empty())
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "Stabiliser: %s", _virtualUpscaler->Error().c_str());
         else
