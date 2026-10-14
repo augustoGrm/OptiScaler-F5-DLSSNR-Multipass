@@ -134,6 +134,7 @@ inline Settings Painterly()
 {
     Settings s = Make({ 0, 1.0f, 1.0f, 1.0f, -1.0f, true }, kCurveSoftKnee);
     s.inputStyle = kInputWatercolour;
+    s.detail = 1.5f; // user, 2026-10-14
     return s;
 }
 
@@ -155,7 +156,7 @@ inline const Entry kLooks[] = {
     { Look::DetailOnly, "Detail only", "Adds detail and keeps the game's colours: Colour strength 0.", false,
       detail::DetailOnly() },
     { Look::Faces, "Faces", "Full effect on skin, less on scenery (environment detail 0.6).", false, detail::Faces() },
-    { Look::Painterly, "Painterly", "Experimental: the picture is shown to the model as a watercolour.", true,
+    { Look::Painterly, "Painterly", "Experimental: the picture is shown to the model as a watercolour, Detail strength 1.5.", true,
       detail::Painterly() },
     { Look::SoftCanvas, "Soft canvas",
       "Experimental: smooth canvas input on the HLG curve, Detail strength 2: smooth surfaces, strong detail.", true,

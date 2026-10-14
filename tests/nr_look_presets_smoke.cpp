@@ -88,7 +88,8 @@ int main()
         CHECK(soft.inputStyle == kInputSmoothCanvas && soft.curve == kCurveHlg && soft.detail == 2.0f);
 
         CHECK(Get(Look::DetailOnly).settings.colour == 0.0f);
-        CHECK(Get(Look::Painterly).settings.inputStyle == kInputWatercolour);
+        CHECK(Get(Look::Painterly).settings.inputStyle == kInputWatercolour &&
+              Get(Look::Painterly).settings.detail == 1.5f);
         CHECK(Get(Look::Faces).settings.skinSplit && Get(Look::Faces).settings.envDetail < 1.0f);
         CHECK(Get(Look::Cinematic).settings.pass1.style == 2);
 
