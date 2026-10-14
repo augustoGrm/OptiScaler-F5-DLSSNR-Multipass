@@ -6364,6 +6364,7 @@ void Shutdown()
     g_lastNgxTime.reset();
     g_lastGpuTime.reset();
 
+    Late::nativeHdr = {};
     g_compose.reset();
 }
 } // namespace DlssNr
