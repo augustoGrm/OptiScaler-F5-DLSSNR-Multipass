@@ -2,6 +2,11 @@
 
 #include "input_reflex.h"
 #include <hooks/Reflex_Hooks.h>
+#include <hooks/Vulkan_Hooks.h>
+#include <low_latency/low_latency_tech/ll_reflex_vk.h>
+#include <nvapi/fakenvapi.h>
+
+#include <map>
 
 #include <intrin.h>
 #include <type_traits>
@@ -55,6 +60,35 @@ static_assert(std::is_same_v<decltype(&InputReflex::D3D_GetLatency), decltype(&N
 static_assert(std::is_same_v<decltype(&InputReflex::D3D_SetLatencyMarker), decltype(&NvAPI_D3D_SetLatencyMarker)>);
 static_assert(
     std::is_same_v<decltype(&InputReflex::D3D12_SetAsyncFrameMarker), decltype(&NvAPI_D3D12_SetAsyncFrameMarker)>);
+static_assert(
+    std::is_same_v<decltype(&InputReflex::Vulkan_InitLowLatencyDevice), decltype(&NvAPI_Vulkan_InitLowLatencyDevice)>);
+static_assert(std::is_same_v<decltype(&InputReflex::Vulkan_DestroyLowLatencyDevice),
+                             decltype(&NvAPI_Vulkan_DestroyLowLatencyDevice)>);
+static_assert(std::is_same_v<decltype(&InputReflex::Vulkan_GetSleepStatus), decltype(&NvAPI_Vulkan_GetSleepStatus)>);
+static_assert(std::is_same_v<decltype(&InputReflex::Vulkan_SetSleepMode), decltype(&NvAPI_Vulkan_SetSleepMode)>);
+static_assert(std::is_same_v<decltype(&InputReflex::Vulkan_Sleep), decltype(&NvAPI_Vulkan_Sleep)>);
+static_assert(std::is_same_v<decltype(&InputReflex::Vulkan_GetLatency), decltype(&NvAPI_Vulkan_GetLatency)>);
+static_assert(
+    std::is_same_v<decltype(&InputReflex::Vulkan_SetLatencyMarker), decltype(&NvAPI_Vulkan_SetLatencyMarker)>);
+static_assert(std::is_same_v<decltype(&InputReflex::Vulkan_NotifyOutOfBandVkQueue),
+                             decltype(&NvAPI_Vulkan_NotifyOutOfBandVkQueue)>);
+
+// The timeline semaphore each game VkDevice waits on after its sleep (Vulkan_InitLowLatencyDevice)
+std::mutex g_vkSemaphoreMutex;
+std::map<VkDevice, VkSemaphore> g_vkSemaphores;
+
+VkSemaphore SemaphoreOf(VkDevice device)
+{
+    std::scoped_lock lock(g_vkSemaphoreMutex);
+    auto it = g_vkSemaphores.find(device);
+    return it != g_vkSemaphores.end() ? it->second : VK_NULL_HANDLE;
+}
+
+void DestroySemaphore(VkDevice device, VkSemaphore semaphore)
+{
+    if (auto destroy = (PFN_vkDestroySemaphore) VulkanHooks::GetDeviceProcAddr(device, "vkDestroySemaphore"))
+        destroy(device, semaphore, nullptr);
+}
 } // namespace
 
 void* InputReflex::ForInterface(unsigned int interfaceId)
@@ -69,6 +103,22 @@ void* InputReflex::ForInterface(unsigned int interfaceId)
         return &D3D_SetLatencyMarker;
     if (interfaceId == GET_ID(NvAPI_D3D12_SetAsyncFrameMarker))
         return &D3D12_SetAsyncFrameMarker;
+    if (interfaceId == GET_ID(NvAPI_Vulkan_InitLowLatencyDevice))
+        return &Vulkan_InitLowLatencyDevice;
+    if (interfaceId == GET_ID(NvAPI_Vulkan_DestroyLowLatencyDevice))
+        return &Vulkan_DestroyLowLatencyDevice;
+    if (interfaceId == GET_ID(NvAPI_Vulkan_GetSleepStatus))
+        return &Vulkan_GetSleepStatus;
+    if (interfaceId == GET_ID(NvAPI_Vulkan_SetSleepMode))
+        return &Vulkan_SetSleepMode;
+    if (interfaceId == GET_ID(NvAPI_Vulkan_Sleep))
+        return &Vulkan_Sleep;
+    if (interfaceId == GET_ID(NvAPI_Vulkan_GetLatency))
+        return &Vulkan_GetLatency;
+    if (interfaceId == GET_ID(NvAPI_Vulkan_SetLatencyMarker))
+        return &Vulkan_SetLatencyMarker;
+    if (interfaceId == GET_ID(NvAPI_Vulkan_NotifyOutOfBandVkQueue))
+        return &Vulkan_NotifyOutOfBandVkQueue;
 
     return nullptr;
 }
@@ -161,32 +211,20 @@ NvAPI_Status InputReflex::D3D12_SetAsyncFrameMarker(ID3D12CommandQueue* pCommand
         ToMarker(pSetAsyncFrameMarkerParams->frameID, pSetAsyncFrameMarkerParams->markerType)));
 }
 
-// Upstream's Vulkan side of the input: built only with LOW_LATENCY_INPUTS, which is not on yet (the Vulkan phase).
-#ifdef LOW_LATENCY_INPUTS
-#include <nvapi/NvApiHooks.h>
-#include <hooks/Vulkan_Hooks.h>
-#include <low_latency/low_latency_tech/ll_reflex_vk.h>
+// ---- Vulkan: the game's NvAPI_Vulkan_* Reflex ----
 
-static NvAPI_Status ToNvApi(InputResult result, const char* call)
-{
-    if (result == InputResult::Ok || result == InputResult::UsingDifferentInput ||
-        result == InputResult::NotEnoughReports)
-    {
-        return NVAPI_OK;
-    }
-
-    LOG_ERROR("{} result: {}", call, magic_enum::enum_name(result));
-
-    return result == InputResult::NoReadyOutput ? NVAPI_OK : NVAPI_ERROR;
-}
-
-// The game gets its own timeline semaphore, the output's sleep doesn't need the driver's nvapi Vulkan Reflex
+// The game gets its own timeline semaphore: the output's sleep doesn't need the driver's NvAPI Vulkan Reflex
 NvAPI_Status InputReflex::Vulkan_InitLowLatencyDevice(HANDLE vkDevice, HANDLE* signalSemaphoreHandle)
 {
-    if (!vkDevice || !signalSemaphoreHandle)
+    if (vkDevice == nullptr || signalSemaphoreHandle == nullptr)
         return NVAPI_INVALID_ARGUMENT;
 
-    if (vkSemaphore == VK_NULL_HANDLE)
+    const auto device = (VkDevice) vkDevice;
+    std::scoped_lock lock(g_vkSemaphoreMutex);
+
+    auto& semaphore = g_vkSemaphores[device];
+
+    if (semaphore == VK_NULL_HANDLE)
     {
         VkSemaphoreTypeCreateInfo timelineInfo {};
         timelineInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
@@ -198,59 +236,66 @@ NvAPI_Status InputReflex::Vulkan_InitLowLatencyDevice(HANDLE vkDevice, HANDLE* s
         createInfo.pNext = &timelineInfo;
 
         if (VulkanHooks::o_vkCreateSemaphore == nullptr ||
-            VulkanHooks::o_vkCreateSemaphore((VkDevice) vkDevice, &createInfo, nullptr, &vkSemaphore) != VK_SUCCESS)
+            VulkanHooks::o_vkCreateSemaphore(device, &createInfo, nullptr, &semaphore) != VK_SUCCESS)
         {
-            LOG_ERROR("Can't create the Reflex semaphore");
+            g_vkSemaphores.erase(device);
+            LOG_ERROR("Can't create the game's Reflex semaphore");
             return NVAPI_ERROR;
         }
+
+        LOG_INFO("The game's NvAPI Vulkan Reflex is an input: its sleep's semaphore is ours");
     }
 
-    *signalSemaphoreHandle = (HANDLE) vkSemaphore;
+    *signalSemaphoreHandle = (HANDLE) semaphore;
     return NVAPI_OK;
 }
 
 NvAPI_Status InputReflex::Vulkan_DestroyLowLatencyDevice(HANDLE vkDevice)
 {
-    if (!vkDevice)
+    if (vkDevice == nullptr)
         return NVAPI_INVALID_ARGUMENT;
 
-    if (vkSemaphore != VK_NULL_HANDLE)
-    {
-        if (auto destroy =
-                (PFN_vkDestroySemaphore) VulkanHooks::GetDeviceProcAddr((VkDevice) vkDevice, "vkDestroySemaphore"))
-        {
-            destroy((VkDevice) vkDevice, vkSemaphore, nullptr);
-        }
+    ForgetVulkanDevice((VkDevice) vkDevice);
+    return NVAPI_OK;
+}
 
-        vkSemaphore = VK_NULL_HANDLE;
+void InputReflex::ForgetVulkanDevice(VkDevice device)
+{
+    VkSemaphore semaphore = VK_NULL_HANDLE;
+
+    {
+        std::scoped_lock lock(g_vkSemaphoreMutex);
+
+        if (auto it = g_vkSemaphores.find(device); it != g_vkSemaphores.end())
+        {
+            semaphore = it->second;
+            g_vkSemaphores.erase(it);
+        }
     }
 
-    return NVAPI_OK;
+    if (semaphore != VK_NULL_HANDLE)
+        DestroySemaphore(device, semaphore);
 }
 
 NvAPI_Status InputReflex::Vulkan_GetSleepStatus(HANDLE vkDevice,
                                                 NV_VULKAN_GET_SLEEP_STATUS_PARAMS* pGetSleepStatusParams)
 {
-    if (!vkDevice || !pGetSleepStatusParams)
+    if (vkDevice == nullptr || pGetSleepStatusParams == nullptr)
         return NVAPI_INVALID_ARGUMENT;
 
     SleepParams sleepParams {};
-
     auto result = InputCommon::get_sleep_status(vulkanContext, (IUnknown*) vkDevice, &sleepParams);
-
-    if (result == InputResult::Ok || result == InputResult::UsingDifferentInput)
-    {
-        pGetSleepStatusParams->bLowLatencyMode = sleepParams.low_latency_enabled;
-        return NVAPI_OK;
-    }
-
-    return ToNvApi(result, "get_sleep_status");
+    pGetSleepStatusParams->bLowLatencyMode = sleepParams.low_latency_enabled;
+    return ToNvApi(result);
 }
 
 NvAPI_Status InputReflex::Vulkan_SetSleepMode(HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* pSetSleepModeParams)
 {
-    if (!vkDevice || !pSetSleepModeParams)
+    if (vkDevice == nullptr || pSetSleepModeParams == nullptr)
         return NVAPI_INVALID_ARGUMENT;
+
+    ReflexHooks::preVkSetSleepMode(vkDevice, pSetSleepModeParams->bLowLatencyMode != 0,
+                                   ReflexHooks::isGameCall(_ReturnAddress()));
 
     SleepMode sleepMode {};
     sleepMode.low_latency_enabled = pSetSleepModeParams->bLowLatencyMode;
@@ -258,33 +303,45 @@ NvAPI_Status InputReflex::Vulkan_SetSleepMode(HANDLE vkDevice, NV_VULKAN_SET_SLE
     sleepMode.minimum_interval_us = pSetSleepModeParams->minimumIntervalUs;
     sleepMode.use_markers_to_optimize = true;
 
-    return ToNvApi(InputCommon::set_sleep_mode(vulkanContext, (IUnknown*) vkDevice, &sleepMode), "set_sleep_mode");
+    return ToNvApi(InputCommon::set_sleep_mode(vulkanContext, (IUnknown*) vkDevice, &sleepMode));
 }
 
 NvAPI_Status InputReflex::Vulkan_Sleep(HANDLE vkDevice, NvU64 signalValue)
 {
-    if (!vkDevice)
+    if (vkDevice == nullptr)
         return NVAPI_INVALID_ARGUMENT;
 
-    auto result = InputCommon::sleep(vulkanContext, (IUnknown*) vkDevice);
+    const auto device = (VkDevice) vkDevice;
+    const auto semaphore = SemaphoreOf(device);
 
-    // The game waits for it whatever the output did
-    if (vkSemaphore != VK_NULL_HANDLE && VulkanHooks::o_vkSignalSemaphore != nullptr)
+    // The game made its low latency device before our hooks: its semaphore is the driver's, and only the driver's Sleep
+    // signals it (the game would wait for a value that never comes). Its mode went to InputCommon's output as usual.
+    // fakenvapi's Sleep is this one (nvapi_calls.cpp): nothing else signals there.
+    if (semaphore == VK_NULL_HANDLE)
     {
-        VkSemaphoreSignalInfo signalInfo {};
-        signalInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
-        signalInfo.semaphore = vkSemaphore;
-        signalInfo.value = signalValue;
+        static std::atomic_bool logged = false;
 
-        VulkanHooks::o_vkSignalSemaphore((VkDevice) vkDevice, &signalInfo);
+        if (fakenvapi::isUsingAsMainNvapi())
+            return NVAPI_OK;
+
+        if (!logged.exchange(true))
+            LOG_WARN("The game's NvAPI Vulkan Reflex semaphore is the driver's: its Sleep goes to the driver");
+
+        return ReflexHooks::nvapiVkSleep(vkDevice, signalValue);
     }
 
-    return ToNvApi(result, "sleep");
+    ReflexHooks::preVkSleep(vkDevice, ReflexHooks::isGameCall(_ReturnAddress()));
+    auto result = InputCommon::sleep(vulkanContext, (IUnknown*) vkDevice);
+
+    // The game waits for it whatever the output did (another input's turn, no output yet)
+    VulkanHooks::SignalTimelineSemaphore(device, semaphore, signalValue);
+
+    return ToNvApi(result);
 }
 
 NvAPI_Status InputReflex::Vulkan_GetLatency(HANDLE vkDevice, NV_VULKAN_LATENCY_RESULT_PARAMS* pGetLatencyParams)
 {
-    if (!vkDevice || !pGetLatencyParams)
+    if (vkDevice == nullptr || pGetLatencyParams == nullptr)
         return NVAPI_INVALID_ARGUMENT;
 
     if (pGetLatencyParams->version != NV_VULKAN_LATENCY_RESULT_PARAMS_VER1)
@@ -293,44 +350,69 @@ NvAPI_Status InputReflex::Vulkan_GetLatency(HANDLE vkDevice, NV_VULKAN_LATENCY_R
         return NVAPI_INCOMPATIBLE_STRUCT_VERSION;
     }
 
-    FrameReport reports[NVAPI_BUFFER_SIZE] {};
-    auto result = InputCommon::get_frame_reports(vulkanContext, (IUnknown*) vkDevice, reports);
+    // The D3D report (the driver's with a Reflex output, else the markers'), copied field by field into the Vulkan
+    // layout. Static and big: not freed, like the others.
+    static std::mutex reportMutex;
+    static NV_LATENCY_RESULT_PARAMS* report = new NV_LATENCY_RESULT_PARAMS();
 
-    // The Vulkan reports are the D3D ones without the GPU times
-    for (size_t i = 0; i < NVAPI_BUFFER_SIZE; i++)
+    std::scoped_lock lock(reportMutex);
+    *report = {};
+    report->version = NV_LATENCY_RESULT_PARAMS_VER;
+
+    auto result = InputCommon::get_latency(vulkanContext, (IUnknown*) vkDevice, report);
+
+    for (size_t i = 0; i < std::size(report->frameReport); i++)
     {
-        auto& reportOut = pGetLatencyParams->frameReport[i];
-        std::memset(&reportOut, 0, sizeof(reportOut));
-        std::memcpy(&reportOut, &reports[i], offsetof(FrameReport, gpuActiveRenderTimeUs));
+        const auto& from = report->frameReport[i];
+        auto& to = pGetLatencyParams->frameReport[i];
+
+        to = {};
+        to.frameID = from.frameID;
+        to.inputSampleTime = from.inputSampleTime;
+        to.simStartTime = from.simStartTime;
+        to.simEndTime = from.simEndTime;
+        to.renderSubmitStartTime = from.renderSubmitStartTime;
+        to.renderSubmitEndTime = from.renderSubmitEndTime;
+        to.presentStartTime = from.presentStartTime;
+        to.presentEndTime = from.presentEndTime;
+        to.driverStartTime = from.driverStartTime;
+        to.driverEndTime = from.driverEndTime;
+        to.osRenderQueueStartTime = from.osRenderQueueStartTime;
+        to.osRenderQueueEndTime = from.osRenderQueueEndTime;
+        to.gpuRenderStartTime = from.gpuRenderStartTime;
+        to.gpuRenderEndTime = from.gpuRenderEndTime;
     }
 
-    return ToNvApi(result, "get_frame_reports");
+    return ToNvApi(result);
 }
 
 NvAPI_Status InputReflex::Vulkan_SetLatencyMarker(HANDLE vkDevice,
                                                   NV_VULKAN_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams)
 {
-    if (!vkDevice || !pSetLatencyMarkerParams)
+    if (vkDevice == nullptr || pSetLatencyMarkerParams == nullptr)
         return NVAPI_INVALID_ARGUMENT;
 
-    MarkerParams markerParams {};
-    markerParams.frame_id = pSetLatencyMarkerParams->frameID;
-    markerParams.marker_type = (MarkerType) pSetLatencyMarkerParams->markerType; // requires enums to match
+    const auto frameId = pSetLatencyMarkerParams->frameID;
+    const auto type = (uint32_t) pSetLatencyMarkerParams->markerType; // NVAPI's D3D and Vulkan ordinals match
 
-    return ToNvApi(InputCommon::set_marker(vulkanContext, (IUnknown*) vkDevice, markerParams), "set_marker");
+    ReflexHooks::preVkMarker(vkDevice, frameId, type, ReflexHooks::isGameCall(_ReturnAddress()));
+
+    MarkerParams markerParams {};
+    markerParams.frame_id = frameId;
+    markerParams.marker_type = (MarkerType) type;
+
+    return ToNvApi(InputCommon::set_marker(vulkanContext, (IUnknown*) vkDevice, markerParams));
 }
 
 NvAPI_Status InputReflex::Vulkan_NotifyOutOfBandVkQueue(HANDLE vkDevice, HANDLE queueHandle,
                                                         NV_VULKAN_OUT_OF_BAND_QUEUE_TYPE queueType)
 {
-    if (!vkDevice || !queueHandle)
+    if (vkDevice == nullptr || queueHandle == nullptr)
         return NVAPI_INVALID_ARGUMENT;
 
-    // Only the Reflex output has a use for it, the queue types match
+    // Only the VK_NV_low_latency2 output has a use for it, the queue types match
     if (auto reflex = InputCommon::reflex_vk_output())
         reflex->notify_out_of_band((VkQueue) queueHandle, (VkOutOfBandQueueTypeNV) queueType);
 
     return NVAPI_OK;
 }
-
-#endif // LOW_LATENCY_INPUTS

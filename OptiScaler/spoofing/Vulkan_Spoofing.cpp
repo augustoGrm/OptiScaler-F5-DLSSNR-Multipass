@@ -514,6 +514,18 @@ VkResult VulkanSpoofing::hkvkCreateDevice(VkPhysicalDevice physicalDevice, VkDev
             newExtensionList.push_back(VK_NV_LOW_LATENCY_EXTENSION_NAME);
         }
 
+        // InputCommon's Reflex output on Vulkan (low_latency/low_latency_tech/ll_reflex_vk.h): VK_NV_low_latency2 signals
+        // a timeline semaphore in its sleep (VulkanHooks switches the feature on for it). A game with Vulkan Reflex may
+        // have it already.
+        if (vkDeviceExtensions.contains(std::string(VK_NV_LOW_LATENCY_2_EXTENSION_NAME)) &&
+            vkDeviceExtensions.contains(std::string(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME)) &&
+            std::none_of(newExtensionList.begin(), newExtensionList.end(),
+                         [](const char* name) { return std::strcmp(name, VK_NV_LOW_LATENCY_2_EXTENSION_NAME) == 0; }))
+        {
+            LOG_DEBUG("  Adding {}", VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
+            newExtensionList.push_back(VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
+        }
+
         if (vkDeviceExtensions.contains(std::string(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME)))
         {
             LOG_DEBUG("  Adding {}", VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);

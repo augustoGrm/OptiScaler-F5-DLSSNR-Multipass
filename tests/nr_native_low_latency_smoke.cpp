@@ -713,7 +713,7 @@ int main()
         CHECK(history.Contains(xefg::FrameIdHistory::kSize + 1));
     }
 
-    // A bridged Vulkan game's own Reflex feeding XeFG's XeLL (native/XefgReflexRule.h)
+    // XeFG on the Vulkan present bridge, and the sleep modes (native/XefgReflexRule.h)
     {
         using namespace native::xefgreflex;
 
@@ -724,32 +724,7 @@ int main()
         CHECK(!ShouldForward(true, true, true));   // dxvk with no Vulkan bridge: the D3D hooks and dxvk own it
         CHECK(!ShouldForward(true, false, true));
 
-        // VkLatencyMarkerNV against NVAPI's NV_LATENCY_MARKER_TYPE (NVAPI has PC_LATENCY_PING at 8)
-        static_assert(VK_LATENCY_MARKER_SIMULATION_START_NV == 0 && VK_LATENCY_MARKER_TRIGGER_FLASH_NV == 7);
-        static_assert(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV == 8 &&
-                      VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV == 11);
-        uint32_t nv = 99;
-
-        for (uint32_t vk = 0; vk <= 7; ++vk)
-        {
-            CHECK(NvApiMarkerFromVulkanNV(vk, &nv) && nv == vk);
-        }
-
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV, &nv) && nv == 9);
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_END_NV, &nv) && nv == 10);
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_START_NV, &nv) && nv == 11);
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV, &nv) && nv == kNvApiLastMarker);
-        CHECK(!NvApiMarkerFromVulkanNV(12, &nv));
-        CHECK(!NvApiMarkerFromVulkanNV(0x7FFFFFFF, &nv));
-
-        // XeLL takes the six frame markers only
-        for (uint32_t marker = 0; marker <= kNvApiLastMarker; ++marker)
-        {
-            CHECK(XellTakesMarker(marker) == (marker <= 5));
-        }
-
-        // The sleep mode: XeLL keeps the game's values (the cap replaces the interval when one is set), the driver's is
-        // all off, the interval too (only one of the two may wait)
+        // The sleep mode: XeLL keeps the game's values (the cap replaces the interval when one is set)
         SleepMode game;
         game.lowLatency = true;
         game.boost = true;
@@ -760,8 +735,6 @@ int main()
         CHECK(xell.lowLatency && xell.boost && xell.minimumIntervalUs == 16667 && xell.useMarkersToOptimize);
         xell = SleepModeForOutput(game, 8333, true, false);
         CHECK(xell.lowLatency && xell.minimumIntervalUs == 8333);
-        CHECK(!kDriverSleepMode.lowLatency && !kDriverSleepMode.boost && kDriverSleepMode.minimumIntervalUs == 0);
-        CHECK(!kDriverSleepMode.useMarkersToOptimize);
 
         // The rule the D3D hooks share: XeFG is the output -> low latency on whatever the game says, the cap in place
         // of the game's interval; only fakenvapi's Force Disable turns it off; no XeFG -> the game's mode as it is
@@ -1126,27 +1099,6 @@ int main()
         OutputInputs xellChosen = nvidia;
         xellChosen.xefgLatency = XefgLatency::XeLL;
         CHECK(EffectiveXefgLatency(xellChosen, false, false) == XefgLatency::XeLL);
-
-        // Routing per call. XeLL keeps what it had: everything, driver nothing.
-        for (const auto call : { Call::SetSleepMode, Call::Sleep, Call::Marker, Call::GetLatency })
-        {
-            const auto r = RouteFor(XefgLatency::XeLL, call);
-            CHECK(r.xell && !r.driver);
-        }
-
-        for (const auto side : { XefgLatency::Reflex, XefgLatency::AntiLag2 })
-        {
-            // The mode goes to both (XeLL's with low latency off), the Sleep to the driver alone (XeLL never sleeps),
-            // markers to both (XeLL's frame ID bookkeeping), the latency report from the driver
-            auto r = RouteFor(side, Call::SetSleepMode);
-            CHECK(r.xell && r.driver);
-            r = RouteFor(side, Call::Sleep);
-            CHECK(!r.xell && r.driver);
-            r = RouteFor(side, Call::Marker);
-            CHECK(r.xell && r.driver);
-            r = RouteFor(side, Call::GetLatency);
-            CHECK(!r.xell && r.driver);
-        }
 
         // The two sleep modes
         SleepMode game;

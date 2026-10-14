@@ -1,7 +1,4 @@
 #include "pch.h"
-
-// Upstream's low latency input layer: built only with LOW_LATENCY_INPUTS, which is not on yet.
-#ifdef LOW_LATENCY_INPUTS
 #include "ll_reflex_vk.h"
 
 #include <hooks/Vulkan_Hooks.h>
@@ -12,14 +9,15 @@ bool ReflexVk::init(IUnknown* pDevice)
     if (pDevice == nullptr)
         return false;
 
+    auto vkDevice = (VkDevice) pDevice;
+
     if (VulkanHooks::o_vkSetLatencySleepModeNV == nullptr || VulkanHooks::o_vkLatencySleepNV == nullptr ||
-        VulkanHooks::o_vkSetLatencyMarkerNV == nullptr || VulkanHooks::o_vkCreateSemaphore == nullptr)
+        VulkanHooks::o_vkSetLatencyMarkerNV == nullptr || VulkanHooks::o_vkCreateSemaphore == nullptr ||
+        !VulkanHooks::LowLatency2On(vkDevice))
     {
         LOG_INFO("Reflex needs VK_NV_low_latency2");
         return false;
     }
-
-    auto vkDevice = (VkDevice) pDevice;
 
     o_WaitSemaphores = (PFN_vkWaitSemaphores) VulkanHooks::GetDeviceProcAddr(vkDevice, "vkWaitSemaphores");
 
@@ -77,7 +75,9 @@ VkSwapchainKHR ReflexVk::swapchain()
     if (device == VK_NULL_HANDLE)
         return VK_NULL_HANDLE;
 
-    return VulkanHooks::LowLatencySwapchain();
+    // The device's newest swapchain, once it has the latency mode (VulkanHooks chains it in on such a device)
+    const auto latency = VulkanHooks::LatencySwapchainOf(device);
+    return latency.latencyMode ? latency.swapchain : VK_NULL_HANDLE;
 }
 
 bool ReflexVk::is_enabled()
@@ -183,6 +183,56 @@ void ReflexVk::set_async_marker(IUnknown* pCommandQueue, const MarkerParams& mar
     set_marker(nullptr, marker_params);
 }
 
+NvAPI_Status ReflexVk::get_latency(NV_LATENCY_RESULT_PARAMS* latency_params)
+{
+    if (latency_params == nullptr)
+        return NVAPI_INVALID_ARGUMENT;
+
+    // The newest reports, oldest first, in NVAPI's layout (64 of them, the empty ones first)
+    VkLatencyTimingsFrameReportNV timings[NVAPI_BUFFER_SIZE] {};
+
+    for (auto& timing : timings)
+        timing.sType = VK_STRUCTURE_TYPE_LATENCY_TIMINGS_FRAME_REPORT_NV;
+
+    VkGetLatencyMarkerInfoNV info {};
+    info.sType = VK_STRUCTURE_TYPE_GET_LATENCY_MARKER_INFO_NV;
+    info.timingCount = NVAPI_BUFFER_SIZE;
+    info.pTimings = timings;
+
+    if (get_latency(&info) != VK_SUCCESS)
+        return NVAPI_ERROR;
+
+    const auto count = std::min<uint32_t>(info.timingCount, NVAPI_BUFFER_SIZE);
+    const auto first = NVAPI_BUFFER_SIZE - count;
+
+    for (uint32_t i = 0; i < NVAPI_BUFFER_SIZE; i++)
+    {
+        auto& to = latency_params->frameReport[i];
+        to = {};
+
+        if (i < first)
+            continue;
+
+        const auto& from = timings[i - first];
+        to.frameID = from.presentID;
+        to.inputSampleTime = from.inputSampleTimeUs;
+        to.simStartTime = from.simStartTimeUs;
+        to.simEndTime = from.simEndTimeUs;
+        to.renderSubmitStartTime = from.renderSubmitStartTimeUs;
+        to.renderSubmitEndTime = from.renderSubmitEndTimeUs;
+        to.presentStartTime = from.presentStartTimeUs;
+        to.presentEndTime = from.presentEndTimeUs;
+        to.driverStartTime = from.driverStartTimeUs;
+        to.driverEndTime = from.driverEndTimeUs;
+        to.osRenderQueueStartTime = from.osRenderQueueStartTimeUs;
+        to.osRenderQueueEndTime = from.osRenderQueueEndTimeUs;
+        to.gpuRenderStartTime = from.gpuRenderStartTimeUs;
+        to.gpuRenderEndTime = from.gpuRenderEndTimeUs;
+    }
+
+    return count > 0 ? NVAPI_OK : NVAPI_ERROR;
+}
+
 VkResult ReflexVk::get_latency(VkGetLatencyMarkerInfoNV* latency_info)
 {
     auto current = swapchain();
@@ -206,4 +256,3 @@ void ReflexVk::notify_out_of_band(VkQueue queue, VkOutOfBandQueueTypeNV queue_ty
     VulkanHooks::o_vkQueueNotifyOutOfBandNV(queue, &info);
 }
 
-#endif // LOW_LATENCY_INPUTS

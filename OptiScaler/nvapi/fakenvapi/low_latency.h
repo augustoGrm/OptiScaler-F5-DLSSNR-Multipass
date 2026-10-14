@@ -21,27 +21,17 @@ class LowLatency
     // Once set, it will be used for all init attempts
     LowLatencyMode forced_low_latency_tech = LowLatencyMode::None;
 
-    // A context that runs Anti-Lag 2 (D3D) or Anti-Lag Vk (Vulkan) and nothing else (use_only): its tech could not start.
-    // Read from other threads (fakenvapi::companionFailed).
-    std::atomic<bool> forced_init_failed = false;
-
-    // Simulation starts of the last two frames, for the report's GPU frame time: per context (two contexts can run at
-    // once with XeFG's Anti-Lag 2 output)
+    // Simulation starts of the last two frames, for the report's GPU frame time
     uint64_t last_sim_start = 0;
     uint64_t second_last_sim_start = 0;
 
     void update_effective_fg_state();
     void update_enabled_override();
 
-    // D3D
+    // D3D (fakenvapi's Vulkan Reflex is InputCommon's, nvapi_calls.cpp)
     bool update_low_latency_tech(IUnknown* pDevice);
     void get_latency_result(NV_LATENCY_RESULT_PARAMS* pGetLatencyParams);
     void add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams);
-
-    // Vulkan
-    bool update_low_latency_tech(HANDLE vkDevice);
-    void get_latency_result(NV_VULKAN_LATENCY_RESULT_PARAMS* pGetLatencyParams);
-    void add_marker_to_report(NV_VULKAN_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams);
 
   public:
     LowLatency() = default;
@@ -57,11 +47,6 @@ class LowLatency
                 current_tech->set_fg_type(interpolated, frame_id);
         }
     }
-    // For a second context next to the main one (fakenvapi::companion*): it runs `tech` (AntiLag2 on D3D, AntiLagVk on
-    // Vulkan) and nothing else, never falling back to another, and does not try again once the tech could not start. The
-    // tech is made by the first call that brings a device. A tech it already has is let go.
-    void use_only(LowLatencyMode tech);
-    bool init_failed() const { return forced_init_failed.load(); }
     bool get_low_latency_tech_context(void** low_latency_tech_context, LowLatencyMode* low_latency_tech);
     bool set_low_latency_tech_mode(IUnknown* device, LowLatencyMode low_latency_tech);
 
@@ -75,13 +60,6 @@ class LowLatency
     NvAPI_Status SetAsyncFrameMarker(ID3D12CommandQueue* pCommandQueue,
                                      NV_ASYNC_FRAME_MARKER_PARAMS* pSetAsyncFrameMarkerParams);
     NvAPI_Status GetLatency(IUnknown* pDev, NV_LATENCY_RESULT_PARAMS* pGetLatencyParams);
-
-    // Vulkan
-    NvAPI_Status Sleep(HANDLE vkDevice);
-    NvAPI_Status SetSleepMode(HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* pSetSleepModeParams);
-    NvAPI_Status GetSleepStatus(HANDLE vkDevice, NV_VULKAN_GET_SLEEP_STATUS_PARAMS* pGetSleepStatusParams);
-    NvAPI_Status SetLatencyMarker(HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams);
-    NvAPI_Status GetLatency(HANDLE vkDevice, NV_VULKAN_LATENCY_RESULT_PARAMS* pGetLatencyParams);
 };
 
 // This is a wrapper for the entire LowLatency abstraction layer

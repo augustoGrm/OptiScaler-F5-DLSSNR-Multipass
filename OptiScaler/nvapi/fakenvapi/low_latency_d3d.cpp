@@ -21,26 +21,6 @@ bool LowLatency::update_low_latency_tech(IUnknown* pDevice)
 
     if (!currently_active_tech.load())
     {
-        // The second context (fakenvapi::companion*): Anti-Lag 2 next to XeFG's XeLL, no other tech and no second try
-        if (forced_low_latency_tech == LowLatencyMode::AntiLag2)
-        {
-            if (forced_init_failed)
-                return false;
-
-            auto new_tech_al2 = std::make_shared<AntiLag2>();
-            if (new_tech_al2->init(pDevice))
-            {
-                LOG_INFO("LowLatency algo: FSR Anti-Lag 2.0 (next to XeFG's XeLL)");
-                new_tech_al2->set_sleep_mode(&last_sleep_mode);
-                currently_active_tech.store(std::move(new_tech_al2));
-                return true;
-            }
-
-            forced_init_failed = true;
-            LOG_WARN("FSR Anti-Lag 2.0 could not start next to XeFG's XeLL, no low latency from it");
-            return false;
-        }
-
         if (forced_low_latency_tech == LowLatencyMode::XeLL)
         {
             auto new_tech_xell = std::make_shared<XeLL>();

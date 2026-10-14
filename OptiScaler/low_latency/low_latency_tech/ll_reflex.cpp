@@ -4,31 +4,38 @@
 #include <hooks/LibraryLoad_Hooks.h>
 #include <nvapi/NvApiHooks.h>
 
-bool Reflex::init(IUnknown* pDevice)
+bool ReflexDriverReady()
 {
-    if (pDevice == nullptr)
-        return false;
-
     if (NvApiHooks::o_NvAPI_QueryInterface == nullptr)
         LibraryLoadHooks::LoadNvApi();
 
     // fakenvapi's Reflex is a translation of its own, only the driver's is Reflex
     if (NvApiHooks::o_NvAPI_QueryInterface == nullptr || fakenvapi::isUsingAsMainNvapi())
+        return false;
+
+    auto queryInterface = NvApiHooks::o_NvAPI_QueryInterface;
+
+    // The outputs' calls go to the driver past the hooks (ReflexHooks::nvapi*)
+    if (!ReflexHooks::ensureTable(queryInterface))
+        return false;
+
+    // NvAPI_Initialize is counted: ours is harmless next to the game's
+    auto initialize = GET_INTERFACE(NvAPI_Initialize, queryInterface);
+    return initialize != nullptr && initialize() == NVAPI_OK;
+}
+
+bool Reflex::init(IUnknown* pDevice)
+{
+    if (pDevice == nullptr)
+        return false;
+
+    if (!ReflexDriverReady())
     {
         LOG_INFO("Reflex needs NVIDIA's nvapi");
         return false;
     }
 
     auto queryInterface = NvApiHooks::o_NvAPI_QueryInterface;
-
-    // Its calls go to the driver past the hooks (ReflexHooks::nvapi*)
-    if (!ReflexHooks::ensureTable(queryInterface))
-        return false;
-
-    // A game without Reflex might never have initialized nvapi
-    if (auto initialize = GET_INTERFACE(NvAPI_Initialize, queryInterface);
-        initialize == nullptr || initialize() != NVAPI_OK)
-        return false;
 
     o_SetAsyncFrameMarker = GET_INTERFACE(NvAPI_D3D12_SetAsyncFrameMarker, queryInterface);
     o_GetSleepStatus = GET_INTERFACE(NvAPI_D3D_GetSleepStatus, queryInterface);

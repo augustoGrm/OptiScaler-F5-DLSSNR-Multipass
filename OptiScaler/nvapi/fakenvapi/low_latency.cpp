@@ -50,13 +50,6 @@ bool LowLatency::deinit_current_tech()
     return false;
 }
 
-void LowLatency::use_only(LowLatencyMode tech)
-{
-    forced_low_latency_tech = tech;
-    forced_init_failed = false;
-    deinit_current_tech();
-}
-
 bool LowLatency::get_low_latency_tech_context(void** low_latency_context, LowLatencyMode* low_latency_tech)
 {
     if (auto current_tech = currently_active_tech.load())

@@ -133,7 +133,8 @@ class InputCommon
     static bool deinit_current_tech();
     static bool init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMode, const lloutput::OutputPlan& plan);
     static LowLatencyMode to_mode(lloutput::Tech tech);
-    static lloutput::OutputPlan plan_output();
+    // `api`: the call's device's (XeLL is D3D12's)
+    static lloutput::OutputPlan plan_output(API api);
     static void use_output(std::shared_ptr<LowLatencyTech> tech);
     static SleepMode shaped_sleep_mode(lloutput::Role role);
     static void apply_xefg_xell_mode(const LowLatencyTech* output);
@@ -214,7 +215,7 @@ class InputCommon
     // to its device, for a device that is gone.
     static void stop_output(bool release = true);
 
-    // Every present of a D3D game (ReflexHooks::update): Force State, and who keeps OptiScaler's frame cap
+    // Once per frame of every game (ReflexHooks::update): Force State, and who keeps OptiScaler's frame cap
     // (OutputRule.h CapForGame) with the rate it goes in at.
     static void update();
 
@@ -239,19 +240,15 @@ class InputCommon
     // OptiScaler's own low latency starts or stops being an input (native::lowlatency)
     static void set_optiscaler_running(bool running);
 
-    // OptiScaler's own calls moved to a Vulkan device (dxvk's, with XeFG's Output Reflex or Anti-Lag 2): no longer an
-    // input here, and the output its D3D calls started stops (no low latency left on in the bridge's D3D12 device)
-    static void optiscaler_left_d3d();
-
-    // The game's device is being released: an output on it stops without a call to it
-    static void device_released(IUnknown* pDevice);
+    // The game's device is being released: an output on it stops, without a call to it unless it is still `alive` (a
+    // VkDevice before vkDestroyDevice: the output's own objects on it go first)
+    static void device_released(IUnknown* pDevice, bool alive = false);
 
     // The output's own context (an Anti-Lag 2 context for FSR FG, the XeLL one), null without one
     static void* output_context();
     // The output lowers latency now (Force State included)
     static bool output_enabled();
-    // What lowers latency for the menu and the logs: InputCommon's output, else (a Vulkan game, until its calls are
-    // InputCommon's too) fakenvapi's own context
+    // What lowers latency for the menu and the logs: InputCommon's output (None without one)
     static LowLatencyMode current_mode();
     static bool low_latency_active();
     // The output's latency report (the driver's for Reflex, `estimated` false; the inputs' markers for the others)
@@ -263,12 +260,6 @@ class InputCommon
 
     // XeFG's XeLL contexts made so far: a new one needs the sleep mode again
     static uint32_t xefg_xell_generation() { return xefg_generation.load(); }
-    // A Vulkan game's own Reflex on the Vulkan present bridge goes to XeFG's XeLL on the bridge's D3D12 device
-    // (hooks/Reflex_Hooks.cpp shapes it). Each answers NVAPI_ERROR without XeFG's XeLL.
-    static NvAPI_Status xefg_xell_set_sleep_mode(const native::xefgreflex::SleepMode& mode);
-    static NvAPI_Status xefg_xell_sleep();
-    static void xefg_xell_marker(ID3D12Device* device, uint64_t frame_id, uint32_t nvapiMarker);
-    static NvAPI_Status xefg_xell_latency(NV_LATENCY_RESULT_PARAMS* params);
 
     // The GPU vendor's own low latency output
     static LowLatencyMode default_output(API api);
@@ -288,7 +279,7 @@ class InputCommon
     // The XeLL output's context, for OptiScaler's XeFG
     static xell_context_handle_t xell_output_context();
 
-    // The Vulkan Reflex output, for passing the game's VK_NV_low_latency2 calls through
+    // The Vulkan Reflex output on VK_NV_low_latency2, for passing the game's own calls of it through
     static std::shared_ptr<ReflexVk> reflex_vk_output();
 
     // The XeLL context OptiScaler's XeFG paces with (see xefg_xell), released after XeFG's context is destroyed

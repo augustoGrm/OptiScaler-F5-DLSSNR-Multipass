@@ -8,6 +8,32 @@ class VulkanHooks
     static PFN_vkSignalSemaphore o_vkSignalSemaphore;
     static PFN_vkAntiLagUpdateAMD o_vkAntiLagUpdateAMD;
 
+    // The driver's VK_NV_low_latency2 (InputCommon's Reflex output on Vulkan, low_latency_tech/ll_reflex_vk.h, and the
+    // game's own calls passed on): resolved on a device made with the extension, or from the game's own lookup of it
+    static PFN_vkSetLatencySleepModeNV o_vkSetLatencySleepModeNV;
+    static PFN_vkLatencySleepNV o_vkLatencySleepNV;
+    static PFN_vkSetLatencyMarkerNV o_vkSetLatencyMarkerNV;
+    static PFN_vkGetLatencyTimingsNV o_vkGetLatencyTimingsNV;
+    static PFN_vkQueueNotifyOutOfBandNV o_vkQueueNotifyOutOfBandNV;
+
+    // vkGetDeviceProcAddr past our hook
+    static PFN_vkVoidFunction GetDeviceProcAddr(VkDevice device, const char* name);
+
+    // The device was created with VK_NV_low_latency2 and the timeline semaphore feature on (its sleep signals one), and
+    // not by dxvk or vkd3d-proton for a D3D device (those run the D3D game's own Reflex themselves)
+    static bool LowLatency2On(VkDevice device);
+
+    // The device's newest swapchain and whether it was made with VK_NV_low_latency2's latency mode (ours chained in, or
+    // the game's own); VK_NULL_HANDLE when it has none
+    struct LatencySwapchain
+    {
+        VkSwapchainKHR swapchain = VK_NULL_HANDLE;
+        bool latencyMode = false;
+    };
+    static LatencySwapchain LatencySwapchainOf(VkDevice device);
+    // The game called VK_NV_low_latency2 on this swapchain: it has latency mode (made before our hooks, or by the game)
+    static void NoteLatencySwapchain(VkDevice device, VkSwapchainKHR swapchain);
+
     // The device was created with the timeline semaphore feature on (the game's own, or switched on for Optical F5Low).
     static bool TimelineSemaphoresOn(VkDevice device);
 

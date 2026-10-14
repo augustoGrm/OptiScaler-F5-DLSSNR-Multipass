@@ -1,7 +1,4 @@
 #include "pch.h"
-
-// Upstream's low latency input layer: built only with LOW_LATENCY_INPUTS, which is not on yet.
-#ifdef LOW_LATENCY_INPUTS
 #include "input_antilag_vk.h"
 
 static void LogResult(InputResult result, const char* call)
@@ -59,5 +56,3 @@ void VKAPI_CALL InputAntiLagVk::AntiLagUpdate(VkDevice device, const VkAntiLagDa
 
     LogResult(InputCommon::set_marker(context, pDevice, markerParams), "set_marker");
 }
-
-#endif // LOW_LATENCY_INPUTS

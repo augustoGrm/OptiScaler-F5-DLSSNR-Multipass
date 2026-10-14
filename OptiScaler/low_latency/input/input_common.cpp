@@ -1,9 +1,10 @@
 #include "pch.h"
 
 // Upstream's low latency input layer, on OptiScaler's terms (OutputRule.h). Without LOW_LATENCY_INPUTS its inputs are
-// the game's D3D Reflex (input_reflex.cpp), OptiScaler's own low latency (native/NativeLowLatency.cpp) and the UE Low
-// Latency mod (input_uell.cpp); its outputs Reflex, Anti-Lag 2, XeLL (also XeFG's) and LatencyFlex. The game's XeLL
-// and Vulkan Reflex stay on our own hooks, and there is no Vulkan output yet.
+// the game's Reflex, D3D and Vulkan (input_reflex.cpp, input_reflex_vk.cpp), the game's Anti-Lag Vk
+// (input_antilag_vk.cpp), OptiScaler's own low latency (native/NativeLowLatency.cpp) and the UE Low Latency mod
+// (input_uell.cpp); its outputs Reflex (D3D, Vulkan's VK_NV_low_latency2 or NvAPI_Vulkan), Anti-Lag 2 / Anti-Lag Vk,
+// XeLL (also XeFG's) and LatencyFlex. The game's XeLL and D3D Anti-Lag 2 stay on our own hooks.
 
 #include <misc/IdentifyGpu.h>
 
@@ -14,6 +15,7 @@
 #include <low_latency/low_latency_tech/ll_latencyflex.h>
 #include <low_latency/low_latency_tech/ll_reflex.h>
 #include <low_latency/low_latency_tech/ll_reflex_vk.h>
+#include <low_latency/low_latency_tech/ll_reflex_nvapi_vk.h>
 #include <low_latency/low_latency_tech/ll_antilag_vk.h>
 #include <low_latency/low_latency_tech/ll_fps_limiter.h>
 #include <hooks/Vulkan_Hooks.h>
@@ -95,13 +97,47 @@ bool InputCommon::deinit_current_tech()
     return false;
 }
 
+// The driver's Reflex on a Vulkan device (OutputRule.h ChooseReflexVk): VK_NV_low_latency2 where the device has it,
+// else NvAPI_Vulkan's. nvapi is only asked when VK_NV_low_latency2 can't run.
+static std::shared_ptr<LowLatencyTech> MakeReflexVk(VkDevice device)
+{
+    const auto swapchain = VulkanHooks::LatencySwapchainOf(device);
+
+    lloutput::ReflexVkInputs in;
+    in.lowLatency2Device = VulkanHooks::LowLatency2On(device);
+    in.swapchainKnown = swapchain.swapchain != VK_NULL_HANDLE;
+    in.swapchainLatencyMode = swapchain.latencyMode;
+
+    if (lloutput::ChooseReflexVk(in) != lloutput::ReflexVkSurface::LowLatency2)
+    {
+        in.nvapiVulkan = ReflexDriverReady() && ReflexHooks::nvapiVulkanReady();
+        in.timelineSemaphores = VulkanHooks::TimelineSemaphoresOn(device);
+    }
+
+    switch (lloutput::ChooseReflexVk(in))
+    {
+    case lloutput::ReflexVkSurface::LowLatency2:
+        return std::make_shared<ReflexVk>();
+    case lloutput::ReflexVkSurface::NvApi:
+        return std::make_shared<ReflexNvApiVk>();
+    default:
+        LOG_INFO("Reflex on Vulkan: neither VK_NV_low_latency2 on this device nor NVIDIA's NvAPI Vulkan Reflex");
+        return nullptr;
+    }
+}
+
 bool InputCommon::init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMode, const lloutput::OutputPlan& plan)
 {
     if (currently_active_tech.load() || delay_deinit != 0)
         return false;
 
-    auto make = [](LowLatencyMode mode) -> std::shared_ptr<LowLatencyTech>
+    // A Vulkan device: Anti-Lag 2 is Anti-Lag Vk there, XeLL is D3D12's, Reflex the driver's Vulkan one (pDevice is the
+    // VkDevice as a token, never a COM interface)
+    auto make = [&](LowLatencyMode mode) -> std::shared_ptr<LowLatencyTech>
     {
+        if (api == API::Vulkan)
+            mode = for_api(mode, api);
+
         switch (mode)
         {
         case LowLatencyMode::XeLL:
@@ -109,6 +145,9 @@ bool InputCommon::init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMo
         case LowLatencyMode::AntiLag2:
             return std::make_shared<AntiLag2>();
         case LowLatencyMode::Reflex:
+            if (api == API::Vulkan)
+                return MakeReflexVk((VkDevice) pDevice);
+
             return std::make_shared<Reflex>();
         case LowLatencyMode::AntiLagVk:
             return std::make_shared<AntiLagVk>();
@@ -124,7 +163,8 @@ bool InputCommon::init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMo
     // The plan's outputs in order when the plan's first one is wanted (fakenvapi's Anti-Lag 2, XeLL, LatencyFlex)
     std::array<LowLatencyMode, 3> tries { desiredMode, LowLatencyMode::None, LowLatencyMode::None };
 
-    if (desiredMode == to_mode(plan.first()))
+    if (desiredMode == to_mode(plan.first()) ||
+        (api == API::Vulkan && desiredMode == for_api(to_mode(plan.first()), api)))
     {
         for (size_t i = 0; i < tries.size(); i++)
             tries[i] = to_mode(plan.tries[i]);
@@ -182,6 +222,9 @@ bool InputCommon::init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMo
     output_api = api;
     output_device = pDevice;
 
+    if (api == API::Vulkan)
+        LOG_INFO("Low latency output on the Vulkan device: {}", magic_enum::enum_name(activeOutput.load()));
+
     // XeFG needs XeLL in low latency mode, disabling it only stops sending the sleep and marker calls
     tech->set_forced_mode(xefg_paced());
     tech->set_low_latency_override(Config::Instance()->FN_ForceReflex.value_or_default());
@@ -207,12 +250,16 @@ LowLatencyMode InputCommon::to_mode(lloutput::Tech tech)
     }
 }
 
-lloutput::OutputPlan InputCommon::plan_output()
+lloutput::OutputPlan InputCommon::plan_output(API api)
 {
     auto& state = State::Instance();
 
+    // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
+    static const bool nvidiaGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::Nvidia;
+
     lloutput::OutputInputs in;
-    in.realNvapi = !fakenvapi::isUsingAsMainNvapi();
+    in.realNvapi = nvidiaGpu && !fakenvapi::isUsingAsMainNvapi();
+    in.vulkan = api == API::Vulkan;
     in.xefgOutput = state.activeFgOutput == FGOutput::XeFG;
     in.side = native::lowlatency::XefgSide();
     in.forceLatencyFlex = Config::Instance()->FN_ForceLatencyFlex.value_or_default();
@@ -256,10 +303,8 @@ LowLatencyMode InputCommon::default_output(API api)
         if (vendorId == VendorId::AMD && VulkanHooks::o_vkAntiLagUpdateAMD != nullptr)
             return LowLatencyMode::AntiLagVk;
 
-#ifdef LOW_LATENCY_INPUTS
-        if (vendorId == VendorId::Nvidia && VulkanHooks::o_vkSetLatencySleepModeNV != nullptr)
+        if (vendorId == VendorId::Nvidia && !fakenvapi::isUsingAsMainNvapi())
             return LowLatencyMode::Reflex;
-#endif
 
         return LowLatencyMode::LatencyFlex;
     }
@@ -398,6 +443,8 @@ LowLatencyInput InputCommon::default_input()
     in.reflex = available(LowLatencyInput::Reflex);
     in.optiscalerRunning = optiscaler_running;
     in.ue = available(LowLatencyInput::UeLowLatency);
+    in.antiLagVk = available(LowLatencyInput::AntiLag2) &&
+                   input_api[static_cast<size_t>(LowLatencyInput::AntiLag2)].load() == API::Vulkan;
 
     switch (lloutput::ChooseInput(in))
     {
@@ -500,7 +547,7 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
     }
 
     // OptiScaler's rules decide the output (OutputRule.h PlanOutput)
-    const auto plan = plan_output();
+    const auto plan = plan_output(api);
     auto desiredMode = mode.has_value() ? *mode : to_mode(plan.first());
 
     if (desiredMode == LowLatencyMode::None)
@@ -523,6 +570,11 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
             return true;
         }
     }
+
+    // On a Vulkan device the output is the API's own form (Anti-Lag Vk, the driver's Vulkan Reflex, no XeLL without
+    // XeFG): compared as such, or a running one would be made again on every call
+    if (api == API::Vulkan)
+        desiredMode = for_api(desiredMode, api);
 
     // An output that couldn't start keeps its fallback instead of being retried every call
     const auto failedAt = std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(failed_time.load()));
@@ -847,13 +899,12 @@ InputResult InputCommon::get_latency(const InputContext& inputContext, IUnknown*
     // OptiScaler's own Streamline uses Reflex too
     if (inputContext.caller == LowLatencyInput::Reflex || inputContext.caller == LowLatencyInput::OptiScaler)
     {
-        if (activeOutput == LowLatencyMode::Reflex)
+        // The driver's report with a Reflex output (D3D or Vulkan), else the markers' own
+        if (bool estimated = true; activeOutput == LowLatencyMode::Reflex &&
+                                   output_latency((NV_LATENCY_RESULT_PARAMS*) latency_params, &estimated) == NVAPI_OK &&
+                                   !estimated)
         {
-            if (auto reflex_tech = std::dynamic_pointer_cast<Reflex>(currently_active_tech.load()))
-            {
-                if (reflex_tech->get_latency((NV_LATENCY_RESULT_PARAMS*) latency_params) == NVAPI_OK)
-                    return InputResult::Ok;
-            }
+            return InputResult::Ok;
         }
 
         NV_LATENCY_RESULT_PARAMS* reports = (NV_LATENCY_RESULT_PARAMS*) latency_params;
@@ -1313,7 +1364,7 @@ void InputCommon::apply_xefg_xell_mode(const LowLatencyTech* output)
     }
 }
 
-// Once per present, from the present thread only (wrapped swap chain's LocalPresent through ReflexHooks::update): the
+// Once per frame, on one thread (ReflexHooks::update from the present OutputRule.h RunsLowLatencyUpdate picks): the
 // static locals below rely on that
 void InputCommon::update()
 {
@@ -1511,11 +1562,7 @@ InputResult InputCommon::mark_present_start(IUnknown* pDevice)
 
 std::shared_ptr<ReflexVk> InputCommon::reflex_vk_output()
 {
-#ifdef LOW_LATENCY_INPUTS
     return std::dynamic_pointer_cast<ReflexVk>(currently_active_tech.load());
-#else
-    return nullptr;
-#endif
 }
 
 xell_context_handle_t InputCommon::xell_output_context()
@@ -1619,71 +1666,10 @@ void InputCommon::set_optiscaler_running(bool running)
         LOG_DEBUG("OptiScaler's own low latency {} as an input", running ? "runs" : "stopped");
 }
 
-void InputCommon::optiscaler_left_d3d()
-{
-    if (!optiscaler_running.exchange(false))
-        return;
-
-    LOG_DEBUG("OptiScaler's own low latency left D3D");
-
-    if (activeInput.load() == LowLatencyInput::OptiScaler)
-        stop_output();
-}
-
-void InputCommon::device_released(IUnknown* pDevice)
+void InputCommon::device_released(IUnknown* pDevice, bool alive)
 {
     if (pDevice != nullptr && output_device.load() == pDevice)
-        stop_output(false);
-}
-
-NvAPI_Status InputCommon::xefg_xell_set_sleep_mode(const native::xefgreflex::SleepMode& mode)
-{
-    auto own = xefg_xell.load();
-
-    if (own == nullptr)
-        return NVAPI_ERROR;
-
-    SleepMode sleepMode {};
-    sleepMode.low_latency_enabled = mode.lowLatency;
-    sleepMode.low_latency_boost = mode.boost;
-    sleepMode.minimum_interval_us = mode.minimumIntervalUs;
-    sleepMode.use_markers_to_optimize = mode.useMarkersToOptimize;
-    own->set_sleep_mode(&sleepMode);
-    return NVAPI_OK;
-}
-
-NvAPI_Status InputCommon::xefg_xell_sleep()
-{
-    auto own = xefg_xell.load();
-
-    if (own == nullptr)
-        return NVAPI_ERROR;
-
-    own->sleep();
-    return NVAPI_OK;
-}
-
-void InputCommon::xefg_xell_marker(ID3D12Device* device, uint64_t frame_id, uint32_t nvapiMarker)
-{
-    MarkerParams marker_params {};
-    marker_params.frame_id = frame_id;
-    marker_params.marker_type = (MarkerType) nvapiMarker; // the enums match
-
-    if (frame_id != 0)
-        add_marker_to_report(marker_params);
-
-    if (auto own = xefg_xell.load(); own != nullptr && device != nullptr)
-        own->set_marker(device, marker_params);
-}
-
-NvAPI_Status InputCommon::xefg_xell_latency(NV_LATENCY_RESULT_PARAMS* params)
-{
-    if (params == nullptr || params->version != NV_LATENCY_RESULT_PARAMS_VER1)
-        return NVAPI_INVALID_ARGUMENT;
-
-    static_assert(sizeof(params->frameReport) == NVAPI_BUFFER_SIZE * sizeof(FrameReport));
-    copy_frame_reports((FrameReport*) params->frameReport);
-    return NVAPI_OK;
+        stop_output(alive);
 }
 
 void* InputCommon::output_context()
@@ -1703,6 +1689,52 @@ NvAPI_Status InputCommon::output_latency(NV_LATENCY_RESULT_PARAMS* params, bool*
     {
         *estimated = false;
         return reflex_tech->get_latency(params);
+    }
+
+    if (auto reflex_vk = std::dynamic_pointer_cast<ReflexVk>(current_tech))
+    {
+        *estimated = false;
+        return reflex_vk->get_latency(params);
+    }
+
+    if (auto reflex_nvapi_vk = std::dynamic_pointer_cast<ReflexNvApiVk>(current_tech))
+    {
+        // The Vulkan report is the D3D one without the GPU's active and frame times: copied field by field. Static and
+        // big: not freed, like the others.
+        static std::mutex reportMutex;
+        static auto* report = new NV_VULKAN_LATENCY_RESULT_PARAMS();
+
+        std::scoped_lock lock(reportMutex);
+        *report = {};
+        report->version = NV_VULKAN_LATENCY_RESULT_PARAMS_VER;
+
+        if (auto result = reflex_nvapi_vk->get_latency(report); result != NVAPI_OK)
+            return result;
+
+        for (size_t i = 0; i < std::size(report->frameReport); i++)
+        {
+            const auto& from = report->frameReport[i];
+            auto& to = params->frameReport[i];
+
+            to = {};
+            to.frameID = from.frameID;
+            to.inputSampleTime = from.inputSampleTime;
+            to.simStartTime = from.simStartTime;
+            to.simEndTime = from.simEndTime;
+            to.renderSubmitStartTime = from.renderSubmitStartTime;
+            to.renderSubmitEndTime = from.renderSubmitEndTime;
+            to.presentStartTime = from.presentStartTime;
+            to.presentEndTime = from.presentEndTime;
+            to.driverStartTime = from.driverStartTime;
+            to.driverEndTime = from.driverEndTime;
+            to.osRenderQueueStartTime = from.osRenderQueueStartTime;
+            to.osRenderQueueEndTime = from.osRenderQueueEndTime;
+            to.gpuRenderStartTime = from.gpuRenderStartTime;
+            to.gpuRenderEndTime = from.gpuRenderEndTime;
+        }
+
+        *estimated = false;
+        return NVAPI_OK;
     }
 
     *estimated = true;
@@ -1726,18 +1758,6 @@ bool InputCommon::output_enabled()
     return current_tech != nullptr && current_tech->is_enabled();
 }
 
-LowLatencyMode InputCommon::current_mode()
-{
-    if (auto mode = activeOutput.load(); mode != LowLatencyMode::None)
-        return mode;
+LowLatencyMode InputCommon::current_mode() { return activeOutput.load(); }
 
-    return fakenvapi::getCurrentMode();
-}
-
-bool InputCommon::low_latency_active()
-{
-    if (activeOutput.load() != LowLatencyMode::None)
-        return output_enabled();
-
-    return fakenvapi::isLowLatencyActive();
-}
+bool InputCommon::low_latency_active() { return activeOutput.load() != LowLatencyMode::None && output_enabled(); }

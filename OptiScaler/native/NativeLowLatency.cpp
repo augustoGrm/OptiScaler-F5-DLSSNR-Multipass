@@ -17,8 +17,6 @@
 #include <nvapi/NvApiHooks.h>
 #include <nvapi/fakenvapi.h>
 
-#include "NativeLowLatencyVkSync.h"
-
 #include <magic_enum.hpp>
 
 #include <atomic>
@@ -75,78 +73,51 @@ bool g_hasLatency = false;
 float g_latencyMs = 0.0f;
 bool g_latencyEstimated = false;
 
-// A D3D game's calls of ours are InputCommon's OptiScaler input (low_latency/input): its output lowers latency on
-// OptiScaler's terms, also with XeFG. Not a lasting input like the game's (InputCommon::set_optiscaler_running). A
-// native Vulkan game's go to the Vulkan Reflex hooks as before.
+// Our calls are InputCommon's OptiScaler input (low_latency/input): its output lowers latency on OptiScaler's terms,
+// also with XeFG. Not a lasting input like the game's (InputCommon::set_optiscaler_running). On a native Vulkan game's
+// VkDevice (or dxvk's, in XeFG's split) the same input with the device as a token: the output is the driver's Vulkan
+// Reflex, Anti-Lag Vk or LatencyFlex.
 const InputContext kOwnContext { .caller = LowLatencyInput::OptiScaler,
                                  .localContext = true,
                                  .noFrameId = false,
                                  .markerMode = InputMarkerMode::FullMarkers };
 
-// NV_LATENCY_MARKER_TYPE and NV_VULKAN_LATENCY_MARKER_TYPE share the same ordinals for every value used here, but are
-// unrelated enum types in the SDK: translated explicitly rather than cast, so a future SDK change cannot silently
-// mismatch them.
-NV_VULKAN_LATENCY_MARKER_TYPE VulkanMarkerType(NV_LATENCY_MARKER_TYPE type)
-{
-    switch (type)
-    {
-    case SIMULATION_START:
-        return VULKAN_SIMULATION_START;
-    case SIMULATION_END:
-        return VULKAN_SIMULATION_END;
-    case RENDERSUBMIT_START:
-        return VULKAN_RENDERSUBMIT_START;
-    case RENDERSUBMIT_END:
-        return VULKAN_RENDERSUBMIT_END;
-    case PRESENT_START:
-        return VULKAN_PRESENT_START;
-    case PRESENT_END:
-    default:
-        return VULKAN_PRESENT_END;
-    }
-}
+const InputContext kOwnContextVk { .caller = LowLatencyInput::OptiScaler,
+                                   .localContext = true,
+                                   .noFrameId = false,
+                                   .markerMode = InputMarkerMode::FullMarkers,
+                                   .api = API::Vulkan };
+
+const InputContext& OwnContext(Api api) { return api == Api::Vulkan ? kOwnContextVk : kOwnContext; }
 
 void Marker(Api api, IUnknown* device, NV_LATENCY_MARKER_TYPE type)
 {
+    // The hooks' bookkeeping (the frame IDs, the timings), as for the game's: not counted as the game's
     if (api == Api::Vulkan)
     {
-        NV_VULKAN_LATENCY_MARKER_PARAMS params {};
-        params.version = NV_VULKAN_LATENCY_MARKER_PARAMS_VER;
-        params.frameID = g_frameId;
-        params.markerType = VulkanMarkerType(type);
-        ReflexHooks::ownSetLatencyMarkerVulkan(reinterpret_cast<HANDLE>(device), &params);
-        return;
+        ReflexHooks::preVkMarker(reinterpret_cast<HANDLE>(device), g_frameId, (uint32_t) type, false);
     }
+    else
+    {
+        NV_LATENCY_MARKER_PARAMS params {};
+        params.version = NV_LATENCY_MARKER_PARAMS_VER;
+        params.frameID = g_frameId;
+        params.markerType = type;
 
-    NV_LATENCY_MARKER_PARAMS params {};
-    params.version = NV_LATENCY_MARKER_PARAMS_VER;
-    params.frameID = g_frameId;
-    params.markerType = type;
-
-    // The hooks' bookkeeping (the frame IDs, the timings), as for the game's: not counted as the game's
-    NvAPI_Status ignored = NVAPI_OK;
-    ReflexHooks::preMarker(device, &params, false, nullptr, &ignored);
+        NvAPI_Status ignored = NVAPI_OK;
+        ReflexHooks::preMarker(device, &params, false, nullptr, &ignored);
+    }
 
     MarkerParams marker {};
     marker.frame_id = g_frameId;
     marker.marker_type = (MarkerType) type; // the enums match
-    InputCommon::set_marker(kOwnContext, device, marker);
+    InputCommon::set_marker(OwnContext(api), device, marker);
 }
 
 // `minimumIntervalUs`: the frame cap when we keep it (PlanCap), else 0 and OptiScaler's own limiter keeps it.
 // ReflexHooks never puts its stored cap into our calls.
 NvAPI_Status SetSleepMode(Api api, IUnknown* device, bool on, uint32_t minimumIntervalUs = 0, bool boost = false)
 {
-    if (api == Api::Vulkan)
-    {
-        NV_VULKAN_SET_SLEEP_MODE_PARAMS params {};
-        params.version = NV_VULKAN_SET_SLEEP_MODE_PARAMS_VER;
-        params.bLowLatencyMode = on;
-        params.bLowLatencyBoost = on && boost;
-        params.minimumIntervalUs = on ? minimumIntervalUs : 0;
-        return ReflexHooks::ownSetSleepModeVulkan(reinterpret_cast<HANDLE>(device), &params);
-    }
-
     SleepMode mode {};
     mode.low_latency_enabled = on;
     mode.low_latency_boost = on && boost;
@@ -156,7 +127,7 @@ NvAPI_Status SetSleepMode(Api api, IUnknown* device, bool on, uint32_t minimumIn
     mode.use_min_queue_time = false;
 
     // Refused: no output could start (the limiter keeps the cap then), or the game's Reflex is the input now
-    return InputCommon::set_sleep_mode(kOwnContext, device, &mode) == InputResult::Ok ? NVAPI_OK : NVAPI_ERROR;
+    return InputCommon::set_sleep_mode(OwnContext(api), device, &mode) == InputResult::Ok ? NVAPI_OK : NVAPI_ERROR;
 }
 
 // The Reflex function table, from the nvapi the game would have loaded: Hook loads it like the game's LoadLibrary
@@ -180,95 +151,6 @@ bool FindTable()
         init();
 
     return ReflexHooks::ensureTable(queryInterface);
-}
-
-// The Vulkan sleep pair (NativeLowLatencyVkSync.h) of the game's VkDevice. The game's present thread, and the thread that
-// destroys the device.
-std::mutex g_vkMutex;
-VkSleepSync g_vkSync;
-VkDevice g_vkSyncDevice = VK_NULL_HANDLE;
-bool g_vkUnavailableLogged = false;
-
-VkSleepCalls VulkanSleepCalls(VkDevice device)
-{
-    VkSleepCalls calls;
-    calls.timelineSemaphoresOn = [device] { return VulkanHooks::TimelineSemaphoresOn(device); };
-    calls.init = [device](void** semaphore)
-    {
-        HANDLE handle = nullptr;
-        const auto status = ReflexHooks::ownInitLowLatencyDeviceVulkan(reinterpret_cast<HANDLE>(device), &handle);
-        *semaphore = handle;
-        return static_cast<int>(status);
-    };
-    calls.sleep = [device](uint64_t value)
-    { return static_cast<int>(ReflexHooks::ownSleepVulkan(reinterpret_cast<HANDLE>(device), value)); };
-    calls.wait = [device](void* semaphore, uint64_t value, uint64_t timeoutNs)
-    { return VulkanHooks::WaitTimelineSemaphore(device, reinterpret_cast<VkSemaphore>(semaphore), value, timeoutNs); };
-    return calls;
-}
-
-const char* VulkanWhyText(VkSleepWhy why)
-{
-    switch (why)
-    {
-    case VkSleepWhy::NoTimelineSemaphores:
-        return "the device was made without timeline semaphores";
-    case VkSleepWhy::InitFailed:
-        return "NvAPI_Vulkan_InitLowLatencyDevice failed";
-    case VkSleepWhy::NoSemaphore:
-        return "NvAPI_Vulkan_InitLowLatencyDevice returned no semaphore";
-    case VkSleepWhy::WaitTimedOut:
-        return "the sleep's semaphore never reached its value";
-    default:
-        return "";
-    }
-}
-
-// The device can do the Vulkan sleep: initialised once, and no Vulkan NVAPI call is made on one that cannot (fakenvapi
-// signals a null semaphore in a Sleep that never had an init). Logs why, once per device.
-bool VulkanDeviceReady(VkDevice device)
-{
-    std::lock_guard lock(g_vkMutex);
-
-    if (g_vkSyncDevice != device)
-    {
-        g_vkSync = {};
-        g_vkSyncDevice = device;
-        g_vkUnavailableLogged = false;
-    }
-
-    const bool ready = VkSleepReady(g_vkSync, VulkanSleepCalls(device));
-
-    if (!ready && !g_vkUnavailableLogged)
-    {
-        g_vkUnavailableLogged = true;
-        LOG_WARN("Optical F5Low low latency: unavailable on this Vulkan device ({}; NvAPI status {})",
-                 VulkanWhyText(g_vkSync.why), g_vkSync.initStatus);
-    }
-
-    return ready;
-}
-
-// One frame's NvAPI_Vulkan_Sleep and the wait for the semaphore value it signals
-void VulkanSleep(VkDevice device)
-{
-    std::lock_guard lock(g_vkMutex);
-
-    if (g_vkSyncDevice != device)
-        return;
-
-    bool firstTimeout = false;
-    VkSleepFrame(g_vkSync, VulkanSleepCalls(device), &firstTimeout);
-
-    if (firstTimeout)
-        LOG_WARN("Optical F5Low low latency: the Vulkan sleep's semaphore did not reach its value within {} ms",
-                 kVkSleepWaitNs / 1000000);
-
-    if (g_vkSync.state == VkSleepState::Unavailable && !g_vkUnavailableLogged)
-    {
-        g_vkUnavailableLogged = true;
-        LOG_WARN("Optical F5Low low latency: unavailable on this Vulkan device ({})", VulkanWhyText(g_vkSync.why));
-    }
 }
 
 bool ForceReflexDisabled()
@@ -329,10 +211,6 @@ Decision Evaluate(Api api, IUnknown* device)
         decision = Decide(GatherInputs(true));
     }
 
-    // Only a Vulkan device can fail to do it, and only once everything else says go
-    if (decision == Decision::Run && api == Api::Vulkan && !VulkanDeviceReady(reinterpret_cast<VkDevice>(device)))
-        decision = Decide(GatherInputs(false));
-
     return decision;
 }
 
@@ -390,9 +268,9 @@ const void* GameQueue()
     return state.currentCommandQueue;
 }
 
-// XeFG's XeLL routing hangs off the D3D entry points (ReflexHooks): a Vulkan game gets it through the bridge's D3D12
-// device, but not through the Vulkan ones. With Reflex or Anti-Lag 2 as XeFG's Output (XefgSide) XeLL still carries the
-// frame IDs, and a bridged Vulkan game's calls go to its VkDevice (PresentTarget): the Vulkan ones count then too.
+// XeFG paces with its XeLL on a D3D12 device: a Vulkan game has XeFG only on the present bridge (bridgedXellDevice).
+// With Reflex or Anti-Lag 2 as XeFG's Output (XefgSide) XeLL still carries the frame IDs, and a bridged Vulkan game's
+// calls go to its VkDevice (PresentTarget): the Vulkan ones count then too.
 Method CurrentMethod(Api api)
 {
     if (State::Instance().activeFgOutput == FGOutput::XeFG &&
@@ -453,7 +331,7 @@ std::string CapText(float capFps)
 const char* PathText(Api api)
 {
     const auto method = CurrentMethod(api);
-    // A D3D game's calls run on InputCommon's output; a Vulkan game's still go through fakenvapi's own context
+    // Anti-Lag 2's Vulkan form is Anti-Lag Vk
     const bool vulkan = api == Api::Vulkan;
 
     // XeFG's XeLL is not the method in the split: it only keeps XeFG running
@@ -461,7 +339,7 @@ const char* PathText(Api api)
         return "NVIDIA Reflex";
 
     if (method == Method::FakenvapiWithXefg)
-        return vulkan ? "Anti-Lag (through fakenvapi)" : "Anti-Lag 2";
+        return vulkan ? "Anti-Lag Vk" : "Anti-Lag 2";
 
     if (method == Method::RealReflex)
         return "NVIDIA Reflex";
@@ -469,13 +347,13 @@ const char* PathText(Api api)
     switch (InputCommon::current_mode())
     {
     case LowLatencyMode::AntiLag2:
-        return vulkan ? "Anti-Lag 2 (through fakenvapi)" : "Anti-Lag 2";
+        return vulkan ? "Anti-Lag Vk" : "Anti-Lag 2";
     case LowLatencyMode::LatencyFlex:
-        return vulkan ? "LatencyFlex (through fakenvapi)" : "LatencyFlex";
+        return "LatencyFlex";
     case LowLatencyMode::XeLL:
         return "XeLL";
     case LowLatencyMode::AntiLagVk:
-        return "Anti-Lag (through fakenvapi)";
+        return "Anti-Lag Vk";
     case LowLatencyMode::Reflex:
         return "NVIDIA Reflex";
     default:
@@ -570,12 +448,10 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         return;
     }
 
-    // Our D3D calls are InputCommon's OptiScaler input from the first one on. Under dxvk they move to its Vulkan device
-    // when XeFG's Output becomes Reflex or Anti-Lag 2 (PresentTarget): what the D3D side started stops there.
-    if (api == Api::D3D)
-        InputCommon::set_optiscaler_running(true);
-    else
-        InputCommon::optiscaler_left_d3d();
+    // Our calls are InputCommon's OptiScaler input from the first one on. Under dxvk they move to its Vulkan device
+    // when XeFG's Output becomes Reflex or Anti-Lag 2 (PresentTarget): InputCommon restarts its output on that device's
+    // API.
+    InputCommon::set_optiscaler_running(true);
 
     // A refusal belongs to the device it came from: a new device (or the old one released) starts over
     if (g_sent && (g_sent->device != device || g_sent->api != api || g_sleepModeDevice.load() != device))
@@ -671,16 +547,13 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     g_device = device;
     g_gameQueue = GameQueue();
 
-    if (api == Api::Vulkan)
-    {
-        VulkanSleep(reinterpret_cast<VkDevice>(device));
-    }
-    else
+    if (api != Api::Vulkan)
     {
         NvAPI_Status ignored = NVAPI_OK;
         ReflexHooks::preSleep(device, false, &ignored);
-        InputCommon::sleep(kOwnContext, device);
     }
+
+    InputCommon::sleep(OwnContext(api), device);
 
     // XeFG takes this ID for the frame it tags next (FrameIdForFrameGeneration)
     ++g_frameId;
@@ -992,16 +865,6 @@ void OnDeviceReleasedVulkan(VkDevice device)
     }
 
     ReflexHooks::forgetSleepDeviceVulkan(device);
-
-    // The device's sleep state goes with it (a new device is initialised again)
-    std::lock_guard lock(g_vkMutex);
-
-    if (g_vkSyncDevice == device)
-    {
-        g_vkSync = {};
-        g_vkSyncDevice = VK_NULL_HANDLE;
-        g_vkUnavailableLogged = false;
-    }
 }
 
 bool OwnsFrameCap()
@@ -1114,7 +977,7 @@ OutputInputs CurrentOutputInputs()
     in.xefgOutput = State::Instance().activeFgOutput == FGOutput::XeFG;
     in.amdGpu = vendor == VendorId::AMD;
     in.nvidiaGpu = vendor == VendorId::Nvidia;
-    in.antiLag2Failed = fakenvapi::companionFailed() || InputCommon::antilag2_could_not_start();
+    in.antiLag2Failed = InputCommon::antilag2_could_not_start();
     in.xefgLatency = Config::Instance()->FGXeFGLowLatencyOutput.value_or_default();
     return in;
 }
@@ -1179,31 +1042,15 @@ Status GetStatus()
             }
         };
 
-        if (api == Api::Vulkan)
+        static NV_LATENCY_RESULT_PARAMS results {};
+        results.version = NV_LATENCY_RESULT_PARAMS_VER;
+
+        if (InputCommon::get_latency(OwnContext(api), device, &results) == InputResult::Ok)
         {
-            static NV_VULKAN_LATENCY_RESULT_PARAMS results {};
-            results.version = NV_VULKAN_LATENCY_RESULT_PARAMS_VER;
+            // The newest report is the last; times are in microseconds
+            const auto& report = results.frameReport[63];
 
-            if (ReflexHooks::ownGetLatencyVulkan(reinterpret_cast<HANDLE>(device), &results) == NVAPI_OK)
-            {
-                // The newest report is the last; times are in microseconds
-                const auto& report = results.frameReport[63];
-
-                ReadLatency(report, estimated);
-            }
-        }
-        else
-        {
-            static NV_LATENCY_RESULT_PARAMS results {};
-            results.version = NV_LATENCY_RESULT_PARAMS_VER;
-
-            if (InputCommon::get_latency(kOwnContext, device, &results) == InputResult::Ok)
-            {
-                // The newest report is the last; times are in microseconds
-                const auto& report = results.frameReport[63];
-
-                ReadLatency(report, estimated);
-            }
+            ReadLatency(report, estimated);
         }
     }
 

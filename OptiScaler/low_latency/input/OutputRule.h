@@ -15,19 +15,21 @@ namespace lloutput
 using native::lowlatency::XefgLatency;
 using native::xefgreflex::SleepMode;
 
-// The low latency methods InputCommon can run (LowLatencyMode's, without the Vulkan ones and the FPS limiter)
+// The low latency methods InputCommon can run (LowLatencyMode's, without the FPS limiter). On a Vulkan device Reflex is
+// the driver's Vulkan Reflex (ReflexVkSurface) and Anti-Lag 2 is Anti-Lag Vk.
 enum class Tech : uint8_t
 {
     None,
     Reflex,      // the driver's (NVIDIA, real nvapi)
     AntiLag2,    // AMD
-    XeLL,        // Intel's, also XeFG's on every GPU
+    XeLL,        // Intel's, also XeFG's on every GPU; D3D12 only
     LatencyFlex, // works anywhere
 };
 
 struct OutputInputs
 {
-    bool realNvapi = false;               // NVIDIA's nvapi, not fakenvapi as the game's nvapi
+    bool realNvapi = false;               // NVIDIA's nvapi on an NVIDIA GPU, not fakenvapi as the game's nvapi
+    bool vulkan = false;                  // the input's device is a Vulkan one
     bool xefgOutput = false;              // XeFG is the frame generation output
     XefgLatency side = XefgLatency::XeLL; // with XeFG, what lowers latency (native::lowlatency::XefgSide, in force)
     bool forceLatencyFlex = false;        // fakenvapi's Force LatencyFlex
@@ -74,10 +76,83 @@ constexpr OutputPlan PlanOutput(const OutputInputs& in)
     if (in.forceLatencyFlex || in.multiFrame)
         return { { Tech::LatencyFlex, Tech::None, Tech::None }, false };
 
-    if (!in.inputFeedsXell)
+    // XeLL is D3D12's: a Vulkan device has Anti-Lag Vk, then LatencyFlex
+    if (!in.inputFeedsXell || in.vulkan)
         return { { Tech::AntiLag2, Tech::LatencyFlex, Tech::None }, false };
 
     return { { Tech::AntiLag2, Tech::XeLL, Tech::LatencyFlex }, false };
+}
+
+// The driver's Reflex on a Vulkan device: VK_NV_low_latency2 (upstream's output, ll_reflex_vk.h) where the device has
+// it and its swapchain has the latency mode, else NVIDIA's older NvAPI_Vulkan Reflex (ll_reflex_nvapi_vk.h), which
+// works on the device alone (upstream ran LatencyFlex there)
+enum class ReflexVkSurface : uint8_t
+{
+    None,
+    LowLatency2,
+    NvApi,
+};
+
+struct ReflexVkInputs
+{
+    bool lowLatency2Device = false; // made with VK_NV_low_latency2 and timeline semaphores (VulkanHooks::LowLatency2On)
+    bool swapchainKnown = false;    // the device has a swapchain
+    bool swapchainLatencyMode = false; // ... made with the latency mode (ours chained in, or the game's)
+    bool nvapiVulkan = false;          // NVIDIA's nvapi with its Vulkan Reflex
+    bool timelineSemaphores = false;   // NvAPI_Vulkan's sleep signals a timeline semaphore
+};
+
+constexpr ReflexVkSurface ChooseReflexVk(const ReflexVkInputs& in)
+{
+    // No swapchain yet: the device's next one gets the latency mode (VulkanHooks chains it in)
+    if (in.lowLatency2Device && (!in.swapchainKnown || in.swapchainLatencyMode))
+        return ReflexVkSurface::LowLatency2;
+
+    if (in.nvapiVulkan && in.timelineSemaphores)
+        return ReflexVkSurface::NvApi;
+
+    return ReflexVkSurface::None;
+}
+
+// VK_NV_low_latency2's VkLatencyMarkerNV against NVAPI's marker types (MarkerType, NV_LATENCY_MARKER_TYPE): 0-7
+// (simulation start .. trigger flash) are the same; NVAPI has PC_LATENCY_PING at 8, which Vulkan does not have, so
+// Vulkan's out of band markers 8-11 are NVAPI's 9-12. False for a value that has no counterpart.
+inline constexpr uint32_t kNvApiPcLatencyPing = 8;
+inline constexpr uint32_t kNvApiLastMarker = 12; // OUT_OF_BAND_PRESENT_END
+
+constexpr bool MarkerFromVulkanNV(uint32_t vkMarker, uint32_t* nvapiMarker)
+{
+    if (vkMarker > kNvApiLastMarker - 1)
+        return false;
+
+    *nvapiMarker = vkMarker < kNvApiPcLatencyPing ? vkMarker : vkMarker + 1;
+    return true;
+}
+
+constexpr bool MarkerToVulkanNV(uint32_t nvapiMarker, uint32_t* vkMarker)
+{
+    if (nvapiMarker == kNvApiPcLatencyPing || nvapiMarker > kNvApiLastMarker)
+        return false;
+
+    *vkMarker = nvapiMarker < kNvApiPcLatencyPing ? nvapiMarker : nvapiMarker - 1;
+    return true;
+}
+
+// Where InputCommon::update runs: once per frame, on one thread (its static locals rely on that). A native Vulkan game:
+// its own present (on the bridge the D3D12 present is frame generation's). A D3D game, dxvk's too: its DXGI present
+// (dxvk's Vulkan present runs on dxvk's own thread; with the bridge its D3D12 swapchain is not wrapped).
+enum class PresentSite : uint8_t
+{
+    Vulkan, // vkQueuePresentKHR
+    Dxgi,   // the wrapped DXGI swapchain's present
+};
+
+constexpr bool RunsLowLatencyUpdate(PresentSite site, bool dxvkGame, bool vulkanBridge)
+{
+    if (site == PresentSite::Vulkan)
+        return !dxvkGame;
+
+    return dxvkGame || !vulkanBridge;
 }
 
 // The low latency inputs InputCommon chooses among (LowLatencyInput's)
@@ -102,6 +177,7 @@ struct InputChoice
     bool xefgInput = false;         // the frame generation input is the game's XeFG
     bool antiLag2 = false;          // the game's Anti-Lag 2
     bool antiLag2ReportsFg = false; // ... reports its frame generation's frames
+    bool antiLagVk = false;         // the game's Anti-Lag Vk (VK_AMD_anti_lag), in every build
 };
 
 // One sleeper per frame: the game's own Reflex, then OptiScaler's own low latency while it runs (Optical F5Low, for
@@ -128,6 +204,10 @@ constexpr Input ChooseInput(const InputChoice& in)
 
     if (in.ue)
         return Input::UeLowLatency;
+
+    // A Vulkan game's own Anti-Lag: last, as the game's Anti-Lag 2 is
+    if (in.antiLagVk)
+        return Input::AntiLag2;
 
     if (in.lowLatencyInputs)
     {

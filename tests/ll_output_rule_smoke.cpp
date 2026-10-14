@@ -1,8 +1,10 @@
 // Host check of OutputRule.h: InputCommon's outputs on OptiScaler's terms. No GPU and no game needed.
-// cl /std:c++20 /EHsc /W4 tests/ll_output_rule_smoke.cpp
+// cl /std:c++20 /EHsc /W4 /I external/vulkan/include tests/ll_output_rule_smoke.cpp
 #include "../OptiScaler/low_latency/input/OutputRule.h"
 
 #include <cstdio>
+
+#include <vulkan/vulkan_core.h>
 
 using namespace lloutput;
 
@@ -86,6 +88,101 @@ int main()
         CHECK(p.tries[0] == Tech::AntiLag2 && p.tries[1] == Tech::LatencyFlex && p.tries[2] == Tech::None);
         in.realNvapi = true;
         CHECK(PlanOutput(in).first() == Tech::Reflex); // Reflex takes any input
+
+        // A Vulkan device: no XeLL without XeFG (fakenvapi: Anti-Lag Vk, then LatencyFlex); Reflex the driver's Vulkan
+        // one
+        OutputInputs vk;
+        vk.vulkan = true;
+        p = PlanOutput(vk);
+        CHECK(p.tries[0] == Tech::AntiLag2 && p.tries[1] == Tech::LatencyFlex && p.tries[2] == Tech::None);
+        vk.realNvapi = true;
+        CHECK(PlanOutput(vk).first() == Tech::Reflex && !PlanOutput(vk).xefgOwnXell);
+        vk.realNvapi = false;
+        vk.forceLatencyFlex = true;
+        CHECK(PlanOutput(vk).first() == Tech::LatencyFlex);
+        vk.forceLatencyFlex = false;
+
+        // ... XeFG on the Vulkan present bridge: its XeLL (on the bridge's D3D12 device) as on D3D
+        vk.xefgOutput = true;
+        p = PlanOutput(vk);
+        CHECK(p.first() == Tech::XeLL && !p.xefgOwnXell);
+        vk.side = XefgLatency::Reflex;
+        p = PlanOutput(vk);
+        CHECK(p.first() == Tech::Reflex && p.xefgOwnXell);
+        vk.side = XefgLatency::AntiLag2;
+        CHECK(PlanOutput(vk).first() == Tech::AntiLag2 && PlanOutput(vk).xefgOwnXell);
+    }
+
+    // ---- ChooseReflexVk ----
+    {
+        ReflexVkInputs in;
+        CHECK(ChooseReflexVk(in) == ReflexVkSurface::None);
+
+        // VK_NV_low_latency2 on the device: before its first swapchain (ours get the latency mode) and on one that has
+        // it
+        in.lowLatency2Device = true;
+        CHECK(ChooseReflexVk(in) == ReflexVkSurface::LowLatency2);
+        in.swapchainKnown = in.swapchainLatencyMode = true;
+        CHECK(ChooseReflexVk(in) == ReflexVkSurface::LowLatency2);
+
+        // A swapchain without it (made before our hooks, or the game said no): NVIDIA's NvAPI Vulkan Reflex
+        in.swapchainLatencyMode = false;
+        CHECK(ChooseReflexVk(in) == ReflexVkSurface::None);
+        in.nvapiVulkan = true;
+        CHECK(ChooseReflexVk(in) == ReflexVkSurface::None); // its sleep signals a timeline semaphore
+        in.timelineSemaphores = true;
+        CHECK(ChooseReflexVk(in) == ReflexVkSurface::NvApi);
+
+        // A device without the extension (dxvk's for a D3D game, one made before our hooks)
+        ReflexVkInputs nvapi;
+        nvapi.nvapiVulkan = nvapi.timelineSemaphores = true;
+        CHECK(ChooseReflexVk(nvapi) == ReflexVkSurface::NvApi);
+        nvapi.lowLatency2Device = true;
+        CHECK(ChooseReflexVk(nvapi) == ReflexVkSurface::LowLatency2); // VK_NV_low_latency2 first
+    }
+
+    // ---- RunsLowLatencyUpdate ----
+    {
+        // A native Vulkan game: its Vulkan present, not the bridge's D3D12 one
+        CHECK(RunsLowLatencyUpdate(PresentSite::Vulkan, false, false));
+        CHECK(RunsLowLatencyUpdate(PresentSite::Vulkan, false, true));
+        CHECK(!RunsLowLatencyUpdate(PresentSite::Dxgi, false, true));
+
+        // A D3D game: its DXGI present; on dxvk too (dxvk's Vulkan present is on dxvk's thread), bridged or not
+        CHECK(RunsLowLatencyUpdate(PresentSite::Dxgi, false, false));
+        CHECK(RunsLowLatencyUpdate(PresentSite::Dxgi, true, false));
+        CHECK(RunsLowLatencyUpdate(PresentSite::Dxgi, true, true));
+        CHECK(!RunsLowLatencyUpdate(PresentSite::Vulkan, true, false));
+        CHECK(!RunsLowLatencyUpdate(PresentSite::Vulkan, true, true));
+    }
+
+    // ---- MarkerFromVulkanNV / MarkerToVulkanNV ----
+    {
+        // VkLatencyMarkerNV against NVAPI's NV_LATENCY_MARKER_TYPE (NVAPI has PC_LATENCY_PING at 8)
+        static_assert(VK_LATENCY_MARKER_SIMULATION_START_NV == 0 && VK_LATENCY_MARKER_TRIGGER_FLASH_NV == 7);
+        static_assert(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV == 8 &&
+                      VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV == 11);
+        uint32_t nv = 99;
+        uint32_t back = 99;
+
+        for (uint32_t vk = 0; vk <= 7; ++vk)
+        {
+            CHECK(MarkerFromVulkanNV(vk, &nv) && nv == vk);
+            CHECK(MarkerToVulkanNV(nv, &back) && back == vk);
+        }
+
+        CHECK(MarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV, &nv) && nv == 9);
+        CHECK(MarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_END_NV, &nv) && nv == 10);
+        CHECK(MarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_START_NV, &nv) && nv == 11);
+        CHECK(MarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV, &nv) && nv == kNvApiLastMarker);
+        CHECK(!MarkerFromVulkanNV(12, &nv));
+        CHECK(!MarkerFromVulkanNV(0x7FFFFFFF, &nv));
+
+        for (uint32_t marker = 9; marker <= kNvApiLastMarker; ++marker)
+            CHECK(MarkerToVulkanNV(marker, &back) && back == marker - 1);
+
+        CHECK(!MarkerToVulkanNV(kNvApiPcLatencyPing, &back)); // Vulkan has no PC latency ping
+        CHECK(!MarkerToVulkanNV(kNvApiLastMarker + 1, &back));
     }
 
     // ---- ChooseInput ----
@@ -121,6 +218,15 @@ int main()
         InputChoice fsrFg;
         fsrFg.lowLatencyInputs = fsrFg.antiLag2 = fsrFg.antiLag2ReportsFg = fsrFg.reflex = true;
         CHECK(ChooseInput(fsrFg) == Input::AntiLag2); // the game's FSR-FG reports its frames only through it
+
+        // A Vulkan game's own Anti-Lag Vk, in every build: last, after the UE mod
+        InputChoice antiLagVk;
+        antiLagVk.antiLagVk = true;
+        CHECK(ChooseInput(antiLagVk) == Input::AntiLag2);
+        antiLagVk.ue = true;
+        CHECK(ChooseInput(antiLagVk) == Input::UeLowLatency);
+        antiLagVk.optiscalerRunning = true;
+        CHECK(ChooseInput(antiLagVk) == Input::OptiScaler);
     }
 
     // ---- OutputSwitchPending ----
