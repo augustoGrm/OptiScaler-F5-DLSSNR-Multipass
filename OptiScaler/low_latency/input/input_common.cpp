@@ -1682,6 +1682,17 @@ void InputCommon::set_optiscaler_running(bool running)
         LOG_DEBUG("OptiScaler's own low latency {} as an input", running ? "runs" : "stopped");
 }
 
+void InputCommon::optiscaler_left_d3d()
+{
+    if (!optiscaler_running.exchange(false))
+        return;
+
+    LOG_DEBUG("OptiScaler's own low latency left D3D");
+
+    if (activeInput.load() == LowLatencyInput::OptiScaler)
+        stop_output();
+}
+
 void InputCommon::device_released(IUnknown* pDevice)
 {
     if (pDevice != nullptr && output_device.load() == pDevice)

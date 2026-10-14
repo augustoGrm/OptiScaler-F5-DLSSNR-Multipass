@@ -251,6 +251,10 @@ class InputCommon
     // OptiScaler's own low latency starts or stops being an input (native::lowlatency)
     static void set_optiscaler_running(bool running);
 
+    // OptiScaler's own calls moved to a Vulkan device (dxvk's, with XeFG's Output Reflex or Anti-Lag 2): no longer an
+    // input here, and the output its D3D calls started stops (no low latency left on in the bridge's D3D12 device)
+    static void optiscaler_left_d3d();
+
     // The game's device is being released: an output on it stops without a call to it
     static void device_released(IUnknown* pDevice);
 

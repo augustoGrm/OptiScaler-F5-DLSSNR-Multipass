@@ -568,9 +568,12 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         return;
     }
 
-    // Our D3D calls are InputCommon's OptiScaler input from the first one on
+    // Our D3D calls are InputCommon's OptiScaler input from the first one on. Under dxvk they move to its Vulkan device
+    // when XeFG's Output becomes Reflex or Anti-Lag 2 (PresentTarget): what the D3D side started stops there.
     if (api == Api::D3D)
         InputCommon::set_optiscaler_running(true);
+    else
+        InputCommon::optiscaler_left_d3d();
 
     // A refusal belongs to the device it came from: a new device (or the old one released) starts over
     if (g_sent && (g_sent->device != device || g_sent->api != api || g_sleepModeDevice.load() != device))
