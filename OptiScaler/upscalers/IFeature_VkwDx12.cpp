@@ -1853,8 +1853,8 @@ HRESULT IFeature_VkwDx12::CreateDx12Device()
     HRESULT result;
     D3D_FEATURE_LEVEL featureLevel = D3D_FEATURE_LEVEL_12_0;
 
-    // FG only: on the device the Vulkan present bridge presents with, whichever of the two is made first (the mode is often
-    // picked mid-game: the game's next upscaler call remakes this feature before the bridge is up)
+    // FG only: on the device the Vulkan present bridge presents with, whichever of the two is made first (the mode is
+    // often picked mid-game: the game's next upscaler call remakes this feature before the bridge is up)
     if (_bridgeDevice == nullptr && Config::Instance()->DlssNrNativeFrameGenerationOnly.value_or_default() &&
         VulkanPhysicalDevice != VK_NULL_HANDLE)
     {
@@ -1864,9 +1864,10 @@ HRESULT IFeature_VkwDx12::CreateDx12Device()
         if (_bridgeDevice != nullptr)
             LOG_INFO("FG only: the upscaler runs on the Vulkan bridge's D3D12 device, to feed frame generation");
         else
-            LOG_WARN("FG only: the Vulkan bridge's D3D12 device could not be had ({}); the upscaler runs on its own and "
-                     "frame generation is not fed",
-                     why);
+            LOG_WARN(
+                "FG only: the Vulkan bridge's D3D12 device could not be had ({}); the upscaler runs on its own and "
+                "frame generation is not fed",
+                why);
     }
 
     if (_bridgeDevice != nullptr)
@@ -2232,7 +2233,8 @@ bool IFeature_VkwDx12::Evaluate(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Parameter
 
         // FG only: frame generation's inputs from this call, as a D3D12 game's upscaler call gives them
         // (inputs/NVNGX_DLSS_Dx12.cpp): the parameter block holds the D3D12 copies, motion vectors and depth in
-        // NON_PIXEL_SHADER_RESOURCE (ProcessVulkanTextures), the output a UAV. Frame generation copies them on this list.
+        // NON_PIXEL_SHADER_RESOURCE (ProcessVulkanTextures), the output a UAV. Frame generation copies them on this
+        // list.
         feedFrameGeneration = FeedsFrameGeneration();
 
         if (feedFrameGeneration)
@@ -2260,14 +2262,13 @@ bool IFeature_VkwDx12::Evaluate(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Parameter
         if (!reportedNrOffer)
         {
             reportedNrOffer = true;
-            LOG_INFO("DLSS-NR: the Vulkan bridge reached the hand-off (upscale ok: {}, enabled: {})",
-                     dx12EvalResult, Config::Instance()->DlssNrEnabled.value_or_default());
+            LOG_INFO("DLSS-NR: the Vulkan bridge reached the hand-off (upscale ok: {}, enabled: {})", dx12EvalResult,
+                     Config::Instance()->DlssNrEnabled.value_or_default());
         }
 
         if (dx12EvalResult && Config::Instance()->DlssNrEnabled.value_or_default())
             DlssNr::EvaluateAfterUpscale(cmdList, InParameters, Dx12CommandQueue,
-                                         dx12Feature->GetUpscalerType() == Upscaler::DLSSD,
-                                         _frameCount);
+                                         dx12Feature->GetUpscalerType() == Upscaler::DLSSD, _frameCount);
 
     } while (false);
 

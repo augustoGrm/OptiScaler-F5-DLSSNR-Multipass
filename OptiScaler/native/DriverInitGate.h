@@ -9,8 +9,8 @@ namespace native
 // Seen frozen in Assassin's Creed Odyssey on dxvk: the game's startup thread was inside vkCreateDevice (holding the
 // driver's Vulkan lock, waiting for a CUDA lock) while the render thread was in DLSS-NR's feature creation (holding the
 // CUDA lock, waiting for the Vulkan lock). The driver takes the two in opposite orders, so two threads that are in each
-// at the same moment never come out. Our two entry points -- the hooked vkCreateDevice and the model's feature create --
-// take this first, so they never overlap. Recursive: the create can reach a hooked vkCreateDevice on its own thread.
+// at the same moment never come out. Our two entry points -- the hooked vkCreateDevice and the model's feature create
+// -- take this first, so they never overlap. Recursive: the create can reach a hooked vkCreateDevice on its own thread.
 inline std::recursive_mutex& DriverInitMutex()
 {
     static std::recursive_mutex mutex;

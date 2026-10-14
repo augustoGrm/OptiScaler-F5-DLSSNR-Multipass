@@ -40,10 +40,10 @@ namespace VkPresentBridge
 namespace
 {
 
-// VK_EXT_full_screen_exclusive: the game asks for exclusive full screen on the surface it passes, which is not the one the
-// picture ends up on. A bridged swapchain is made with DISALLOWED, and the game's own acquire and release of the mode
-// succeed without doing anything (Vulkan_Hooks.cpp), so a game that controls it (Detroit: Become Human) runs borderless
-// through the D3D12 swapchain.
+// VK_EXT_full_screen_exclusive: the game asks for exclusive full screen on the surface it passes, which is not the one
+// the picture ends up on. A bridged swapchain is made with DISALLOWED, and the game's own acquire and release of the
+// mode succeed without doing anything (Vulkan_Hooks.cpp), so a game that controls it (Detroit: Become Human) runs
+// borderless through the D3D12 swapchain.
 constexpr int32_t kFullScreenExclusiveInfo = 1000255000;
 
 // VkSurfaceFullScreenExclusiveInfoEXT, without the Win32 platform header.
@@ -78,8 +78,8 @@ struct Bridge
 };
 
 std::mutex g_mutex;
-// Outputs that are up or being let go, without the mutex: XeFG's present thread asks (wrapped_swapchain.cpp LocalPresent)
-// while LetGoOfOutput waits for that thread
+// Outputs that are up or being let go, without the mutex: XeFG's present thread asks (wrapped_swapchain.cpp
+// LocalPresent) while LetGoOfOutput waits for that thread
 std::atomic<int> g_outputsActive { 0 };
 // The up output's private D3D12 device (Device), without the mutex: the game's Reflex calls and XeFG's present thread
 // ask every frame (hooks/Reflex_Hooks.cpp), the latter while LetGoOfOutput holds the mutex and waits for it. Cleared
@@ -96,7 +96,8 @@ std::unique_ptr<Bridge> g_bridge;
 std::vector<std::unique_ptr<Bridge>> g_retired; // output gone, hidden surface kept until their swapchains are destroyed
 
 // "FG only (game's upscaler)": the game's upscaler call, on a Vulkan-on-D3D12 feature, copied this frame's motion
-// vectors and depth for frame generation on its own queue; frame generation's queue waits for that before it reads them.
+// vectors and depth for frame generation on its own queue; frame generation's queue waits for that before it reads
+// them.
 ComPtr<ID3D12Fence> g_feedFence;
 uint64_t g_feedValue = 0;
 
@@ -110,7 +111,6 @@ void LogOnce(const std::string& text)
         LOG_WARN("Vulkan bridge: {}", text);
     }
 }
-
 
 bool IsBridgedSwapchain(VkSwapchainKHR swapchain)
 {
@@ -252,11 +252,13 @@ bool Tearing(IDXGIFactory2* factory)
     BOOL supported = FALSE;
 
     return SUCCEEDED(factory->QueryInterface(IID_PPV_ARGS(&factory5))) &&
-           SUCCEEDED(factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &supported, sizeof(supported))) &&
+           SUCCEEDED(
+               factory5->CheckFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING, &supported, sizeof(supported))) &&
            supported == TRUE;
 }
 
-// What a D3D11 game's bridge does when its swapchain goes (Dx11wDx12SC::Release), for the D3D12 swapchain of a Vulkan game.
+// What a D3D11 game's bridge does when its swapchain goes (Dx11wDx12SC::Release), for the D3D12 swapchain of a Vulkan
+// game.
 void LetGoOfOutput(Bridge& bridge, ComPtr<IDXGISwapChain4>& reference)
 {
     auto& state = State::Instance();
@@ -332,10 +334,10 @@ void LetGoOfOutput(Bridge& bridge, ComPtr<IDXGISwapChain4>& reference)
 }
 
 // A resize of the D3D12 swapchain is the same hazard as the D3D11 bridge's (Dx11wDx12SC::ResizeBuffers): frame
-// generation is switched off, and XeFG's presents on its own thread are waited for, before ResizeBuffers releases the back
-// buffers they use. Held until the resize is done; when it is let go frame generation is told the swapchain changed. The
-// caller takes it BEFORE the bridge's own mutex: XeFG's thread holds the shared side while it draws the menu, which asks
-// IsUp().
+// generation is switched off, and XeFG's presents on its own thread are waited for, before ResizeBuffers releases the
+// back buffers they use. Held until the resize is done; when it is let go frame generation is told the swapchain
+// changed. The caller takes it BEFORE the bridge's own mutex: XeFG's thread holds the shared side while it draws the
+// menu, which asks IsUp().
 struct ResizeHold
 {
     std::unique_lock<std::shared_mutex> lock { Dx11wDx12Sync::PresentResizeMutex(), std::defer_lock };
@@ -418,7 +420,8 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
 
     Bridge* self = &bridge;
 
-    const native::MakeOutputFn make = [self](DXGI_SWAP_CHAIN_DESC& desc, ComPtr<IDXGISwapChain4>& out, std::string& reason)
+    const native::MakeOutputFn make =
+        [self](DXGI_SWAP_CHAIN_DESC& desc, ComPtr<IDXGISwapChain4>& out, std::string& reason)
     {
         auto& state = State::Instance();
         ComPtr<IDXGIFactory2> factory;
@@ -438,8 +441,8 @@ bool CreateBridge(Bridge& bridge, const VkSwapchainCreateInfoKHR& in, std::strin
         state.vulkanCreatingSC = false;
 
         bool realFG = false;
-        const HRESULT hr =
-            DxgiFactoryHooks::CreateDx12BridgeSwapChain(factory.Get(), self->queue12, &desc, &out, &realFG, systemFactory);
+        const HRESULT hr = DxgiFactoryHooks::CreateDx12BridgeSwapChain(factory.Get(), self->queue12, &desc, &out,
+                                                                       &realFG, systemFactory);
 
         state.vulkanCreatingSC = creatingSC;
 
@@ -495,10 +498,7 @@ bool DxvkGame()
     return known == 1;
 }
 
-bool DxvkThroughVulkan()
-{
-    return DxvkGame() && Config::Instance()->DlssNrNativeDxvkVulkan.value_or_default();
-}
+bool DxvkThroughVulkan() { return DxvkGame() && Config::Instance()->DlssNrNativeDxvkVulkan.value_or_default(); }
 
 int32_t* FullScreenExclusiveMode(const void* chain, bool* readOnly)
 {
@@ -510,8 +510,8 @@ int32_t* FullScreenExclusiveMode(const void* chain, bool* readOnly)
         if ((int32_t) header->sType != kFullScreenExclusiveInfo)
             continue;
 
-        // The chain is the game's memory, and may sit in a read-only section: only a field that can be written is handed
-        // out
+        // The chain is the game's memory, and may sit in a read-only section: only a field that can be written is
+        // handed out
         auto* mode =
             &reinterpret_cast<FullScreenExclusiveInfo*>(const_cast<VkBaseInStructure*>(header))->fullScreenExclusive;
 
@@ -539,8 +539,8 @@ void ForgetSurface(VkSurfaceKHR surface)
     g_windows.erase(surface);
 }
 
-bool OnCreateSwapchain(VkInstance instance, VkPhysicalDevice physical, VkDevice device, const VkSwapchainCreateInfoKHR& in,
-                       VkSwapchainCreateInfoKHR* out)
+bool OnCreateSwapchain(VkInstance instance, VkPhysicalDevice physical, VkDevice device,
+                       const VkSwapchainCreateInfoKHR& in, VkSwapchainCreateInfoKHR* out)
 {
     *out = in;
 
@@ -549,8 +549,8 @@ bool OnCreateSwapchain(VkInstance instance, VkPhysicalDevice physical, VkDevice 
     bool needsHold = false;
     {
         std::lock_guard lock(g_mutex);
-        needsHold = g_bridge != nullptr && g_bridge->outputUp && g_bridge->device == device &&
-                    g_bridge->core.ResizeNeeded(in);
+        needsHold =
+            g_bridge != nullptr && g_bridge->outputUp && g_bridge->device == device && g_bridge->core.ResizeNeeded(in);
     }
 
     std::shared_ptr<ResizeHold> resizeHold = needsHold ? BeginResize() : nullptr;
@@ -580,8 +580,8 @@ bool OnCreateSwapchain(VkInstance instance, VkPhysicalDevice physical, VkDevice 
         if (g_bridge->realSurface != in.surface && g_bridge->device == device && g_bridge->swapchains.empty() &&
             hwnd != nullptr && hwnd != g_bridge->window)
         {
-            LOG_INFO("Vulkan bridge: the game moved to window {:X} (was {:X}): the bridge follows",
-                     (size_t) hwnd, (size_t) g_bridge->window);
+            LOG_INFO("Vulkan bridge: the game moved to window {:X} (was {:X}): the bridge follows", (size_t) hwnd,
+                     (size_t) g_bridge->window);
             resizeHold.reset();
             Retire(g_bridge);
         }
@@ -635,9 +635,9 @@ bool OnCreateSwapchain(VkInstance instance, VkPhysicalDevice physical, VkDevice 
         g_bridge = std::move(bridge);
     }
 
-    // The hidden surface can stop answering while the bridge waits for the game's next swapchain (Batman: Arkham Knight on
-    // dxvk, after it left exclusive full screen and dxvk set the display modes back): with no game swapchain on it, a new
-    // hidden window and surface are made and the swapchain is tried once more, the D3D12 swapchain kept
+    // The hidden surface can stop answering while the bridge waits for the game's next swapchain (Batman: Arkham Knight
+    // on dxvk, after it left exclusive full screen and dxvk set the display modes back): with no game swapchain on it,
+    // a new hidden window and surface are made and the swapchain is tried once more, the D3D12 swapchain kept
     // (native/VkHiddenSurfaceRule.h).
     bool patched = false;
     bool remade = false;
@@ -705,8 +705,8 @@ void OnSwapchainDestroyed(VkDevice device, VkSwapchainKHR swapchain)
 
     if (g_bridge != nullptr && g_bridge->swapchains.erase(swapchain) != 0)
     {
-        // The game's last swapchain. The D3D12 swapchain and frame generation stay, for the swapchain the game makes next
-        // (a game commonly destroys the old one first, Detroit: Become Human at its first resize): making frame
+        // The game's last swapchain. The D3D12 swapchain and frame generation stay, for the swapchain the game makes
+        // next (a game commonly destroys the old one first, Detroit: Become Human at its first resize): making frame
         // generation's swapchain again on the same window while its old one is being let go crashed the game.
         if (g_bridge->swapchains.empty())
             LOG_INFO("Vulkan bridge: the game destroyed its swapchain; the D3D12 swapchain is kept for its next one");
@@ -758,8 +758,8 @@ void OnDeviceDestroying(VkDevice device)
             retired->core.ReleaseOutput();
     }
 
-    // Only a retired bridge's device went while a newer bridge is up on another one: that bridge keeps its interop state
-    // and its D3D12 device
+    // Only a retired bridge's device went while a newer bridge is up on another one: that bridge keeps its interop
+    // state and its D3D12 device
     if (!liveBridge && g_bridge != nullptr && g_bridge->outputUp)
         return;
 
@@ -806,10 +806,7 @@ bool IsUp()
     return g_bridge != nullptr && g_bridge->outputUp;
 }
 
-bool OutputActive()
-{
-    return g_outputsActive.load(std::memory_order_acquire) > 0;
-}
+bool OutputActive() { return g_outputsActive.load(std::memory_order_acquire) > 0; }
 
 ID3D12Device* Device() { return g_outputDevice.load(std::memory_order_acquire); }
 
@@ -853,12 +850,12 @@ bool CopyToOutput(ID3D12Resource* picture, ID3D12Fence* fence, uint64_t copied, 
 namespace
 {
 
-// The D3D12 swapchain's present keeps failing: the bridge is turned off instead of presenting into it for ever. The game's
-// swapchain sits on a hidden window, so it cannot simply go on presenting; what can be done safely is to let go of the D3D12
-// swapchain (the real window is free again, the same way a switched-off mode ends the bridge), refuse a new bridge, and tell
-// the game its swapchain is out of date (WantsNewSwapchain) so it makes the next one on its own window and presents there.
-// Until it does, the window keeps the last picture, but the game is no longer held up on a present that cannot work.
-// `reason` goes to the log (with the code), `plain` to the menu.
+// The D3D12 swapchain's present keeps failing: the bridge is turned off instead of presenting into it for ever. The
+// game's swapchain sits on a hidden window, so it cannot simply go on presenting; what can be done safely is to let go
+// of the D3D12 swapchain (the real window is free again, the same way a switched-off mode ends the bridge), refuse a
+// new bridge, and tell the game its swapchain is out of date (WantsNewSwapchain) so it makes the next one on its own
+// window and presents there. Until it does, the window keeps the last picture, but the game is no longer held up on a
+// present that cannot work. `reason` goes to the log (with the code), `plain` to the menu.
 void GiveUpOutput(const std::string& reason, const std::string& plain)
 {
     {
@@ -876,10 +873,11 @@ void GiveUpOutput(const std::string& reason, const std::string& plain)
               "window, and frame generation stays off until the game is restarted",
               reason);
 
-    // The resize hold only drains frame generation: it is switched off, its present in flight finishes, and its next one no
-    // longer takes the shared side of the resize lock (the interop is no longer this bridge's). The hold must be let go
-    // BEFORE the swapchain is retired: retiring destroys XeFG's swapchain, which waits for XeFG's present thread, and that
-    // thread would be waiting for the shared side of the very lock held here (the order OnCreateSwapchain keeps too).
+    // The resize hold only drains frame generation: it is switched off, its present in flight finishes, and its next
+    // one no longer takes the shared side of the resize lock (the interop is no longer this bridge's). The hold must be
+    // let go BEFORE the swapchain is retired: retiring destroys XeFG's swapchain, which waits for XeFG's present
+    // thread, and that thread would be waiting for the shared side of the very lock held here (the order
+    // OnCreateSwapchain keeps too).
     {
         const auto hold = BeginResize();
         State::Instance().swapchainInteropApi = SwapchainInteropApi::None;
@@ -941,10 +939,10 @@ void PresentOutput()
         return;
 
     // Nothing was put into the back buffer (the copy failed, or another thread held the frame source). The swapchain
-    // is presented all the same after a few frames (native/VkPresentCopyRule.h): this present is what paces the game and
-    // keeps the window alive, and a game whose copy keeps failing would otherwise freeze on its last frame with one line
-    // in the log. The first few are skipped so the last good frame stays on screen, not a flip-discard buffer's undefined
-    // contents (which frame generation would also interpolate from). Said with a count, at 1, 10, 100 ...
+    // is presented all the same after a few frames (native/VkPresentCopyRule.h): this present is what paces the game
+    // and keeps the window alive, and a game whose copy keeps failing would otherwise freeze on its last frame with one
+    // line in the log. The first few are skipped so the last good frame stays on screen, not a flip-discard buffer's
+    // undefined contents (which frame generation would also interpolate from). Said with a count, at 1, 10, 100 ...
     if (copy.warn)
         LOG_WARN("Vulkan bridge: no picture was put into the D3D12 swapchain ({} presents so far); {}", copy.failures,
                  copy.present ? "presenting the swapchain as it is" : "keeping the last frame on screen");
@@ -967,10 +965,11 @@ void PresentOutput()
     if (feedFence != nullptr && feedValue != 0)
         (fgQueue != nullptr ? fgQueue : queue12)->Wait(feedFence.Get(), feedValue);
 
-    // A frame generation swapchain draws the menu itself; a plain one gets it here, as a D3D11 game's bridge does. So does
-    // frame generation's swapchain from the system DXGI (a dxvk game), whose inner swapchain is not wrapped: the menu is
-    // then in the picture frame generation reads.
-    const bool fgHookedPresenter = state.currentFGSwapchain == output.Get() && !FGHooks::IsDx12InteropPresentSC(output.Get());
+    // A frame generation swapchain draws the menu itself; a plain one gets it here, as a D3D11 game's bridge does. So
+    // does frame generation's swapchain from the system DXGI (a dxvk game), whose inner swapchain is not wrapped: the
+    // menu is then in the picture frame generation reads.
+    const bool fgHookedPresenter =
+        state.currentFGSwapchain == output.Get() && !FGHooks::IsDx12InteropPresentSC(output.Get());
 
     if (!fgHookedPresenter || menuHere)
         MenuOverlayDx::Present(output.Get(), sync, flags, nullptr, queue12, window, false);
@@ -986,7 +985,8 @@ void PresentOutput()
         if (logged++ < 5)
             LOG_ERROR("Vulkan bridge: the D3D12 swapchain's Present failed: 0x{:X}", (unsigned) hr);
 
-        // The D3D12 device is gone (a driver reset): the window cannot be presented to any more. Said once, with the reason.
+        // The D3D12 device is gone (a driver reset): the window cannot be presented to any more. Said once, with the
+        // reason.
         if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
         {
             static bool said = false;
@@ -1054,8 +1054,8 @@ bool WantsNewSwapchain(VkSwapchainKHR swapchain)
 {
     std::lock_guard lock(g_mutex);
 
-    // The bridge was given up (GiveUpOutput): the game's swapchain is still on the hidden window, and it is told until it
-    // makes one on its own (a game that never does is left alone after a while)
+    // The bridge was given up (GiveUpOutput): the game's swapchain is still on the hidden window, and it is told until
+    // it makes one on its own (a game that never does is left alone after a while)
     if (g_outputGivenUp)
         return IsBridgedSwapchain(swapchain) && ++g_giveUpAsks <= kGiveUpAsksMax;
 
@@ -1086,15 +1086,15 @@ bool WindowResized()
 
     const bool report = g_bridge->core.ShouldReportOutOfDate();
 
-    // The window never matches the extent the game asks for (a windowed game with a fixed or clamped extent): the game is
-    // left alone after a few presents rather than recreating its swapchain on every one
+    // The window never matches the extent the game asks for (a windowed game with a fixed or clamped extent): the game
+    // is left alone after a few presents rather than recreating its swapchain on every one
     if (!report && g_bridge->core.OutOfDateGivenUp())
     {
         RECT client {};
         GetClientRect(g_bridge->core.RealWindow(), &client);
-        LogOnce(std::format("the window is {}x{} and the game's swapchain stays {}x{}: it is no longer told to recreate it",
-                            client.right - client.left, client.bottom - client.top, g_bridge->core.Width(),
-                            g_bridge->core.Height()));
+        LogOnce(std::format(
+            "the window is {}x{} and the game's swapchain stays {}x{}: it is no longer told to recreate it",
+            client.right - client.left, client.bottom - client.top, g_bridge->core.Width(), g_bridge->core.Height()));
     }
 
     return report;

@@ -6350,8 +6350,8 @@ VkResult Vulkan_wDx12::hk_vkQueueSubmit(VkQueue queue, uint32_t submitCount, con
 
     // Splitting a legacy VkSubmitInfo changes command/signal counts. Submit-level extensions such as device-group or
     // protected-submit structures can carry count-coupled semantics, so only the plain submit, one
-    // VkTimelineSemaphoreSubmitInfo and a device-0-only device group (single GPU) are rewritten. Everything else is passed
-    // through unchanged.
+    // VkTimelineSemaphoreSubmitInfo and a device-0-only device group (single GPU) are rewritten. Everything else is
+    // passed through unchanged.
     if (int32_t unsupported = 0; !LegacySubmitPNextSupported(original, &unsupported))
     {
         // Said once per kind: the game submits like this every frame, from more than one thread
@@ -6405,8 +6405,8 @@ VkResult Vulkan_wDx12::hk_vkQueueSubmit(VkQueue queue, uint32_t submitCount, con
     originalTimelineCopy.signalSemaphoreValueCount = 1;
     originalTimelineCopy.pSignalSemaphoreValues = &resourceCopyValue;
 
-    // LegacySubmitPNextSupported allows only a timeline node (its values are copied here) and a device-0-only device group,
-    // which the split submits leave out.
+    // LegacySubmitPNextSupported allows only a timeline node (its values are copied here) and a device-0-only device
+    // group, which the split submits leave out.
     originalTimelineCopy.pNext = nullptr;
 
     VkSubmitInfo modifiedOriginal = original;

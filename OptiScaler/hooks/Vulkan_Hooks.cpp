@@ -167,22 +167,21 @@ static VkLatencySleepModeInfoNV Ll2ForDriver(const VkLatencySleepModeInfoNV& inf
     return out;
 }
 
-// XeFG has Reflex as the low latency Output (native/XefgReflexRule.h): the driver does the work on these calls, XeLL only
-// keeps XeFG running. Anti-Lag 2 is AMD's and AMD has no VK_NV_low_latency2: these calls are XeLL's then, as before.
-static bool Ll2SplitToDriver()
-{
-    return native::lowlatency::XefgSide() == native::xefgreflex::XefgLatency::Reflex;
-}
+// XeFG has Reflex as the low latency Output (native/XefgReflexRule.h): the driver does the work on these calls, XeLL
+// only keeps XeFG running. Anti-Lag 2 is AMD's and AMD has no VK_NV_low_latency2: these calls are XeLL's then, as
+// before.
+static bool Ll2SplitToDriver() { return native::lowlatency::XefgSide() == native::xefgreflex::XefgLatency::Reflex; }
 
-// XeLL gets the game's mode (with low latency off in the split); the driver the same call with low latency off, or in the
-// split the game's own (null: the game switched it off)
+// XeLL gets the game's mode (with low latency off in the split); the driver the same call with low latency off, or in
+// the split the game's own (null: the game switched it off)
 static VkResult Ll2ForwardSleepMode(ID3D12Device* xellDevice, VkDevice device, VkSwapchainKHR swapchain,
                                     const VkLatencySleepModeInfoNV* info)
 {
     auto mode = Ll2SleepMode(info);
     ReflexHooks::noteLowLatency2SleepMode(info != nullptr ? &mode : nullptr);
 
-    // Anti-Lag 2 has no VK_NV_low_latency2 surface: XeLL keeps these calls and does the work then, not only the frame IDs
+    // Anti-Lag 2 has no VK_NV_low_latency2 surface: XeLL keeps these calls and does the work then, not only the frame
+    // IDs
     ReflexHooks::xellSetSleepMode(xellDevice, mode,
                                   Ll2SplitToDriver() ? native::xefgreflex::XefgLatency::Reflex
                                                      : native::xefgreflex::XefgLatency::XeLL);
@@ -333,8 +332,8 @@ static void VKAPI_CALL hkvkSetLatencyMarkerNV(VkDevice device, VkSwapchainKHR sw
 }
 
 // Handed out by vkGetInstanceProcAddr / vkGetDeviceProcAddr for the three calls (the loader's own stubs for extension
-// functions are too small to detour, so the game gets our function and ours calls the one the loader gave). Null for any
-// other name.
+// functions are too small to detour, so the game gets our function and ours calls the one the loader gave). Null for
+// any other name.
 static PFN_vkVoidFunction HookLowLatency2(const std::string& name, PFN_vkVoidFunction orgFunc)
 {
     // Native Vulkan OptiFG uses upstream's Vulkan low latency inputs. Preserve
@@ -438,9 +437,10 @@ bool VulkanHooks::SignalTimelineSemaphore(VkDevice device, VkSemaphore semaphore
 
         if (cachedSignal == nullptr || cachedDevice != device)
         {
-            cachedSignal = o_vkGetDeviceProcAddr != nullptr ? reinterpret_cast<PFN_vkSignalSemaphore>(
-                                                                  o_vkGetDeviceProcAddr(device, "vkSignalSemaphore"))
-                                                            : nullptr;
+            cachedSignal =
+                o_vkGetDeviceProcAddr != nullptr
+                    ? reinterpret_cast<PFN_vkSignalSemaphore>(o_vkGetDeviceProcAddr(device, "vkSignalSemaphore"))
+                    : nullptr;
 
             if (cachedSignal == nullptr && o_vkGetDeviceProcAddr != nullptr)
             {
@@ -582,7 +582,7 @@ static void HookDevice(VkDevice InDevice)
         if (o_ReleaseFullScreenExclusiveModeEXT != nullptr)
             DetourAttach(&(PVOID&) o_ReleaseFullScreenExclusiveModeEXT, hkvkReleaseFullScreenExclusiveModeEXT);
 
-            DetourAttach(&(PVOID&) o_DestroySwapchainKHR, hkvkDestroySwapchainKHR);
+        DetourAttach(&(PVOID&) o_DestroySwapchainKHR, hkvkDestroySwapchainKHR);
 
         if (o_GetSwapchainImagesKHR != nullptr)
             DetourAttach(&(PVOID&) o_GetSwapchainImagesKHR, hkvkGetSwapchainImagesKHR);
@@ -799,7 +799,7 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
             }
 
             LOG_INFO("DLSS-NR Vulkan: NGX's own requirement list for the model: {} ({} extensions{}{})",
-                     ngxResult == 0                         ? std::string("not asked (DLSS off or no NGX core)")
+                     ngxResult == 0                          ? std::string("not asked (DLSS off or no NGX core)")
                      : ngxResult == NVSDK_NGX_Result_Success ? std::string("answered")
                                                              : std::format("refused, {:#x}", (uint32_t) ngxResult),
                      ngxWants.size(), fromNgx.empty() ? "" : "; not in the scanned list: ", fromNgx);
@@ -956,7 +956,8 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
                     {
                         if (node->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2)
                         {
-                            chained = &((VkPhysicalDeviceFeatures2*) node)->features.shaderStorageImageWriteWithoutFormat;
+                            chained =
+                                &((VkPhysicalDeviceFeatures2*) node)->features.shaderStorageImageWriteWithoutFormat;
                             break;
                         }
                     }
@@ -982,7 +983,7 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
                             nrCoreFeatures = *localCreteInfo.pEnabledFeatures;
 
                         what = nrCoreFeatures.shaderStorageImageWriteWithoutFormat ? "already on (the game's own)"
-                                                                                    : "switched on here";
+                                                                                   : "switched on here";
                         nrCoreFeatures.shaderStorageImageWriteWithoutFormat = VK_TRUE;
                         localCreteInfo.pEnabledFeatures = &nrCoreFeatures;
                         nrWritesWithoutFormat = true;
@@ -994,11 +995,11 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
         }
     }
 
-    // Optical F5Low on Vulkan hands the picture to a D3D12 device and waits for it on the GPU through a D3D12 fence opened
-    // as a timeline semaphore (native/SharedFrameVk.h), which needs the timeline semaphore feature. The same as for the
-    // flags above: set in the game's own struct for the call when it lists one, else ours goes at the head of the chain,
-    // which is only valid when the extension is in the list (the spoofing step above adds it when offered). Not tied to
-    // the NVIDIA pair: the D3D12 side also runs the vendor-neutral port.
+    // Optical F5Low on Vulkan hands the picture to a D3D12 device and waits for it on the GPU through a D3D12 fence
+    // opened as a timeline semaphore (native/SharedFrameVk.h), which needs the timeline semaphore feature. The same as
+    // for the flags above: set in the game's own struct for the call when it lists one, else ours goes at the head of
+    // the chain, which is only valid when the extension is in the list (the spoofing step above adds it when offered).
+    // Not tied to the NVIDIA pair: the D3D12 side also runs the vendor-neutral port.
     VkPhysicalDeviceTimelineSemaphoreFeatures nativeTimelineFeature {};
     VkBool32* nativeBorrowedTimeline = nullptr;
 
@@ -1068,8 +1069,8 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
     // VK_AMD_anti_lag (added by VulkanSpoofing when the device offers it) does nothing until its antiLag feature is
     // switched on too: vkAntiLagUpdateAMD needs it, and without it Anti-Lag Vk neither waited nor kept the frame cap
     // (AMD tester, dxvk on the Vulkan bridge, XeFG with Anti-Lag 2 as the Output: the same frame rate under every cap).
-    // Where the game already chains the feature struct, the flag is set in it for the call and put back after; otherwise
-    // ours goes at the head of the chain.
+    // Where the game already chains the feature struct, the flag is set in it for the call and put back after;
+    // otherwise ours goes at the head of the chain.
     VkPhysicalDeviceAntiLagFeaturesAMD antiLagFeature {};
     VkBool32* antiLagBorrowedFlag = nullptr;
 
@@ -1375,7 +1376,8 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     if (auto fg = State::Instance().currentVkFG; fg != nullptr && fg->OwnsQueue(queue))
         return o_QueuePresentKHR(queue, pPresentInfo);
     if (auto fg = State::Instance().currentVkFG; fg != nullptr && pPresentInfo != nullptr &&
-        pPresentInfo->swapchainCount == 1 && fg->OwnsSwapchain(pPresentInfo->pSwapchains[0]))
+                                                 pPresentInfo->swapchainCount == 1 &&
+                                                 fg->OwnsSwapchain(pPresentInfo->pSwapchains[0]))
         return hkvkQueuePresentNativeFG(queue, pPresentInfo);
     LOG_FUNC();
 
@@ -1385,8 +1387,8 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     State::Instance().vulkanPresentCount.fetch_add(1, std::memory_order_relaxed);
     NoteDroppedLogLinesOnPresent();
 
-    // The device this present is on: the queue's own, not the last one the game made. A game that makes more devices after
-    // its swapchain (probes) leaves _device and _PD on one of those.
+    // The device this present is on: the queue's own, not the last one the game made. A game that makes more devices
+    // after its swapchain (probes) leaves _device and _PD on one of those.
     VkDevice presentDevice = _device;
     VkPhysicalDevice presentPhysical = _PD;
     native::VkFrameSource::DeviceOfQueue(queue, &presentDevice, &presentPhysical);
@@ -1425,10 +1427,10 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     // The game's swapchain is on the bridge's hidden window: the menu and the frame limiter are the D3D12 swapchain's
     const bool bridged = pPresentInfo->swapchainCount == 1 && VkPresentBridge::Active(pPresentInfo->pSwapchains[0]);
 
-    // dxvk with the bridge up: this frame's entry in the ledger the game's D3D11 Present fills (native/NativeLowLatency.h),
-    // taken before anything touches the frame: XeFG takes the frame's ID at its first tagged resource, which happens in
-    // NativeMotionVk::OnPresent below, and the ID has to be this frame's by then. The same call publishes the devices the
-    // game's Present may run the Reflex pair on.
+    // dxvk with the bridge up: this frame's entry in the ledger the game's D3D11 Present fills
+    // (native/NativeLowLatency.h), taken before anything touches the frame: XeFG takes the frame's ID at its first
+    // tagged resource, which happens in NativeMotionVk::OnPresent below, and the ID has to be this frame's by then. The
+    // same call publishes the devices the game's Present may run the Reflex pair on.
     const bool dxvkBridged = bridged && VkPresentBridge::DxvkThroughVulkan();
     bool pairHere = true;
 
@@ -1455,37 +1457,37 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     if (!bridged && !State::Instance().externalFrameGeneration)
         InputCommon::update();
 
-    // Optical F5Low's low latency (native/NativeLowLatency.h): Reflex markers around the game's present. This call is the
-    // game's own present whether or not the frame-generation bridge is up -- bridged, it is on the hidden window
-    // (native/VkPresentBridge.h); the D3D12 swapchain's own present, through FGHooks, is a separate thing frame generation
-    // drives on its own thread, which stays out of it. Bridged, the markers and the sleep go through the D3D entry points
-    // on the bridge's private D3D12 device -- the same relationship Dx11wDx12SC::Present has to its hidden D3D11 present
-    // -- so XeFG's XeLL routing (ReflexHooks) reaches them; the Vulkan NVAPI belongs to a game with no bridge. Not under
-    // dxvk unbridged: these are dxvk's presents, not the game's. Bridged (NativeDxvkVulkan), it is the same as a native
-    // Vulkan game: the game's wrapped D3D11 present stands aside for dxvk (wrapped_swapchain.cpp), so nothing else sends them.
-    // With XeFG's Output on Reflex or Anti-Lag 2 the latency is lowered on the game's VkDevice instead (the Vulkan
-    // surface: the driver's Reflex, or Anti-Lag Vk); XeLL on the bridge's device only keeps XeFG running
+    // Optical F5Low's low latency (native/NativeLowLatency.h): Reflex markers around the game's present. This call is
+    // the game's own present whether or not the frame-generation bridge is up -- bridged, it is on the hidden window
+    // (native/VkPresentBridge.h); the D3D12 swapchain's own present, through FGHooks, is a separate thing frame
+    // generation drives on its own thread, which stays out of it. Bridged, the markers and the sleep go through the D3D
+    // entry points on the bridge's private D3D12 device -- the same relationship Dx11wDx12SC::Present has to its hidden
+    // D3D11 present
+    // -- so XeFG's XeLL routing (ReflexHooks) reaches them; the Vulkan NVAPI belongs to a game with no bridge. Not
+    // under dxvk unbridged: these are dxvk's presents, not the game's. Bridged (NativeDxvkVulkan), it is the same as a
+    // native Vulkan game: the game's wrapped D3D11 present stands aside for dxvk (wrapped_swapchain.cpp), so nothing
+    // else sends them. With XeFG's Output on Reflex or Anti-Lag 2 the latency is lowered on the game's VkDevice instead
+    // (the Vulkan surface: the driver's Reflex, or Anti-Lag Vk); XeLL on the bridge's device only keeps XeFG running
     // (native/XefgReflexRule.h)
     const bool splitOnVulkan = bridged && native::lowlatency::XefgSide() != native::xefgreflex::XefgLatency::XeLL;
-    const auto lowLatencyTarget =
-        native::lowlatency::PresentTarget(true, bridged, presentDevice,
-                                          bridged ? static_cast<IUnknown*>(VkPresentBridge::Device()) : nullptr,
-                                          splitOnVulkan);
-    // dxvk calls this present from its own thread, not the game's, so a Sleep here only paces dxvk and the game runs ahead
-    // until dxvk's frame latency limit stops it. By default (NativeLowLatencyDxvkGameThread) the game's own D3D11 Present
-    // runs the pair instead (wrapped/wrapped_swapchain.cpp), and says so in this frame's ledger entry: `pairHere` is false
-    // for those frames. It is this frame's own entry, not the current setting, that decides: a frame the game's Present
-    // already paired is never paired again here, and a frame it left to this present is never left unpaired.
-    // Unverified, to check in a game: with the pair at the game's Present, PRESENT_START/END (and Anti-Lag Vk's present
-    // stage call) no longer bracket the real vkQueuePresentKHR, which dxvk makes up to its frame latency later on its own
-    // thread, so the driver's Reflex report and the AMD pairing may read differently.
-    // Both sites only call the NVAPI entry points that take the device (NvAPI_D3D_* on the bridge's D3D12 device,
+    const auto lowLatencyTarget = native::lowlatency::PresentTarget(
+        true, bridged, presentDevice, bridged ? static_cast<IUnknown*>(VkPresentBridge::Device()) : nullptr,
+        splitOnVulkan);
+    // dxvk calls this present from its own thread, not the game's, so a Sleep here only paces dxvk and the game runs
+    // ahead until dxvk's frame latency limit stops it. By default (NativeLowLatencyDxvkGameThread) the game's own D3D11
+    // Present runs the pair instead (wrapped/wrapped_swapchain.cpp), and says so in this frame's ledger entry:
+    // `pairHere` is false for those frames. It is this frame's own entry, not the current setting, that decides: a
+    // frame the game's Present already paired is never paired again here, and a frame it left to this present is never
+    // left unpaired. Unverified, to check in a game: with the pair at the game's Present, PRESENT_START/END (and
+    // Anti-Lag Vk's present stage call) no longer bracket the real vkQueuePresentKHR, which dxvk makes up to its frame
+    // latency later on its own thread, so the driver's Reflex report and the AMD pairing may read differently. Both
+    // sites only call the NVAPI entry points that take the device (NvAPI_D3D_* on the bridge's D3D12 device,
     // NvAPI_Vulkan_SetLatencyMarker / Sleep on the VkDevice) and vkWaitSemaphores on the VkDevice's sleep semaphore.
     // None of them takes a swapchain, and the Vulkan specification lists no externally synchronised parameter for
     // vkWaitSemaphores, so none has to stay on dxvk's thread. The VK_NV_low_latency2 calls that do take the swapchain
     // (vkLatencySleepNV, vkSetLatencyMarkerNV, externally synchronised in that extension) are not part of our pair.
-    const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().dxgiIsDxvk || dxvkBridged) &&
-                            lowLatencyTarget.device != nullptr && pairHere;
+    const bool lowLatency =
+        (!IdentifyGpu::getPrimaryGpu().dxgiIsDxvk || dxvkBridged) && lowLatencyTarget.device != nullptr && pairHere;
 
     const auto lowLatencyBegin = [&]
     {
@@ -1546,7 +1548,8 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
         _presentTiming.Record(Stage::BridgePresent, Util::MillisecondsNow() - bridgeStartMs);
 
         // How much of that was FGHooks::FGPresent waiting for frame generation's mutex (it runs inside the D3D12
-        // swapchain's present, on this thread): a slow bridge present is then our work or the wait for the other present
+        // swapchain's present, on this thread): a slow bridge present is then our work or the wait for the other
+        // present
         _presentTiming.Record(Stage::FrameGenerationMutexWait, native::presenttiming::TakeFrameGenerationMutexWait());
 
         // The window changed size and the hidden swapchain does not know: the game recreates when its present says so.
@@ -1581,8 +1584,8 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
     ScopedVulkanCreatingSC scopedVulkanCreatingSC {};
     VkResult result = VK_SUCCESS;
 
-    // Optical F5Low copies the swapchain's images to and from its D3D12 device: TRANSFER usage is added when the surface
-    // allows it (native/VkFrameSource.cpp).
+    // Optical F5Low copies the swapchain's images to and from its D3D12 device: TRANSFER usage is added when the
+    // surface allows it (native/VkFrameSource.cpp).
     VkSwapchainCreateInfoKHR localCreateInfo {};
 
     const auto swapchainPhysicalDevice = [&]
@@ -1708,8 +1711,8 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
                     break;
                 }
 
-                LOG_INFO("DLSS-NR: swapchain colour space {} -- {} ({}), format {}",
-                         (int) pCreateInfo->imageColorSpace, name, meaning, (int) pCreateInfo->imageFormat);
+                LOG_INFO("DLSS-NR: swapchain colour space {} -- {} ({}), format {}", (int) pCreateInfo->imageColorSpace,
+                         name, meaning, (int) pCreateInfo->imageFormat);
             }
         }
 
@@ -2052,7 +2055,7 @@ void VulkanHooks::Unhook()
     if (o_vkDestroySurfaceKHR != nullptr)
         DetourDetach(&(PVOID&) o_vkDestroySurfaceKHR, hkvkDestroySurfaceKHR);
 
-        DetourDetach(&(PVOID&) o_DestroySwapchainKHR, hkvkDestroySwapchainKHR);
+    DetourDetach(&(PVOID&) o_DestroySwapchainKHR, hkvkDestroySwapchainKHR);
 
     if (o_GetSwapchainImagesKHR != nullptr)
         DetourDetach(&(PVOID&) o_GetSwapchainImagesKHR, hkvkGetSwapchainImagesKHR);

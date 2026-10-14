@@ -67,8 +67,7 @@ ID3D12Device* ReflexHooks::bridgedXellDevice()
     // Lock-free (XeFG's present thread asks while the bridge's teardown holds its lock and waits for that thread)
     ID3D12Device* device = xefgOutput ? VkPresentBridge::Device() : nullptr;
     const bool dxvkWithoutVulkanBridge = VkPresentBridge::DxvkGame() && !VkPresentBridge::DxvkThroughVulkan();
-    const bool forward =
-        native::xefgreflex::ShouldForward(xefgOutput, device != nullptr, dxvkWithoutVulkanBridge);
+    const bool forward = native::xefgreflex::ShouldForward(xefgOutput, device != nullptr, dxvkWithoutVulkanBridge);
 
     return forward ? device : nullptr;
 }
@@ -142,8 +141,8 @@ bool XefgOutput() { return State::Instance().activeFgOutput == FGOutput::XeFG; }
 // The Framerate page's Input is Off: the game's sleep mode goes out with low latency off (XefgReflexRule.h)
 bool Blocked() { return native::lowlatency::GameLowLatencyBlocked(); }
 
-// What lowers latency with XeFG right now: XeLL, or the split (Reflex / Anti-Lag 2 do it, XeLL only keeps XeFG running).
-// Always XeLL when XeFG is not the output.
+// What lowers latency with XeFG right now: XeLL, or the split (Reflex / Anti-Lag 2 do it, XeLL only keeps XeFG
+// running). Always XeLL when XeFG is not the output.
 native::xefgreflex::XefgLatency CurrentSide() { return native::lowlatency::XefgSide(); }
 
 bool Split() { return CurrentSide() != native::xefgreflex::XefgLatency::XeLL; }
@@ -157,14 +156,14 @@ bool XellHoldsCap()
                                             native::lowlatency::XefgGenerating());
 }
 
-// A D3D game's sleep mode as XeLL (or the plain Reflex output without XeFG) gets it: XefgReflexRule.h SleepModeForOutput
-// with the cap in place of the game's interval when `capIntervalUs` is set. `side`: who lowers latency with XeFG; when
-// the other side takes the mode (RouteFor), XeLL's has low latency off.
+// A D3D game's sleep mode as XeLL (or the plain Reflex output without XeFG) gets it: XefgReflexRule.h
+// SleepModeForOutput with the cap in place of the game's interval when `capIntervalUs` is set. `side`: who lowers
+// latency with XeFG; when the other side takes the mode (RouteFor), XeLL's has low latency off.
 NV_SET_SLEEP_MODE_PARAMS ForOutput(const NV_SET_SLEEP_MODE_PARAMS& params, Side side = Side::XeLL,
                                    uint32_t capIntervalUs = 0)
 {
-    auto mode = native::xefgreflex::SleepModeForOutput(ToMode(params), capIntervalUs, XefgOutput(), ForceDisabled(),
-                                                       Blocked());
+    auto mode =
+        native::xefgreflex::SleepModeForOutput(ToMode(params), capIntervalUs, XefgOutput(), ForceDisabled(), Blocked());
 
     // XeLL in the split: low latency off, it neither sleeps nor holds the cap
     if (RouteFor(side, Call::SetSleepMode).driver)
@@ -173,8 +172,8 @@ NV_SET_SLEEP_MODE_PARAMS ForOutput(const NV_SET_SLEEP_MODE_PARAMS& params, Side 
     return WithMode(params, mode);
 }
 
-// What the game gets back from a call that went to both XeLL and the other side: the other side's answer, except that an
-// Anti-Lag 2 that could not start must not hand its error to the game while XeFG is still falling back to XeLL
+// What the game gets back from a call that went to both XeLL and the other side: the other side's answer, except that
+// an Anti-Lag 2 that could not start must not hand its error to the game while XeFG is still falling back to XeLL
 // (ReflexHooks::update, native::lowlatency::XefgSide)
 NvAPI_Status ResultFor(Side side, NvAPI_Status xell, NvAPI_Status other)
 {
@@ -199,7 +198,8 @@ NvAPI_Status ReflexHooks::xellSetSleepMode(ID3D12Device* xellDevice, const nativ
     return xellSetSleepMode(xellDevice, game, CurrentSide());
 }
 
-NvAPI_Status ReflexHooks::xellSetSleepMode(ID3D12Device* xellDevice, const native::xefgreflex::SleepMode& game, Side side)
+NvAPI_Status ReflexHooks::xellSetSleepMode(ID3D12Device* xellDevice, const native::xefgreflex::SleepMode& game,
+                                           Side side)
 {
     auto mode = native::xefgreflex::SleepModeForOutput(game, _minimumIntervalUs, true, ForceDisabled(), Blocked());
 
@@ -285,8 +285,8 @@ NvAPI_Status ReflexHooks::sideSetSleepMode(Side side, IUnknown* pDev, NV_SET_SLE
         logged = *params;
         loggedDev = pDev;
         LOG_INFO("XeFG low latency: {} sleep mode on {:X}: low latency {}, boost {}, interval {} us ({}): {}",
-                 side == Side::AntiLag2 ? "Anti-Lag 2" : "NVIDIA Reflex", (uintptr_t) pDev, params->bLowLatencyMode != 0,
-                 params->bLowLatencyBoost != 0, params->minimumIntervalUs,
+                 side == Side::AntiLag2 ? "Anti-Lag 2" : "NVIDIA Reflex", (uintptr_t) pDev,
+                 params->bLowLatencyMode != 0, params->bLowLatencyBoost != 0, params->minimumIntervalUs,
                  params->minimumIntervalUs > 0 ? std::format("{:.1f} fps", 1e6 / params->minimumIntervalUs)
                                                : std::string("no cap"),
                  magic_enum::enum_name(result));
@@ -407,8 +407,8 @@ void ReflexHooks::dropSideOnOtherApi(bool nowVulkan)
     dropping = false;
 }
 
-// The Output went back to XeLL (or Input Off, Force Disable switched the split off): the side that had the sleep mode gets
-// one with everything off, or it would go on sleeping and limiting next to XeLL
+// The Output went back to XeLL (or Input Off, Force Disable switched the split off): the side that had the sleep mode
+// gets one with everything off, or it would go on sleeping and limiting next to XeLL
 void ReflexHooks::releaseSide(Side previous)
 {
     std::scoped_lock lock(_sleepModeMutex);
@@ -475,8 +475,9 @@ ID3D12Device* ReflexHooks::vkForwardDevice()
     return device;
 }
 
-// XeLL gets the game's mode, the driver the same call with low latency off (it still has to run its Sleep). In the split
-// it is the other way round: XeLL gets it with low latency off, the driver (or Anti-Lag Vk) the game's own, with the cap.
+// XeLL gets the game's mode, the driver the same call with low latency off (it still has to run its Sleep). In the
+// split it is the other way round: XeLL gets it with low latency off, the driver (or Anti-Lag Vk) the game's own, with
+// the cap.
 NvAPI_Status ReflexHooks::forwardVkSleepMode(ID3D12Device* xellDevice, HANDLE vkDevice,
                                              const NV_VULKAN_SET_SLEEP_MODE_PARAMS& game)
 {
@@ -499,8 +500,8 @@ NvAPI_Status ReflexHooks::forwardVkSleepMode(ID3D12Device* xellDevice, HANDLE vk
     return o_NvAPI_Vulkan_SetSleepMode(vkDevice, &driver);
 }
 
-// A D3D sleep mode with XeFG as the output (the game's, or ours with `capIntervalUs` 0: ours carries its cap): XeLL gets
-// it shaped for the side in force, the other side the game's own with the cap (native/XefgReflexRule.h RouteFor)
+// A D3D sleep mode with XeFG as the output (the game's, or ours with `capIntervalUs` 0: ours carries its cap): XeLL
+// gets it shaped for the side in force, the other side the game's own with the cap (native/XefgReflexRule.h RouteFor)
 NvAPI_Status ReflexHooks::xefgSetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* params, uint32_t capIntervalUs)
 {
     const auto side = CurrentSide();
@@ -562,7 +563,8 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_SetSleepMode(IUnknown* pDev, NV_SET_SLEEP_
     if (_minimumIntervalUs != 0)
         pSetSleepModeParams->minimumIntervalUs = _minimumIntervalUs;
 
-    // The Framerate page's Input is Off: real nvapi, or fakenvapi as the game's nvapi, gets the mode with low latency off
+    // The Framerate page's Input is Off: real nvapi, or fakenvapi as the game's nvapi, gets the mode with low latency
+    // off
     if (Blocked())
     {
         auto off = ForOutput(*pSetSleepModeParams);
@@ -600,9 +602,9 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_Sleep(IUnknown* pDev)
 
     if (State::Instance().activeFgOutput == FGOutput::XeFG)
     {
-        // Our own Sleep with XeFG: noted for the menu's Reflex timing graph only (updateTimingData), as below. With XeLL as
-        // the Output it is the one device whose report has the timings: a game with no Reflex of its own (dxvk on the
-        // Vulkan bridge) gives the graph nothing else, and it stayed empty.
+        // Our own Sleep with XeFG: noted for the menu's Reflex timing graph only (updateTimingData), as below. With
+        // XeLL as the Output it is the one device whose report has the timings: a game with no Reflex of its own (dxvk
+        // on the Vulkan bridge) gives the graph nothing else, and it stayed empty.
         if (_ownCall)
             _ownSleepDev = pDev;
 
@@ -663,8 +665,8 @@ NvAPI_Status ReflexHooks::sendMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* p
 
     if (State::Instance().activeFgOutput == FGOutput::XeFG)
     {
-        // The split: XeLL has every marker (its low latency is off, it drops them but XeFG's frame IDs follow them), the
-        // other side too
+        // The split: XeLL has every marker (its low latency is off, it drops them but XeFG's frame IDs follow them),
+        // the other side too
         const auto side = CurrentSide();
         const auto route = RouteFor(side, Call::Marker);
         NvAPI_Status xellResult = NVAPI_OK;
@@ -1000,7 +1002,8 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D12_SetAsyncFrameMarker(ID3D12CommandQueue* 
             xellResult = nvapi_calls::NvAPI_D3D12_SetAsyncFrameMarker(pCommandQueue, pSetAsyncFrameMarkerParams);
 
         if (route.driver)
-            return ResultFor(side, xellResult, sideSetAsyncFrameMarker(side, pCommandQueue, pSetAsyncFrameMarkerParams));
+            return ResultFor(side, xellResult,
+                             sideSetAsyncFrameMarker(side, pCommandQueue, pSetAsyncFrameMarkerParams));
 
         return xellResult;
     }
@@ -1061,8 +1064,8 @@ NvAPI_Status ReflexHooks::hkNvAPI_Vulkan_SetLatencyMarker(HANDLE vkDevice,
     }
     else if (const auto side = CurrentSide(); RouteFor(side, Call::Marker).driver)
     {
-        // Ours in the split (they go to the game's VkDevice, NativeLowLatencyRule.h PresentTarget): XeLL on the bridge's
-        // device has them too, for XeFG's frame IDs
+        // Ours in the split (they go to the game's VkDevice, NativeLowLatencyRule.h PresentTarget): XeLL on the
+        // bridge's device has them too, for XeFG's frame IDs
         if (auto* xellDevice = bridgedXellDevice())
         {
             if (RouteFor(side, Call::Marker).xell)
@@ -1096,8 +1099,8 @@ NvAPI_Status ReflexHooks::hkNvAPI_Vulkan_SetSleepMode(HANDLE vkDevice,
     // cap to Reflex); they carry the cap themselves when the low latency keeps it.
     if (_ownCall)
     {
-        // The split on the bridge: XeLL has it with low latency off (it would sleep with the one XeFG made it with), the
-        // driver, or Anti-Lag Vk, ours as it is
+        // The split on the bridge: XeLL has it with low latency off (it would sleep with the one XeFG made it with),
+        // the driver, or Anti-Lag Vk, ours as it is
         if (const auto side = CurrentSide(); RouteFor(side, Call::SetSleepMode).driver)
         {
             if (auto* xellDevice = bridgedXellDevice())
@@ -1148,8 +1151,7 @@ NvAPI_Status ReflexHooks::hkNvAPI_Vulkan_Sleep(HANDLE vkDevice, NvU64 signalValu
     // Sleep (or fakenvapi's, which signals the semaphore for Anti-Lag Vk) is the one that waits.
     if (!_ownCall)
     {
-        if (auto* xellDevice = vkForwardDevice();
-            xellDevice != nullptr && RouteFor(CurrentSide(), Call::Sleep).xell)
+        if (auto* xellDevice = vkForwardDevice(); xellDevice != nullptr && RouteFor(CurrentSide(), Call::Sleep).xell)
             xellSleep(xellDevice);
     }
 
@@ -1371,18 +1373,19 @@ bool ReflexHooks::updateTimingData()
     // The game's Reflex device, else Optical F5Low's own Sleep device
     // A game that only marks frames for XeFG's XeLL sets no sleep device: its markers' device asks
     auto* markersDev = XefgOutput() && gameIsSendingMarkers() ? _lastDev[SIMULATION_START].load() : nullptr;
-    // In the split the XeFG branch of the Sleep hook stores no device (XeLL's or ours): the side's device has the report
-    // Both a D3D and a Vulkan side can be registered for a moment across an Output change: the one set last has the report
+    // In the split the XeFG branch of the Sleep hook stores no device (XeLL's or ours): the side's device has the
+    // report Both a D3D and a Vulkan side can be registered for a moment across an Output change: the one set last has
+    // the report
     const bool sideOnVulkan = XefgOutput() && Split() && _sideLastWasVk && _sideVkDev != nullptr;
     auto* sideDev = XefgOutput() && Split() && !sideOnVulkan ? _sideDev : nullptr;
 
-    if (auto sleepDev = sideDev != nullptr ? sideDev
-                        : _lastSleepDev != nullptr
-                            ? _lastSleepDev
-                            : (_ownSleepDev != nullptr ? _ownSleepDev : markersDev);
+    if (auto sleepDev = sideDev != nullptr         ? sideDev
+                        : _lastSleepDev != nullptr ? _lastSleepDev
+                                                   : (_ownSleepDev != nullptr ? _ownSleepDev : markersDev);
         sleepDev && !sideOnVulkan && o_NvAPI_D3D_GetLatency)
     {
-        // With XeFG, hkNvAPI_D3D_GetLatency answers from XeFG's XeLL through fakenvapi (the driver's report in the split)
+        // With XeFG, hkNvAPI_D3D_GetLatency answers from XeFG's XeLL through fakenvapi (the driver's report in the
+        // split)
         _timingEstimated = (XefgOutput() && !Split()) || fakenvapi::isUsingAsMainNvapi();
 
         // Not calling free on this but it's static so hopefully fine
@@ -1400,7 +1403,10 @@ bool ReflexHooks::updateTimingData()
         {
             loggedDev = sleepDev;
             LOG_INFO("Reflex timings: reading the D3D report of the {} device {:X}",
-                     sideDev != nullptr ? "split side" : _lastSleepDev != nullptr ? "game's" : "own", (size_t) sleepDev);
+                     sideDev != nullptr         ? "split side"
+                     : _lastSleepDev != nullptr ? "game's"
+                                                : "own",
+                     (size_t) sleepDev);
         }
 
         // 64th element has the latest data
@@ -1433,9 +1439,8 @@ bool ReflexHooks::updateTimingData()
         return processFrameReport(results->frameReport[63]);
     }
 
-    return noData(vkDev == nullptr
-                      ? "no Reflex device: no game, side or own sleep device (and no Vulkan one)"
-                      : "no NvAPI_Vulkan_GetLatency");
+    return noData(vkDev == nullptr ? "no Reflex device: no game, side or own sleep device (and no Vulkan one)"
+                                   : "no NvAPI_Vulkan_GetLatency");
 }
 
 // For updating information about Reflex hooks
@@ -1473,12 +1478,13 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
         return;
     }
 
-    // The split (XeFG with Reflex or Anti-Lag 2 as the Output): the other side holds the cap, not XeLL, with the game's own
-    // sleep mode, unless OptiScaler's limiter keeps it where the driver was seen not to hold it (SplitLimiterKeepsCap, the
-    // same rule our own calls take), or the game turned its Reflex off (fakenvapi might override that, as below). A bridged Vulkan game's
-    // is its NvAPI_Vulkan one: one on VK_NV_low_latency2 gets no cap from us (no swapchain to send it on) and one that only
-    // marks frames has no mode of the other side's, so the limiter keeps it for both. The Vulkan present and the bridge's
-    // D3D12 present both ask: the answer must be the same for both, or it flips every frame.
+    // The split (XeFG with Reflex or Anti-Lag 2 as the Output): the other side holds the cap, not XeLL, with the game's
+    // own sleep mode, unless OptiScaler's limiter keeps it where the driver was seen not to hold it
+    // (SplitLimiterKeepsCap, the same rule our own calls take), or the game turned its Reflex off (fakenvapi might
+    // override that, as below). A bridged Vulkan game's is its NvAPI_Vulkan one: one on VK_NV_low_latency2 gets no cap
+    // from us (no swapchain to send it on) and one that only marks frames has no mode of the other side's, so the
+    // limiter keeps it for both. The Vulkan present and the bridge's D3D12 present both ask: the answer must be the
+    // same for both, or it flips every frame.
     const auto splitHoldsCap = [&]() -> bool
     {
         if (native::lowlatency::SplitLimiterKeepsCap(CurrentSide(), State::Instance().swapchainInteropApi ==
@@ -1486,7 +1492,8 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
             return false;
 
         if (bridgedXellDevice() != nullptr)
-            return _lastVkSleepDev != nullptr && (fakenvapi::isUsingAsMainNvapi() || _lastVkSleepParams.bLowLatencyMode);
+            return _lastVkSleepDev != nullptr &&
+                   (fakenvapi::isUsingAsMainNvapi() || _lastVkSleepParams.bLowLatencyMode);
 
         // A D3D game that marks frames and never sleeps: only Anti-Lag 2 (fakenvapi) acts on the markers alone
         return fakenvapi::isUsingAsMainNvapi() || (_lastSleepDev != nullptr && _lastSleepParams.bLowLatencyMode);
@@ -1530,8 +1537,8 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
         State::Instance().reflexLimitsFps = false;
     }
 
-    // The Framerate page's Input is Off: the game's Reflex goes out with low latency off and no interval, so it keeps no
-    // cap; OptiScaler's limiter does. A change of the Input sends the stored sleep mode again, in the other shape.
+    // The Framerate page's Input is Off: the game's Reflex goes out with low latency off and no interval, so it keeps
+    // no cap; OptiScaler's limiter does. A change of the Input sends the stored sleep mode again, in the other shape.
     const bool blocked = Blocked();
     static bool lastBlocked = false;
     const bool blockChanged = blocked != lastBlocked;
@@ -1557,15 +1564,16 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
     //}
 
     // The side that lowers latency with XeFG changed (the Output, or Input Off / Force Disable switched the split on or
-    // off): the side that had the sleep mode lets it go, and the stored one is sent again in the new shape. Also when XeFG
-    // made a new XeLL context where XeLL must not sleep (the split, Input Off, Force Disable): it starts with low latency
-    // on (XeFG_Dx12), and the stored mode has to be sent again to turn it off.
+    // off): the side that had the sleep mode lets it go, and the stored one is sent again in the new shape. Also when
+    // XeFG made a new XeLL context where XeLL must not sleep (the split, Input Off, Force Disable): it starts with low
+    // latency on (XeFG_Dx12), and the stored mode has to be sent again to turn it off.
     const auto side = CurrentSide();
     static Side lastSide = Side::XeLL;
     static uint32_t lastXellGeneration = 0;
     const auto xellGeneration = fakenvapi::forcedModeGeneration();
     const bool sideChanged = side != lastSide;
-    const bool xellRemade = (side != Side::XeLL || Blocked() || ForceDisabled()) && xellGeneration != lastXellGeneration;
+    const bool xellRemade =
+        (side != Side::XeLL || Blocked() || ForceDisabled()) && xellGeneration != lastXellGeneration;
 
     if (sideChanged)
     {
@@ -1661,8 +1669,8 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
     }
     else if (side != Side::XeLL)
     {
-        // XeFG with Reflex or Anti-Lag 2 as the Output: the other side paces the game's own frames and XeFG shows several
-        // per frame. Stable while XeFG generates (not per present, as fgActive is).
+        // XeFG with Reflex or Anti-Lag 2 as the Output: the other side paces the game's own frames and XeFG shows
+        // several per frame. Stable while XeFG generates (not per present, as fgActive is).
         currentFps = native::lowlatency::CapPerRenderedFrame(currentFps, native::lowlatency::XefgShownPerRendered());
     }
     else if (_FgNumFramesToGenerate > 0 && fakenvapi::isUsingAsMainNvapi() &&
@@ -1707,8 +1715,8 @@ void ReflexHooks::setFPSLimit(float fps)
 
         if (XefgOutput())
         {
-            // XeLL's (low latency off in the split), then the other side the game's own with the cap. The cap replaces the
-            // game's interval, 0 included (the limiter keeps the cap then).
+            // XeLL's (low latency off in the split), then the other side the game's own with the cap. The cap replaces
+            // the game's interval, 0 included (the limiter keeps the cap then).
             auto game = ToMode(_lastSleepParams);
             game.minimumIntervalUs = 0;
             auto forXefg = ForOutput(temp, side, _minimumIntervalUs);
@@ -1736,8 +1744,9 @@ void ReflexHooks::setFPSLimit(float fps)
         auto forXefg = ForOutput(temp, side);
         nvapi_calls::NvAPI_D3D_SetSleepMode(markerDev, &forXefg);
 
-        // The split: a game that marks frames and never sleeps has nothing for the driver's Reflex to wait in, as without
-        // us (the limiter keeps the cap, splitHoldsCap). Anti-Lag 2 sleeps on the markers by itself, with the cap.
+        // The split: a game that marks frames and never sleeps has nothing for the driver's Reflex to wait in, as
+        // without us (the limiter keeps the cap, splitHoldsCap). Anti-Lag 2 sleeps on the markers by itself, with the
+        // cap.
         if (side == Side::AntiLag2)
         {
             temp.bLowLatencyMode = true;
@@ -1762,20 +1771,23 @@ void ReflexHooks::setFPSLimit(float fps)
         else
             mode.lowLatency = true;
 
-        // VK_NV_low_latency2 has no Anti-Lag 2 side (AMD has no such extension): its calls stay XeLL's, which does the work
-        const auto xellSide = _lastVkSleepDev == nullptr && _lastLl2ModeSet && side == Side::AntiLag2 ? Side::XeLL : side;
+        // VK_NV_low_latency2 has no Anti-Lag 2 side (AMD has no such extension): its calls stay XeLL's, which does the
+        // work
+        const auto xellSide =
+            _lastVkSleepDev == nullptr && _lastLl2ModeSet && side == Side::AntiLag2 ? Side::XeLL : side;
 
         if (_lastVkSleepDev != nullptr || _lastLl2ModeSet || gameIsSendingMarkers())
             xellSetSleepMode(xellDevice, mode, xellSide);
 
-        // The split: the other side of the NvAPI_Vulkan mode gets the game's own with the cap (xellDevice is also non-null
-        // for a game on VK_NV_low_latency2, which has no such mode here). When the split ends, update() has releaseSide
-        // switch it off.
+        // The split: the other side of the NvAPI_Vulkan mode gets the game's own with the cap (xellDevice is also
+        // non-null for a game on VK_NV_low_latency2, which has no such mode here). When the split ends, update() has
+        // releaseSide switch it off.
         if (_lastVkSleepDev != nullptr && RouteFor(side, Call::SetSleepMode).driver)
         {
             auto game = ToMode(_lastVkSleepParams);
             game.minimumIntervalUs = 0; // the cap replaces the game's interval, 0 included
-            auto real = WithMode(_lastVkSleepParams, native::xefgreflex::DriverSleepModeInSplit(game, _minimumIntervalUs));
+            auto real =
+                WithMode(_lastVkSleepParams, native::xefgreflex::DriverSleepModeInSplit(game, _minimumIntervalUs));
             sideSetSleepModeVk(side, _lastVkSleepDev, &real);
         }
     }

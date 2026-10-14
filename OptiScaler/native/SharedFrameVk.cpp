@@ -1,4 +1,5 @@
-// Not built with the precompiled header: Vulkan and Direct3D only, so tests/nr_shared_frame_vk_gpu.cpp compiles it alone.
+// Not built with the precompiled header: Vulkan and Direct3D only, so tests/nr_shared_frame_vk_gpu.cpp compiles it
+// alone.
 #include "SharedFrameVk.h"
 
 #include <format>
@@ -10,8 +11,8 @@ bool VkInterop::Load(VkPhysicalDevice physicalDevice, VkDevice vkDevice, std::st
 {
     device = vkDevice;
     physical = physicalDevice;
-    getMemoryWin32HandleProperties = (PFN_vkGetMemoryWin32HandlePropertiesKHR) vkGetDeviceProcAddr(
-        vkDevice, "vkGetMemoryWin32HandlePropertiesKHR");
+    getMemoryWin32HandleProperties =
+        (PFN_vkGetMemoryWin32HandlePropertiesKHR) vkGetDeviceProcAddr(vkDevice, "vkGetMemoryWin32HandlePropertiesKHR");
     importSemaphoreWin32Handle =
         (PFN_vkImportSemaphoreWin32HandleKHR) vkGetDeviceProcAddr(vkDevice, "vkImportSemaphoreWin32HandleKHR");
     vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memory);
@@ -500,8 +501,9 @@ void RecordDepthToBuffer(VkCommandBuffer cmd, VkImage image, VkFormat format, Vk
 
     // The last frame's reader of the buffer (the frame source's copy) is long done by the time a command buffer that
     // writes it again runs (the buffers rotate), so only the image needs a barrier.
-    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
-                                  VK_PIPELINE_STAGE_TRANSFER_BIT,
+    vkCmdPipelineBarrier(cmd,
+                         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+                             VK_PIPELINE_STAGE_TRANSFER_BIT,
                          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1, &toCopy);
 
     VkBufferImageCopy region {};
@@ -625,9 +627,8 @@ void RecordCopyFromShared(VkCommandBuffer cmd, const SharedImageVk& shared, VkIm
     vkCmdCopyImage(cmd, shared.Image(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, target,
                    VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
 
-    VkImageMemoryBarrier after =
-        Barrier(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, layout, VK_ACCESS_TRANSFER_WRITE_BIT,
-                VK_ACCESS_MEMORY_READ_BIT);
+    VkImageMemoryBarrier after = Barrier(target, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, layout,
+                                         VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_MEMORY_READ_BIT);
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 0,
                          nullptr, 1, &after);
 }

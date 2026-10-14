@@ -86,7 +86,11 @@ bool IFeature_Vk::Evaluate(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Parameter* InP
     {
         NVSDK_NGX_Resource_VK* output;
         NVSDK_NGX_Resource_VK saved;
-        ~RestoreOutput() { if (output) *output = saved; }
+        ~RestoreOutput()
+        {
+            if (output)
+                *output = saved;
+        }
     } restoreOutput { paramOutput, paramOutput ? *paramOutput : NVSDK_NGX_Resource_VK {} };
 
     // Save the original output so we can restore it later

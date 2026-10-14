@@ -43,8 +43,6 @@ constexpr std::string_view kAdvertisePattern309 = "81 FD B0 01 00 00 0F 8C ? ? ?
 //     setae al
 constexpr std::string_view kValidatePattern309 = "3D B0 01 00 00 0F 93 C0";
 
-
-
 // scanner::GetAddress only walks sections marked executable. Fatbins are data, so they need their own
 // search. Returns 0 unless exactly one non-executable section holds the sequence, once.
 uintptr_t FindDataBytes(HMODULE module, const uint8_t* needle, size_t length)
@@ -276,8 +274,7 @@ void PatchPluginCeilings()
                 break;
             case MfgUnlock::Plugin::ApplyResult::ProtectFailed:
                 result = "not writable";
-                LOG_WARN("MFG unlock: {}: frame-count clamp found but its page could not be made writable",
-                         pluginPath);
+                LOG_WARN("MFG unlock: {}: frame-count clamp found but its page could not be made writable", pluginPath);
                 break;
             case MfgUnlock::Plugin::ApplyResult::Mismatch:
                 LOG_WARN("MFG unlock: {}: frame-count clamp changed under us; left unchanged", pluginPath);
@@ -358,9 +355,8 @@ bool PatchAdvertise(HMODULE module)
     const uint8_t count[] = { kMaxGeneratedFrames };
     const uint8_t nop[] = { 0x0F, 0x1F, 0x40, 0x00 };
 
-    LOG_INFO("MFG unlock: advertise at {:X}, count {} -> {}, cmovl {} -> {}", address,
-             *(const uint8_t*) countAt, kMaxGeneratedFrames, Hex((const uint8_t*) cmovAt, sizeof(nop)),
-             Hex(nop, sizeof(nop)));
+    LOG_INFO("MFG unlock: advertise at {:X}, count {} -> {}, cmovl {} -> {}", address, *(const uint8_t*) countAt,
+             kMaxGeneratedFrames, Hex((const uint8_t*) cmovAt, sizeof(nop)), Hex(nop, sizeof(nop)));
 
     return WriteBytes(countAt, count, sizeof(count)) && WriteBytes(cmovAt, nop, sizeof(nop));
 }
@@ -401,7 +397,6 @@ bool PatchValidate(HMODULE module)
 
     return WriteBytes(branchAt, nop, sizeof(nop)) && WriteBytes(countAt, count, sizeof(count));
 }
-
 
 // Gives Ada the Blackwell kernels the module already carries.
 //
@@ -480,8 +475,8 @@ unsigned int RewriteBlackwellKernels(HMODULE module)
                 const auto payload = *reinterpret_cast<const uint64_t*>(image + kImagePayloadSize);
                 const auto arch = *reinterpret_cast<const uint32_t*>(image + kImageArch);
 
-                if (imageHeader < kImageArch + sizeof(uint32_t) || imageHeader > remaining ||
-                    payload == 0 || payload > remaining - imageHeader)
+                if (imageHeader < kImageArch + sizeof(uint32_t) || imageHeader > remaining || payload == 0 ||
+                    payload > remaining - imageHeader)
                 {
                     valid = false;
                     break;
@@ -539,8 +534,7 @@ unsigned int RewriteBlackwellKernels(HMODULE module)
 void MfgUnlock::TryApply(HMODULE requestedModule)
 {
     if (!Config::Instance()->FGDLSSGAdaMfgUnlock.value_or_default() ||
-        Config::Instance()->FGDLSSGAmpereMfgUnlock.value_or_default() ||
-        State::Instance().externalFrameGeneration)
+        Config::Instance()->FGDLSSGAmpereMfgUnlock.value_or_default() || State::Instance().externalFrameGeneration)
         return;
     const auto& gpu = IdentifyGpu::getPrimaryGpu();
     // The kernel retarget is Ada-specific. Do not patch Ampere/Turing or change Blackwell's working path.
@@ -710,15 +704,14 @@ unsigned int MfgUnlock::UnlockedMax()
 {
     const auto& status = LastStatus();
 
-    return status.AdvertiseMatched && status.ValidateMatched && status.KernelsRewritten > 0
-               ? kMaxGeneratedFrames : 0;
+    return status.AdvertiseMatched && status.ValidateMatched && status.KernelsRewritten > 0 ? kMaxGeneratedFrames : 0;
 }
 
 bool MfgUnlock::Pending()
 {
     if (!Config::Instance()->FGDLSSGAdaMfgUnlock.value_or_default() ||
-        Config::Instance()->FGDLSSGAmpereMfgUnlock.value_or_default() ||
-        State::Instance().externalFrameGeneration || g_status.ModuleFound)
+        Config::Instance()->FGDLSSGAmpereMfgUnlock.value_or_default() || State::Instance().externalFrameGeneration ||
+        g_status.ModuleFound)
         return false;
     const auto& gpu = IdentifyGpu::getPrimaryGpu();
     return gpu.vendorId == VendorId::Nvidia && gpu.nvidiaArchInfo.architecture_id == NV_GPU_ARCHITECTURE_AD100;

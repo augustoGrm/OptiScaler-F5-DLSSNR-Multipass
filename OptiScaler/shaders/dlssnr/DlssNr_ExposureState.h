@@ -41,7 +41,7 @@ inline float PaperWhiteNits(float setting)
 {
     if (!std::isfinite(setting))
         return kReferenceWhiteNits;
-    return setting < kMinPaperWhiteNits ? kMinPaperWhiteNits
+    return setting < kMinPaperWhiteNits   ? kMinPaperWhiteNits
            : setting > kMaxPaperWhiteNits ? kMaxPaperWhiteNits
                                           : setting;
 }
@@ -59,11 +59,11 @@ inline float PinnedWhitePoint(float paperWhiteNitsSetting, float nitsPerUnit)
     return PaperWhiteNits(paperWhiteNitsSetting) / nitsPerUnit;
 }
 
-// Vulkan only: when the game's own exposure image may be read live in the shader, as D3D12 reads it. The layout the game
-// leaves that image in is not known on Vulkan, so the host first reads it a few frames behind (the meter's courier,
-// through the same layout guess) and counts how often the value could be an exposure (finite, above zero -- the same test
-// the shader applies to its live texel, falling back to the host value when it fails). Live once 60 reads are in and 95%
-// held: a game whose image is not readable that way never gets past the host path.
+// Vulkan only: when the game's own exposure image may be read live in the shader, as D3D12 reads it. The layout the
+// game leaves that image in is not known on Vulkan, so the host first reads it a few frames behind (the meter's
+// courier, through the same layout guess) and counts how often the value could be an exposure (finite, above zero --
+// the same test the shader applies to its live texel, falling back to the host value when it fails). Live once 60 reads
+// are in and 95% held: a game whose image is not readable that way never gets past the host path.
 struct LiveGameGate
 {
     static constexpr unsigned long long kMinReads = 60;

@@ -1,15 +1,16 @@
 #pragma once
 
-// Picks the scene's depth buffer out of the depth-stencil buffers a game used in one frame, for the native input producer
-// (DLSS-NR in a game that makes no upscaler call, so there is no depth to take from one). Plain data in, one pick out: no
-// D3D12 here, so tests/nr_generic_depth_smoke.cpp runs it without a game or a GPU. GenericDepth_Dx12.cpp fills it in.
+// Picks the scene's depth buffer out of the depth-stencil buffers a game used in one frame, for the native input
+// producer (DLSS-NR in a game that makes no upscaler call, so there is no depth to take from one). Plain data in, one
+// pick out: no D3D12 here, so tests/nr_generic_depth_smoke.cpp runs it without a game or a GPU. GenericDepth_Dx12.cpp
+// fills it in.
 //
 // The rules are adapted from ReShade's Generic Depth add-on (examples/09-depth/generic_depth_addon.cpp in
 // github.com/crosire/reshade, Copyright (C) 2021 Patrick Mours, BSD-3-Clause; the licence is in
-// Licenses/ReShade_GenericDepth_LICENSE.txt): the scene's depth is the buffer with the most vertices drawn to it in a frame
-// (draw calls instead when indirect draws dominate), whose size has the picture's shape. A buffer that is only cleared has
-// no draws; a shadow map is square or far from the picture's shape. It is a heuristic: a game it gets wrong is a per-game
-// limitation, as it is for ReShade.
+// Licenses/ReShade_GenericDepth_LICENSE.txt): the scene's depth is the buffer with the most vertices drawn to it in a
+// frame (draw calls instead when indirect draws dominate), whose size has the picture's shape. A buffer that is only
+// cleared has no draws; a shadow map is square or far from the picture's shape. It is a heuristic: a game it gets wrong
+// is a per-game limitation, as it is for ReShade.
 
 #include <algorithm>
 #include <cmath>
@@ -22,16 +23,16 @@ namespace GenericDepthSelect
 
 struct Candidate
 {
-    uint64_t id = 0;                 // the resource, as the caller identifies it
+    uint64_t id = 0; // the resource, as the caller identifies it
     uint32_t width = 0;
     uint32_t height = 0;
-    uint32_t format = 0;             // DXGI_FORMAT, only reported
-    uint64_t vertices = 0;           // vertices (indices for indexed draws) times instances, over the frame
-    uint32_t drawcalls = 0;          // draw calls over the frame, indirect ones included
-    uint32_t drawcallsIndirect = 0;  // of which indirect
-    uint32_t clears = 0;             // depth clears seen
-    int32_t bestClear = -1;          // the clear whose stretch before it drew the most: the snapshot to take (-1 none)
-    bool reversed = false;           // cleared to something other than 1.0, so near is 1.0 (reversed-Z)
+    uint32_t format = 0;            // DXGI_FORMAT, only reported
+    uint64_t vertices = 0;          // vertices (indices for indexed draws) times instances, over the frame
+    uint32_t drawcalls = 0;         // draw calls over the frame, indirect ones included
+    uint32_t drawcallsIndirect = 0; // of which indirect
+    uint32_t clears = 0;            // depth clears seen
+    int32_t bestClear = -1;         // the clear whose stretch before it drew the most: the snapshot to take (-1 none)
+    bool reversed = false;          // cleared to something other than 1.0, so near is 1.0 (reversed-Z)
 };
 
 struct Pick
@@ -49,16 +50,17 @@ struct Pick
 struct Rules
 {
     // ReShade's "similar aspect ratio": the shapes differ by at most this (absolute width/height), and both sides are
-    // within this range of the picture's. ReShade's range stops at 1.85 (a buffer down to 0.54x of the picture); that was
-    // widened to 4 after Witcher 3, whose scene depth is 1280x720 under a 2560x1440 picture (2.0) and whose shadow maps are
-    // square, which the shape test already removes.
+    // within this range of the picture's. ReShade's range stops at 1.85 (a buffer down to 0.54x of the picture); that
+    // was widened to 4 after Witcher 3, whose scene depth is 1280x720 under a 2560x1440 picture (2.0) and whose shadow
+    // maps are square, which the shape test already removes.
     float aspectDelta = 0.1f;
     float minRatio = 0.5f;
     float maxRatio = 4.0f;
-    uint32_t warmupFrames = 2;       // a buffer must have been in use this many frames before it can win
-    uint32_t quietDrawcalls = 8;     // a frame whose only buffer drew this little is not a real frame (emulators present more)
-    float keepFraction = 0.75f;      // the previous pick stays unless something beats it by more than this (1/keep)
-    uint32_t holdFrames = 90;        // a pick is kept this many frames in a row while nothing qualifies, then dropped
+    uint32_t warmupFrames = 2; // a buffer must have been in use this many frames before it can win
+    uint32_t quietDrawcalls =
+        8; // a frame whose only buffer drew this little is not a real frame (emulators present more)
+    float keepFraction = 0.75f; // the previous pick stays unless something beats it by more than this (1/keep)
+    uint32_t holdFrames = 90;   // a pick is kept this many frames in a row while nothing qualifies, then dropped
 };
 
 // More than a third of the draws indirect: the vertex count is then not accurate, so draw calls are compared instead.
@@ -112,9 +114,9 @@ inline bool Outranks(const Candidate& a, const Candidate& b, uint32_t pictureWid
            (countA == countB && SizeGap(a, pictureWidth, pictureHeight) < SizeGap(b, pictureWidth, pictureHeight));
 }
 
-// Keeps the last pick between frames, so two buffers with similar counts (a depth pre-pass and the main pass) do not trade
-// places every frame, and a buffer must have been in use for a couple of frames before it can win (ReShade skips those that
-// only just appeared).
+// Keeps the last pick between frames, so two buffers with similar counts (a depth pre-pass and the main pass) do not
+// trade places every frame, and a buffer must have been in use for a couple of frames before it can win (ReShade skips
+// those that only just appeared).
 class Selector
 {
   public:
@@ -174,8 +176,8 @@ class Selector
 
         if (chosen == nullptr)
         {
-            // Nothing qualifies this frame: a pick that was there stays for a while, so a buffer that drops out for a frame
-            // or two (a menu, a cut) does not make the answer flicker.
+            // Nothing qualifies this frame: a pick that was there stays for a while, so a buffer that drops out for a
+            // frame or two (a menu, a cut) does not make the answer flicker.
             if (_pick.valid && _misses < _rules.holdFrames)
                 ++_misses;
             else
@@ -187,8 +189,8 @@ class Selector
         else
         {
             _misses = 0;
-            _pick = Pick { true,           chosen->id,        chosen->width,     chosen->height,
-                           chosen->format, Score(*chosen),    chosen->bestClear, chosen->reversed };
+            _pick = Pick { true,           chosen->id,     chosen->width,     chosen->height,
+                           chosen->format, Score(*chosen), chosen->bestClear, chosen->reversed };
         }
 
         return _pick;
@@ -210,7 +212,7 @@ class Selector
     Rules _rules;
     Pick _pick;
     uint64_t _frame = 0;
-    uint32_t _misses = 0;                  // frames in a row the pick was held with nothing qualifying
+    uint32_t _misses = 0; // frames in a row the pick was held with nothing qualifying
     uint32_t _lastWidth = 0;
     uint32_t _lastHeight = 0;
     std::unordered_map<uint64_t, uint64_t> _firstSeen; // id -> the frame it first appeared

@@ -47,11 +47,11 @@ struct BridgeTarget
 
 // Makes the D3D12 swapchain on the real window from `desc` (windowed, flip model, `desc.OutputWindow` set). The glue
 // goes through frame generation here; the test makes a plain one.
-using MakeOutputFn = std::function<bool(DXGI_SWAP_CHAIN_DESC& desc, Microsoft::WRL::ComPtr<IDXGISwapChain4>& out,
-                                        std::string& why)>;
-// Called with the bridge's reference to the D3D12 swapchain when the bridge lets go of it (frame generation's bookkeeping
-// goes here). It may release the reference itself, and must before frame generation destroys a swapchain of its own:
-// XeFG's destroy fails while any reference is left (POINTER_STILL_IN_USE). Released after the call otherwise.
+using MakeOutputFn =
+    std::function<bool(DXGI_SWAP_CHAIN_DESC& desc, Microsoft::WRL::ComPtr<IDXGISwapChain4>& out, std::string& why)>;
+// Called with the bridge's reference to the D3D12 swapchain when the bridge lets go of it (frame generation's
+// bookkeeping goes here). It may release the reference itself, and must before frame generation destroys a swapchain of
+// its own: XeFG's destroy fails while any reference is left (POINTER_STILL_IN_USE). Released after the call otherwise.
 using ReleaseOutputFn = std::function<void(Microsoft::WRL::ComPtr<IDXGISwapChain4>& output)>;
 
 class VkPresentBridgeCore
@@ -66,12 +66,13 @@ class VkPresentBridgeCore
     bool Create(const BridgeTarget& target, const VkSwapchainCreateInfoKHR& game, MakeOutputFn make,
                 ReleaseOutputFn release, std::string& why);
 
-    // The game makes a new swapchain (a resize): the hidden window and the D3D12 swapchain follow its extent and format.
-    // Does nothing when they have not changed.
+    // The game makes a new swapchain (a resize): the hidden window and the D3D12 swapchain follow its extent and
+    // format. Does nothing when they have not changed.
     bool Resize(const VkSwapchainCreateInfoKHR& game, std::string& why);
 
-    // Resize would resize the D3D12 swapchain (the extent, format or colour space changed). The glue asks first, to keep
-    // frame generation out of the swapchain (switched off, its presents waited for) before the bridge's lock is taken.
+    // Resize would resize the D3D12 swapchain (the extent, format or colour space changed). The glue asks first, to
+    // keep frame generation out of the swapchain (switched off, its presents waited for) before the bridge's lock is
+    // taken.
     bool ResizeNeeded(const VkSwapchainCreateInfoKHR& game) const;
 
     // What the game's swapchain is made with instead: the hidden surface, the surface's own extent, transform and
@@ -85,15 +86,15 @@ class VkPresentBridgeCore
     bool RemakeSurface(std::string& why);
 
     // After the producer, on the D3D12 queue: waits for `waitValue` on `waitFence` (the shared fence: the copy into
-    // `source` is done) and for `afterValue` on `afterFence` (the producer's own done point; null: none), copies `source`
-    // into the swapchain's current back buffer and signals `signalValue` on `signalFence` (Vulkan waits for it before it
-    // overwrites `source` again). `source` rests in COMMON and the same size and format family as the back buffer. The
-    // back buffer stays in PRESENT.
+    // `source` is done) and for `afterValue` on `afterFence` (the producer's own done point; null: none), copies
+    // `source` into the swapchain's current back buffer and signals `signalValue` on `signalFence` (Vulkan waits for it
+    // before it overwrites `source` again). `source` rests in COMMON and the same size and format family as the back
+    // buffer. The back buffer stays in PRESENT.
     bool CopyFrame(ID3D12Resource* source, ID3D12Fence* waitFence, uint64_t waitValue, ID3D12Fence* afterFence,
                    uint64_t afterValue, ID3D12Fence* signalFence, uint64_t signalValue, std::string& why);
 
-    // The real window's client area is not the swapchain's size (the game has not resized yet): a present that tells the
-    // game so (VK_ERROR_OUT_OF_DATE_KHR) makes it recreate the swapchain. False while the window is minimised.
+    // The real window's client area is not the swapchain's size (the game has not resized yet): a present that tells
+    // the game so (VK_ERROR_OUT_OF_DATE_KHR) makes it recreate the swapchain. False while the window is minimised.
     bool RealWindowResized() const;
 
     // The present's question: tell the game its swapchain is out of date? True while the real window is not the
@@ -124,10 +125,13 @@ class VkPresentBridgeCore
     uint32_t Height() const { return _height; }
     VkFormat Format() const { return _format; }
     UINT SyncInterval() const { return _syncInterval; }
-    UINT PresentFlags() const { return _syncInterval == 0 && _target.tearing && _tearingSwapchain ? DXGI_PRESENT_ALLOW_TEARING : 0; }
+    UINT PresentFlags() const
+    {
+        return _syncInterval == 0 && _target.tearing && _tearingSwapchain ? DXGI_PRESENT_ALLOW_TEARING : 0;
+    }
 
-    // The copy ring's fence and the value the last CopyFrame signalled on it: a present queue other than the D3D12 queue
-    // waits for it before it reads the back buffer.
+    // The copy ring's fence and the value the last CopyFrame signalled on it: a present queue other than the D3D12
+    // queue waits for it before it reads the back buffer.
     ID3D12Fence* CopyFence() const { return _copyFence.Get(); }
     uint64_t LastCopyValue() const { return _copyValue; }
 

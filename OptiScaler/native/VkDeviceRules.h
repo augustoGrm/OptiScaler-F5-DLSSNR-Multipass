@@ -1,11 +1,11 @@
 #pragma once
 
-// Which Vulkan device a thing belongs to, for a game that makes more devices than the one it presents with. AC Odyssey on
-// dxvk makes a Vulkan device per Direct3D feature level it probes (11_0 down to 9_1) and a D3D12 device or two, all after its
-// swapchain, and destroys them again. Everything here is a decision that used to take the last device the game made (or any
-// destroyed device) for the one in use: the interop was thrown away and then loaded from a dead device, the bridge was
-// reset by a probe's destruction, and the D3D12 side followed the probe's D3D12 device. Header-only and free of Vulkan and
-// D3D (the handle types are template parameters): a host test includes it.
+// Which Vulkan device a thing belongs to, for a game that makes more devices than the one it presents with. AC Odyssey
+// on dxvk makes a Vulkan device per Direct3D feature level it probes (11_0 down to 9_1) and a D3D12 device or two, all
+// after its swapchain, and destroys them again. Everything here is a decision that used to take the last device the
+// game made (or any destroyed device) for the one in use: the interop was thrown away and then loaded from a dead
+// device, the bridge was reset by a probe's destruction, and the D3D12 side followed the probe's D3D12 device.
+// Header-only and free of Vulkan and D3D (the handle types are template parameters): a host test includes it.
 
 #include <cstdint>
 #include <unordered_map>
@@ -14,8 +14,8 @@
 namespace native
 {
 
-// A game's devices and queues as seen at vkCreateDevice: the device and physical device a queue belongs to. A present is
-// answered per queue, not with whichever device was made last.
+// A game's devices and queues as seen at vkCreateDevice: the device and physical device a queue belongs to. A present
+// is answered per queue, not with whichever device was made last.
 template <class Device, class Physical, class Queue> class VkDeviceRegistry
 {
   public:
@@ -77,14 +77,14 @@ template <class Device, class Physical, class Queue> class VkDeviceRegistry
     std::unordered_map<Queue, Entry> _queues;
 };
 
-// What the frame source does with the device a present is on, given the one its interop (the external memory and semaphore
-// functions, the shared picture and fence) was loaded for. One device at a time: another device's present is left alone
-// until the held one is destroyed.
+// What the frame source does with the device a present is on, given the one its interop (the external memory and
+// semaphore functions, the shared picture and fence) was loaded for. One device at a time: another device's present is
+// left alone until the held one is destroyed.
 enum class InteropVerdict
 {
-    Keep,   // the held device is the present's
-    Load,   // nothing is held: load this device
-    Refuse  // another device is held and alive
+    Keep,  // the held device is the present's
+    Load,  // nothing is held: load this device
+    Refuse // another device is held and alive
 };
 
 template <class Device> InteropVerdict JudgeInteropDevice(Device held, Device present)
@@ -98,8 +98,7 @@ template <class Device> InteropVerdict JudgeInteropDevice(Device held, Device pr
 // Whether `destroyed` going takes what the frame source holds with it (interop, shared picture, fence, and an unpinned
 // D3D12 device). The device it holds them for, yes. The last present's device only when nothing is loaded yet (D3D12
 // objects made for it alone): it may be a second device that was refused, and its going must leave the held ones alone.
-template <class Device>
-bool ReleasedWithDevice(Device destroyed, Device held, Device lastPresent, bool hasDevice12)
+template <class Device> bool ReleasedWithDevice(Device destroyed, Device held, Device lastPresent, bool hasDevice12)
 {
     if (destroyed == Device {})
         return false;
@@ -107,8 +106,8 @@ bool ReleasedWithDevice(Device destroyed, Device held, Device lastPresent, bool 
     return destroyed == held || (held == Device {} && destroyed == lastPresent && hasDevice12);
 }
 
-// Whether the Vulkan bridge is concerned with the destruction of `destroyed`: it is the device the bridge presents on, or
-// of one already let go of that still waits for its hidden swapchains. Any other device going leaves the bridge, the
+// Whether the Vulkan bridge is concerned with the destruction of `destroyed`: it is the device the bridge presents on,
+// or of one already let go of that still waits for its hidden swapchains. Any other device going leaves the bridge, the
 // interop state and the shared D3D12 device alone.
 template <class Device> bool BridgeConcernedBy(Device destroyed, Device bridge, const std::vector<Device>& retired)
 {
@@ -127,9 +126,9 @@ template <class Device> bool BridgeConcernedBy(Device destroyed, Device bridge, 
     return false;
 }
 
-// Whether a D3D12 device the game just made becomes the one the D3D12 side works on. Not while the Vulkan bridge's D3D12
-// swapchain is up: its device is the current one, and a probe's would take the native input driver and frame generation's
-// state away from it.
+// Whether a D3D12 device the game just made becomes the one the D3D12 side works on. Not while the Vulkan bridge's
+// D3D12 swapchain is up: its device is the current one, and a probe's would take the native input driver and frame
+// generation's state away from it.
 inline bool AdoptNewD3D12Device(bool vulkanBridgeOutputUp) { return !vulkanBridgeOutputUp; }
 
 } // namespace native

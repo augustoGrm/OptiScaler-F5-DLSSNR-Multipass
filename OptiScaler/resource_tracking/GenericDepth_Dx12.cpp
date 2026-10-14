@@ -27,9 +27,9 @@
 #include <Unknwn.h>
 #endif
 
-// The counting rules (vertices weighed over draw calls, the viewport and workload tests on clears, the best snapshot, the
-// reversed-Z hint from the clear value) are adapted from ReShade's Generic Depth add-on, Copyright (C) 2021 Patrick Mours,
-// BSD-3-Clause; see Licenses/ReShade_GenericDepth_LICENSE.txt. This file only observes: it copies nothing yet.
+// The counting rules (vertices weighed over draw calls, the viewport and workload tests on clears, the best snapshot,
+// the reversed-Z hint from the clear value) are adapted from ReShade's Generic Depth add-on, Copyright (C) 2021 Patrick
+// Mours, BSD-3-Clause; see Licenses/ReShade_GenericDepth_LICENSE.txt. This file only observes: it copies nothing yet.
 
 namespace
 {
@@ -46,7 +46,8 @@ typedef void(STDMETHODCALLTYPE* PFN_CopyDescriptors)(ID3D12Device* This, UINT Nu
                                                      const D3D12_CPU_DESCRIPTOR_HANDLE* pSrcDescriptorRangeStarts,
                                                      const UINT* pSrcDescriptorRangeSizes,
                                                      D3D12_DESCRIPTOR_HEAP_TYPE DescriptorHeapsType);
-typedef void(STDMETHODCALLTYPE* PFN_OMSetRenderTargets)(ID3D12GraphicsCommandList* This, UINT NumRenderTargetDescriptors,
+typedef void(STDMETHODCALLTYPE* PFN_OMSetRenderTargets)(ID3D12GraphicsCommandList* This,
+                                                        UINT NumRenderTargetDescriptors,
                                                         const D3D12_CPU_DESCRIPTOR_HANDLE* pRenderTargetDescriptors,
                                                         BOOL RTsSingleHandleToDescriptorRange,
                                                         const D3D12_CPU_DESCRIPTOR_HANDLE* pDepthStencilDescriptor);
@@ -62,8 +63,8 @@ typedef void(STDMETHODCALLTYPE* PFN_DrawIndexedInstanced)(ID3D12GraphicsCommandL
                                                           INT BaseVertexLocation, UINT StartInstanceLocation);
 typedef void(STDMETHODCALLTYPE* PFN_RSSetViewports)(ID3D12GraphicsCommandList* This, UINT NumViewports,
                                                     const D3D12_VIEWPORT* pViewports);
-typedef void(STDMETHODCALLTYPE* PFN_Dispatch)(ID3D12GraphicsCommandList* This, UINT ThreadGroupCountX, UINT ThreadGroupCountY,
-                                              UINT ThreadGroupCountZ);
+typedef void(STDMETHODCALLTYPE* PFN_Dispatch)(ID3D12GraphicsCommandList* This, UINT ThreadGroupCountX,
+                                              UINT ThreadGroupCountY, UINT ThreadGroupCountZ);
 typedef void(STDMETHODCALLTYPE* PFN_ExecuteBundle)(ID3D12GraphicsCommandList* This,
                                                    ID3D12GraphicsCommandList* pCommandList);
 typedef void(STDMETHODCALLTYPE* PFN_ExecuteIndirect)(ID3D12GraphicsCommandList* This,
@@ -98,17 +99,17 @@ struct DsvInfo
 native::DepthFinderCore g_core;
 std::atomic<bool> g_overlayOn { false };
 
-// The geometry of the copies of the picked depth buffer, and the readback of the chosen one for the menu's preview (guarded
-// by g_mutex like the rest).
+// The geometry of the copies of the picked depth buffer, and the readback of the chosen one for the menu's preview
+// (guarded by g_mutex like the rest).
 struct Backup
 {
     uint32_t width = 0;
     uint32_t height = 0;
     DXGI_FORMAT typeless = DXGI_FORMAT_UNKNOWN;
     DXGI_FORMAT view = DXGI_FORMAT_UNKNOWN;
-    ID3D12Resource* readback = nullptr;                 // the same copy in CPU-readable memory, for the on-screen preview
-    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint {};    // where the first plane sits in it
-    UINT64 readbackBytes = 0;                           // its size: the last row is not padded to RowPitch
+    ID3D12Resource* readback = nullptr;              // the same copy in CPU-readable memory, for the on-screen preview
+    D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint {}; // where the first plane sits in it
+    UINT64 readbackBytes = 0;                        // its size: the last row is not padded to RowPitch
     // A multisampled buffer: the game's list copies it as it is into a multisampled slot of this format family and
     // these samples, and the resolve (native/DepthResolveDx12) turns that into the R32 copy described above (typeless
     // R32_TYPELESS, view R32_FLOAT), which is what everything else reads.
@@ -118,26 +119,26 @@ struct Backup
 };
 
 std::mutex g_mutex;
-std::unordered_map<SIZE_T, DsvInfo> g_dsv;                       // CPU descriptor handle -> what it views
+std::unordered_map<SIZE_T, DsvInfo> g_dsv; // CPU descriptor handle -> what it views
 Backup g_backup;
-uint64_t g_previewFrame = 0;         // the frame the preview's readback was last filled in
+uint64_t g_previewFrame = 0; // the frame the preview's readback was last filled in
 
-// A frame's copies of the picked buffer. Game command lists are recorded in no fixed order, so one shared target ended up
-// holding whichever copy ran last on the GPU (the world, or the first-person weapon's pass) and the picture flickered. Each
-// stretch with a real share of the frame's draws gets a target of its own, and at present the one whose stretch drew the most
-// is chosen: that choice does not depend on the order the lists ran in.
+// A frame's copies of the picked buffer. Game command lists are recorded in no fixed order, so one shared target ended
+// up holding whichever copy ran last on the GPU (the world, or the first-person weapon's pass) and the picture
+// flickered. Each stretch with a real share of the frame's draws gets a target of its own, and at present the one whose
+// stretch drew the most is chosen: that choice does not depend on the order the lists ran in.
 constexpr int kSnapshotSlots = 8;
 
 struct SnapshotSlot
 {
     ID3D12Resource* resource = nullptr;
     ID3D12Resource* multisampled = nullptr; // a multisampled buffer's copy as it is; `resource` is its resolve
-    uint64_t vertices = 0;           // what the stretch it holds had drawn
+    uint64_t vertices = 0;                  // what the stretch it holds had drawn
 };
 
 SnapshotSlot g_slots[kSnapshotSlots];
-int g_slotsUsed = 0;                 // taken this frame
-GenericDepthDx12::Snapshot g_best;   // the frame just closed's choice
+int g_slotsUsed = 0;                  // taken this frame
+GenericDepthDx12::Snapshot g_best;    // the frame just closed's choice
 int g_bestSlots[kSnapshotSlots] = {}; // which slots g_best.copies are, in the same order
 uint64_t g_resolvedFrame = ~0ull;     // the g_best.frame whose multisampled copies were resolved
 // Made once and never destroyed: at unload the device may already be gone, and its destructor waits on the GPU.
@@ -151,8 +152,8 @@ UINT g_dsvIncrement = 0;
 bool g_installed = false;
 bool g_installFailed = false;
 
-// Under g_mutex. Why a copy of the picked buffer, or the preview's readback of it, was not made: said once per reason, since
-// each fails the same way every frame and the preview otherwise only says it is waiting.
+// Under g_mutex. Why a copy of the picked buffer, or the preview's readback of it, was not made: said once per reason,
+// since each fails the same way every frame and the preview otherwise only says it is waiting.
 void SayOnce(const char* key, const std::string& line)
 {
     static std::vector<const char*> said;
@@ -199,8 +200,8 @@ bool BackupFormats(DXGI_FORMAT depth, DXGI_FORMAT* typeless, DXGI_FORMAT* view)
     }
 }
 
-// Under g_mutex. Gets the geometry right when the depth buffer's size or format is new, retiring the old copies for a few
-// frames (the menu or the motion step may still be reading them), and makes the preview's readback.
+// Under g_mutex. Gets the geometry right when the depth buffer's size or format is new, retiring the old copies for a
+// few frames (the menu or the motion step may still be reading them), and makes the preview's readback.
 bool EnsureBackup(ID3D12Device* device, const D3D12_RESOURCE_DESC& source, DXGI_FORMAT typeless, DXGI_FORMAT view)
 {
     // A multisampled buffer's copies are resolved into R32: that is the format of the copies read and of the readback.
@@ -229,8 +230,8 @@ bool EnsureBackup(ID3D12Device* device, const D3D12_RESOURCE_DESC& source, DXGI_
     desc.SampleDesc.Count = 1;
     desc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 
-    // The preview is drawn on the CPU from a readback of the chosen copy: depth is mostly near zero, which no plain texture
-    // view shows brightly, so it needs a curve.
+    // The preview is drawn on the CPU from a readback of the chosen copy: depth is mostly near zero, which no plain
+    // texture view shows brightly, so it needs a curve.
     D3D12_PLACED_SUBRESOURCE_FOOTPRINT footprint {};
     UINT64 total = 0;
     device->GetCopyableFootprints(&desc, 0, 1, 0, &footprint, nullptr, nullptr, &total);
@@ -252,8 +253,9 @@ bool EnsureBackup(ID3D12Device* device, const D3D12_RESOURCE_DESC& source, DXGI_
         bufferDesc.SampleDesc.Count = 1;
         bufferDesc.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-        const HRESULT hr = device->CreateCommittedResource(&readHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc,
-                                                           D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback));
+        const HRESULT hr =
+            device->CreateCommittedResource(&readHeap, D3D12_HEAP_FLAG_NONE, &bufferDesc,
+                                            D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&readback));
 
         if (FAILED(hr))
         {
@@ -265,8 +267,9 @@ bool EnsureBackup(ID3D12Device* device, const D3D12_RESOURCE_DESC& source, DXGI_
     }
     else
     {
-        SayOnce("footprint", std::format("no copyable footprint for a {}x{} buffer of format {}; the preview stays empty",
-                                         source.Width, source.Height, (int) typeless));
+        SayOnce("footprint",
+                std::format("no copyable footprint for a {}x{} buffer of format {}; the preview stays empty",
+                            source.Width, source.Height, (int) typeless));
     }
 
     for (auto& slot : g_slots)
@@ -297,8 +300,8 @@ bool EnsureBackup(ID3D12Device* device, const D3D12_RESOURCE_DESC& source, DXGI_
 constexpr D3D12_RESOURCE_STATES kSlotRest =
     D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE;
 
-// Under g_mutex. A slot to copy into: made when it is first needed, in the state it rests in between frames. The depth is
-// read by compute passes and, for the menu, pixel shaders, so it rests readable by both.
+// Under g_mutex. A slot to copy into: made when it is first needed, in the state it rests in between frames. The depth
+// is read by compute passes and, for the menu, pixel shaders, so it rests readable by both.
 SnapshotSlot* TakeSlot(ID3D12Device* device, const D3D12_RESOURCE_DESC& source)
 {
     if (g_slotsUsed >= kSnapshotSlots)
@@ -354,9 +357,9 @@ SnapshotSlot* TakeSlot(ID3D12Device* device, const D3D12_RESOURCE_DESC& source)
     return &slot;
 }
 
-// Under g_mutex, from a hook, before the clear itself or at the point the list leaves the buffer or closes: the buffer is in
-// the state its view says, so it goes to copy-source and back around one copy of its first subresource into a slot. A
-// multisampled buffer is skipped (it would need a resolve).
+// Under g_mutex, from a hook, before the clear itself or at the point the list leaves the buffer or closes: the buffer
+// is in the state its view says, so it goes to copy-source and back around one copy of its first subresource into a
+// slot. A multisampled buffer is skipped (it would need a resolve).
 void RecordSnapshot(ID3D12GraphicsCommandList* list, ID3D12Resource* source, bool readOnlyDepth, const char* where = "",
                     uint64_t stretchVertices = 0)
 {
@@ -518,8 +521,7 @@ void STDMETHODCALLTYPE hkCopyDescriptors(ID3D12Device* This, UINT NumDestDescrip
                                          D3D12_DESCRIPTOR_HEAP_TYPE DescriptorHeapsType)
 {
     o_CopyDescriptors(This, NumDestDescriptorRanges, pDestDescriptorRangeStarts, pDestDescriptorRangeSizes,
-                      NumSrcDescriptorRanges, pSrcDescriptorRangeStarts, pSrcDescriptorRangeSizes,
-                      DescriptorHeapsType);
+                      NumSrcDescriptorRanges, pSrcDescriptorRangeStarts, pSrcDescriptorRangeSizes, DescriptorHeapsType);
 
     if (DescriptorHeapsType != D3D12_DESCRIPTOR_HEAP_TYPE_DSV || g_dsvIncrement == 0 ||
         pDestDescriptorRangeStarts == nullptr || pSrcDescriptorRangeStarts == nullptr)
@@ -552,9 +554,10 @@ void STDMETHODCALLTYPE hkCopyDescriptors(ID3D12Device* This, UINT NumDestDescrip
     }
 }
 
-// What each hook does, apart from calling on to the original: shared by the hooks on the runtime's own functions above and
-// by the thunks that go into a game command list's private vtable below. The counting itself is the core's; what stays here is
-// what only D3D12 can do: look a descriptor up, and record the copy the core asks for onto the list being recorded.
+// What each hook does, apart from calling on to the original: shared by the hooks on the runtime's own functions above
+// and by the thunks that go into a game command list's private vtable below. The counting itself is the core's; what
+// stays here is what only D3D12 can do: look a descriptor up, and record the copy the core asks for onto the list being
+// recorded.
 void TakeSnapshot(ID3D12GraphicsCommandList* list, const native::SnapshotRequest& request)
 {
     if (!request.take)
@@ -571,8 +574,8 @@ void OnViewports(ID3D12GraphicsCommandList* This, UINT NumViewports, const D3D12
         g_core.OnViewport((uint64_t) (size_t) This, pViewports[0].Width);
 }
 
-void OnClear(ID3D12GraphicsCommandList* This, D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView, D3D12_CLEAR_FLAGS ClearFlags,
-             FLOAT Depth)
+void OnClear(ID3D12GraphicsCommandList* This, D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView,
+             D3D12_CLEAR_FLAGS ClearFlags, FLOAT Depth)
 {
     if ((ClearFlags & D3D12_CLEAR_FLAG_DEPTH) == 0 || !g_core.Active())
         return;
@@ -602,19 +605,18 @@ void OnIndirect(ID3D12GraphicsCommandList* This, UINT MaxCommandCount)
     g_core.OnIndirect((uint64_t) (size_t) This, MaxCommandCount);
 }
 
-// A list that ends while still bound to the picked buffer never unbinds it, so the stretch drawn since its last clear (Cyberpunk
-// draws the world after the clear and ends the list there) is copied here, in the state the view says the buffer is in.
-void OnClose(ID3D12GraphicsCommandList* This)
-{
-    TakeSnapshot(This, g_core.OnContextEnd((uint64_t) (size_t) This));
-}
+// A list that ends while still bound to the picked buffer never unbinds it, so the stretch drawn since its last clear
+// (Cyberpunk draws the world after the clear and ends the list there) is copied here, in the state the view says the
+// buffer is in.
+void OnClose(ID3D12GraphicsCommandList* This) { TakeSnapshot(This, g_core.OnContextEnd((uint64_t) (size_t) This)); }
 
-// ---- Game command lists with a vtable of their own ----------------------------------------------------------------------
-// Witcher 3 (2026-10-04): its command lists each carry a copy of the vtable in heap memory whose DrawInstanced and
-// DrawIndexedInstanced point into another module's code, while OMSetRenderTargets is the runtime's own. The hooks on the
-// runtime's functions then never see a draw. So the first time a list is seen, an entry of its table that is not the
-// runtime's own is replaced by a thunk that counts and calls what was there. A table whose entries are the runtime's own is
-// left alone: the hooks above already cover it, and patching it as well would count every draw twice.
+// ---- Game command lists with a vtable of their own
+// ---------------------------------------------------------------------- Witcher 3 (2026-10-04): its command lists each
+// carry a copy of the vtable in heap memory whose DrawInstanced and DrawIndexedInstanced point into another module's
+// code, while OMSetRenderTargets is the runtime's own. The hooks on the runtime's functions then never see a draw. So
+// the first time a list is seen, an entry of its table that is not the runtime's own is replaced by a thunk that counts
+// and calls what was there. A table whose entries are the runtime's own is left alone: the hooks above already cover
+// it, and patching it as well would count every draw twice.
 enum Slot
 {
     kDraw = 0,
@@ -626,8 +628,8 @@ enum Slot
     kSlots
 };
 constexpr int kSlotIndex[kSlots] = { 12, 13, 21, 47, 59, 9 };
-constexpr const char* kSlotName[kSlots] = { "DrawInstanced", "DrawIndexedInstanced", "RSSetViewports",
-                                            "ClearDepthStencilView", "ExecuteIndirect", "Close" };
+constexpr const char* kSlotName[kSlots] = { "DrawInstanced",         "DrawIndexedInstanced", "RSSetViewports",
+                                            "ClearDepthStencilView", "ExecuteIndirect",      "Close" };
 
 struct TablePatch
 {
@@ -688,10 +690,10 @@ void STDMETHODCALLTYPE hkTableClearDepthStencilView(ID3D12GraphicsCommandList* T
         previous(This, DepthStencilView, ClearFlags, Depth, Stencil, NumRects, pRects);
 }
 
-void STDMETHODCALLTYPE hkTableExecuteIndirect(ID3D12GraphicsCommandList* This, ID3D12CommandSignature* pCommandSignature,
-                                              UINT MaxCommandCount, ID3D12Resource* pArgumentBuffer,
-                                              UINT64 ArgumentBufferOffset, ID3D12Resource* pCountBuffer,
-                                              UINT64 CountBufferOffset)
+void STDMETHODCALLTYPE hkTableExecuteIndirect(ID3D12GraphicsCommandList* This,
+                                              ID3D12CommandSignature* pCommandSignature, UINT MaxCommandCount,
+                                              ID3D12Resource* pArgumentBuffer, UINT64 ArgumentBufferOffset,
+                                              ID3D12Resource* pCountBuffer, UINT64 CountBufferOffset)
 {
     if (g_core.Active())
         OnIndirect(This, MaxCommandCount);
@@ -711,8 +713,8 @@ HRESULT STDMETHODCALLTYPE hkTableClose(ID3D12GraphicsCommandList* This)
     return E_FAIL;
 }
 
-const PVOID kTableHooks[kSlots] = { (PVOID) hkTableDrawInstanced, (PVOID) hkTableDrawIndexedInstanced,
-                                    (PVOID) hkTableRSSetViewports, (PVOID) hkTableClearDepthStencilView,
+const PVOID kTableHooks[kSlots] = { (PVOID) hkTableDrawInstanced,   (PVOID) hkTableDrawIndexedInstanced,
+                                    (PVOID) hkTableRSSetViewports,  (PVOID) hkTableClearDepthStencilView,
                                     (PVOID) hkTableExecuteIndirect, (PVOID) hkTableClose };
 
 void PatchListTable(ID3D12GraphicsCommandList* list)
@@ -778,9 +780,10 @@ void PatchListTable(ID3D12GraphicsCommandList* list)
             if (patch.previous[slot] != nullptr)
                 which += std::format(" {}={:X}", kSlotName[slot], (size_t) patch.previous[slot]);
 
-        LOG_INFO("Depth finder: a game command list has a vtable of its own ({:X}); {} entries now count through us, they "
-                 "pointed at:{}",
-                 (size_t) table, patched, which);
+        LOG_INFO(
+            "Depth finder: a game command list has a vtable of its own ({:X}); {} entries now count through us, they "
+            "pointed at:{}",
+            (size_t) table, patched, which);
     }
 }
 
@@ -794,10 +797,12 @@ void STDMETHODCALLTYPE hkOMSetRenderTargets(ID3D12GraphicsCommandList* This, UIN
     if (logged.load(std::memory_order_relaxed) < 4 && logged.fetch_add(1) < 4)
     {
         PVOID* table = *(PVOID**) This;
-        LOG_INFO("Depth finder: a game command list {:X} uses vtable {:X} (hooks were read from {:X}, {}); DrawInstanced {:X} "
+        LOG_INFO("Depth finder: a game command list {:X} uses vtable {:X} (hooks were read from {:X}, {}); "
+                 "DrawInstanced {:X} "
                  "(read {:X}), DrawIndexedInstanced {:X} (read {:X}), OMSetRenderTargets {:X} (read {:X})",
-                 (size_t) This, (size_t) table, (size_t) g_installTable, table == g_installTable ? "the same" : "a DIFFERENT one",
-                 (size_t) table[12], g_installTable ? (size_t) g_installTable[12] : 0, (size_t) table[13],
+                 (size_t) This, (size_t) table, (size_t) g_installTable,
+                 table == g_installTable ? "the same" : "a DIFFERENT one", (size_t) table[12],
+                 g_installTable ? (size_t) g_installTable[12] : 0, (size_t) table[13],
                  g_installTable ? (size_t) g_installTable[13] : 0, (size_t) table[46],
                  g_installTable ? (size_t) g_installTable[46] : 0);
     }
@@ -845,16 +850,16 @@ void STDMETHODCALLTYPE hkRSSetViewports(ID3D12GraphicsCommandList* This, UINT Nu
 
 void STDMETHODCALLTYPE hkClearDepthStencilView(ID3D12GraphicsCommandList* This,
                                                D3D12_CPU_DESCRIPTOR_HANDLE DepthStencilView,
-                                               D3D12_CLEAR_FLAGS ClearFlags, FLOAT Depth, UINT8 Stencil,
-                                               UINT NumRects, const D3D12_RECT* pRects)
+                                               D3D12_CLEAR_FLAGS ClearFlags, FLOAT Depth, UINT8 Stencil, UINT NumRects,
+                                               const D3D12_RECT* pRects)
 {
     OnClear(This, DepthStencilView, ClearFlags, Depth);
 
     o_ClearDepthStencilView(This, DepthStencilView, ClearFlags, Depth, Stencil, NumRects, pRects);
 }
 
-void STDMETHODCALLTYPE hkDrawInstanced(ID3D12GraphicsCommandList* This, UINT VertexCountPerInstance,
-                                       UINT InstanceCount, UINT StartVertexLocation, UINT StartInstanceLocation)
+void STDMETHODCALLTYPE hkDrawInstanced(ID3D12GraphicsCommandList* This, UINT VertexCountPerInstance, UINT InstanceCount,
+                                       UINT StartVertexLocation, UINT StartInstanceLocation)
 {
     OnDraw(This, VertexCountPerInstance, InstanceCount);
     o_DrawInstanced(This, VertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation);
@@ -870,8 +875,9 @@ void STDMETHODCALLTYPE hkDrawIndexedInstanced(ID3D12GraphicsCommandList* This, U
 }
 
 // ExecuteIndirect carries draws, dispatches and mesh dispatches alike, and the command signature that says which is not
-// followed here: with a depth buffer bound it is counted as indirect draws (up to MaxCommandCount), which is a guess for a
-// dispatch issued while one happens to be bound. ReShade's add-on tells them apart through the API's own indirect type.
+// followed here: with a depth buffer bound it is counted as indirect draws (up to MaxCommandCount), which is a guess
+// for a dispatch issued while one happens to be bound. ReShade's add-on tells them apart through the API's own indirect
+// type.
 void STDMETHODCALLTYPE hkExecuteIndirect(ID3D12GraphicsCommandList* This, ID3D12CommandSignature* pCommandSignature,
                                          UINT MaxCommandCount, ID3D12Resource* pArgumentBuffer,
                                          UINT64 ArgumentBufferOffset, ID3D12Resource* pCountBuffer,
@@ -891,7 +897,7 @@ HRESULT STDMETHODCALLTYPE hkClose(ID3D12GraphicsCommandList* This)
 }
 
 void STDMETHODCALLTYPE hkDispatch(ID3D12GraphicsCommandList* This, UINT ThreadGroupCountX, UINT ThreadGroupCountY,
-                                    UINT ThreadGroupCountZ)
+                                  UINT ThreadGroupCountZ)
 {
     if (g_core.Active())
         g_core.Counters().dispatches.fetch_add(1, std::memory_order_relaxed);
@@ -955,7 +961,8 @@ void Install(ID3D12Device* device)
     o_CopyDescriptorsSimple = (PFN_CopyDescriptorsSimple) deviceTable[24];
 
     // ID3D12GraphicsCommandList vtable: DrawInstanced 12, DrawIndexedInstanced 13, RSSetViewports 21,
-    // OMSetRenderTargets 46, ClearDepthStencilView 47, ExecuteIndirect 59 (checked against the SDK header with offsetof).
+    // OMSetRenderTargets 46, ClearDepthStencilView 47, ExecuteIndirect 59 (checked against the SDK header with
+    // offsetof).
     o_DrawInstanced = (PFN_DrawInstanced) listTable[12];
     o_DrawIndexedInstanced = (PFN_DrawIndexedInstanced) listTable[13];
     o_RSSetViewports = (PFN_RSSetViewports) listTable[21];
@@ -967,8 +974,9 @@ void Install(ID3D12Device* device)
     o_Close = (PFN_Close) listTable[9];
     g_installTable = listTable;
 
-    // Is a bundle's DrawInstanced the same code as the direct list's? If not, draws recorded in bundles are invisible to the
-    // draw hooks (a bundle inherits the caller's depth buffer, so they would have to be counted at ExecuteBundle).
+    // Is a bundle's DrawInstanced the same code as the direct list's? If not, draws recorded in bundles are invisible
+    // to the draw hooks (a bundle inherits the caller's depth buffer, so they would have to be counted at
+    // ExecuteBundle).
     {
         ID3D12CommandAllocator* bundleAllocator = nullptr;
         ID3D12GraphicsCommandList* bundle = nullptr;
@@ -983,7 +991,8 @@ void Install(ID3D12Device* device)
                 realBundle = bundle;
 
             PVOID* bundleTable = *(PVOID**) realBundle;
-            g_core.Counters().bundleSameDraw = (bundleTable[12] == listTable[12] && bundleTable[13] == listTable[13]) ? 1 : 0;
+            g_core.Counters().bundleSameDraw =
+                (bundleTable[12] == listTable[12] && bundleTable[13] == listTable[13]) ? 1 : 0;
             bundle->Close();
         }
 
@@ -1041,11 +1050,11 @@ void Install(ID3D12Device* device)
                   Config::Instance()->DlssNrNativeDebugView.value_or_default();
     g_core.Start([](const std::string& line) { LOG_INFO("{}", line); });
     g_installed = true;
-    LOG_INFO("Depth finder: observing the game's depth buffers{}, after {} frames of warm-up; it stands down if the game "
-             "makes an upscaler call",
-             g_overlayOn.load() ? " (the overlay's copy is recorded into the game's command list)"
-                                : " (nothing is changed)",
-             Config::Instance()->DlssNrNativeDepthWarmupFrames.value_or_default());
+    LOG_INFO(
+        "Depth finder: observing the game's depth buffers{}, after {} frames of warm-up; it stands down if the game "
+        "makes an upscaler call",
+        g_overlayOn.load() ? " (the overlay's copy is recorded into the game's command list)" : " (nothing is changed)",
+        Config::Instance()->DlssNrNativeDepthWarmupFrames.value_or_default());
 }
 
 void OnPresent(IDXGISwapChain* swapChain)
@@ -1099,8 +1108,8 @@ void OnPresent(IDXGISwapChain* swapChain)
     }
 
     // Part two in the core: counts the present, stands down or wakes, and picks once the warm-up is over.
-    const bool stoodDown =
-        g_core.EndPresent(desc.BufferDesc.Width, desc.BufferDesc.Height, Config::Instance()->DlssNrNativeDepthWarmupFrames.value_or_default());
+    const bool stoodDown = g_core.EndPresent(desc.BufferDesc.Width, desc.BufferDesc.Height,
+                                             Config::Instance()->DlssNrNativeDepthWarmupFrames.value_or_default());
 
     {
         std::lock_guard lock(g_mutex);
@@ -1171,8 +1180,8 @@ void RecordPreviewCopy(ID3D12GraphicsCommandList* list)
 
     std::lock_guard lock(g_mutex);
 
-    // A frame now and then has no copy (a menu, a loading screen); a long run of them is what leaves the preview waiting,
-    // so that is said once, with which condition held.
+    // A frame now and then has no copy (a menu, a loading screen); a long run of them is what leaves the preview
+    // waiting, so that is said once, with which condition held.
     static uint32_t missed = 0;
 
     // Only from the chosen copy of the frame just closed, and only when the menu is about to show it. A multisampled
@@ -1228,10 +1237,7 @@ void RecordPreviewCopy(ID3D12GraphicsCommandList* list)
     g_previewFrame = g_core.Presents();
 }
 
-GenericDepthSelect::Pick CurrentPick()
-{
-    return g_core.CurrentPick();
-}
+GenericDepthSelect::Pick CurrentPick() { return g_core.CurrentPick(); }
 
 void NoteUpscalerCall()
 {
@@ -1248,23 +1254,24 @@ bool GameCallsUpscaler() { return native::GameUpscalerCalledRecently() || (g_ins
 
 bool Armed() { return g_installed && g_core.Armed(); }
 
-// Under g_mutex. The copy's depth as a grid of gray cells, nearer brighter on a log scale: a perspective depth is crowded
-// near 0 (reversed-Z) or near 1 (normal), where a straight gray ramp is black. Reads the readback while the GPU may still be
-// writing it, which for a picture to look at only shows as a torn frame.
+// Under g_mutex. The copy's depth as a grid of gray cells, nearer brighter on a log scale: a perspective depth is
+// crowded near 0 (reversed-Z) or near 1 (normal), where a straight gray ramp is black. Reads the readback while the GPU
+// may still be writing it, which for a picture to look at only shows as a torn frame.
 static bool DrawDepthPreview(float boxWidth, float boxHeight)
 {
     if (g_backup.readback == nullptr || g_backup.width == 0 || g_backup.height == 0)
         return false;
 
-    // The buffer's own size, not RowPitch * height: the last row is not padded, so at a width whose row is not a multiple of
-    // 256 bytes (1707 pixels of R32 in NBA 2K27) that range runs past the end and Map refuses it, every frame.
+    // The buffer's own size, not RowPitch * height: the last row is not padded, so at a width whose row is not a
+    // multiple of 256 bytes (1707 pixels of R32 in NBA 2K27) that range runs past the end and Map refuses it, every
+    // frame.
     D3D12_RANGE range { 0, (SIZE_T) g_backup.readbackBytes };
     uint8_t* data = nullptr;
 
     if (const HRESULT hr = g_backup.readback->Map(0, &range, (void**) &data); FAILED(hr) || data == nullptr)
     {
-        SayOnce("previewMap", std::format("the preview's readback could not be mapped (0x{:X}, {} bytes)", (unsigned) hr,
-                                          g_backup.readbackBytes));
+        SayOnce("previewMap", std::format("the preview's readback could not be mapped (0x{:X}, {} bytes)",
+                                          (unsigned) hr, g_backup.readbackBytes));
         return false;
     }
 
@@ -1277,9 +1284,10 @@ static bool DrawDepthPreview(float boxWidth, float boxHeight)
 
     draw->AddRectFilled(origin, ImVec2(origin.x + boxWidth, origin.y + boxHeight), IM_COL32(0, 0, 0, 255));
 
-    // What the copy holds changes from frame to frame (the game's lists run in another order each frame, so the last copy
-    // is sometimes the whole scene and sometimes a partial pass). The preview keeps the fullest picture of the last moments:
-    // a new one replaces it when it covers nearly as much, and the kept one slowly gives way so a real change still shows.
+    // What the copy holds changes from frame to frame (the game's lists run in another order each frame, so the last
+    // copy is sometimes the whole scene and sometimes a partial pass). The preview keeps the fullest picture of the
+    // last moments: a new one replaces it when it covers nearly as much, and the kept one slowly gives way so a real
+    // change still shows.
     static uint8_t cells[kRows * kCols] = {};
     static float keptCoverage = 0.0f;
     uint8_t fresh[kRows * kCols];
@@ -1292,7 +1300,8 @@ static bool DrawDepthPreview(float boxWidth, float boxHeight)
 
         for (int col = 0; col < kCols; ++col)
         {
-            const uint32_t x = std::min<uint32_t>(g_backup.width - 1, (uint32_t) ((col + 0.5f) * g_backup.width / kCols));
+            const uint32_t x =
+                std::min<uint32_t>(g_backup.width - 1, (uint32_t) ((col + 0.5f) * g_backup.width / kCols));
             float depth = 0.0f;
 
             switch (g_backup.typeless)
@@ -1370,8 +1379,8 @@ void DrawStatus()
     const uint32_t warmup = config->DlssNrNativeDepthWarmupFrames.value_or_default();
     const char* untilRestart = wanted ? "" : " (finder off at next start)";
 
-    // Every branch writes exactly one short line and the picture has a box of its own size, so nothing below moves when the
-    // pick changes.
+    // Every branch writes exactly one short line and the picture has a box of its own size, so nothing below moves when
+    // the pick changes.
     if (g_core.GameCallsUpscaler())
         ImGui::TextDisabled("Depth: stood down, the game is calling an upscaler. Turn it off in the game.");
     else if (!g_core.Armed())
@@ -1393,8 +1402,8 @@ void DrawAdvancedUi()
 {
     auto* config = Config::Instance();
 
-    // Both switches are read when the game's device is created, so a change here is saved with the rest and applies at the
-    // next start.
+    // Both switches are read when the game's device is created, so a change here is saved with the rest and applies at
+    // the next start.
     bool finder = config->DlssNrNativeDepthFinder.value_or_default();
 
     if (ImGui::Checkbox("Use the game's depth (better quality; needs a restart)##depthfinder", &finder))
@@ -1419,9 +1428,10 @@ void DrawAdvancedUi()
         config->DlssNrNativeDepthOverlay = overlay;
 
     if (ImGui::IsItemHovered())
-        ImGui::SetTooltip("%s", "Debug. Copies the picked depth buffer at its busiest clear, recorded into the game's own\n"
-                                "command list, and shows it below. Needs \"Show the motion and trust pictures\" on too.\n"
-                                "Leave it off unless you are checking the pick. Applies at the next start.");
+        ImGui::SetTooltip("%s",
+                          "Debug. Copies the picked depth buffer at its busiest clear, recorded into the game's own\n"
+                          "command list, and shows it below. Needs \"Show the motion and trust pictures\" on too.\n"
+                          "Leave it off unless you are checking the pick. Applies at the next start.");
 
     if (finder != g_installed)
         ImGui::TextDisabled("Takes effect after saving and restarting the game.");

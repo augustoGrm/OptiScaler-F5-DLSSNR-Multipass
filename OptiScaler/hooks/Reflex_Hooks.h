@@ -61,8 +61,9 @@ class ReflexHooks
 
     // XeFG with Reflex or Anti-Lag 2 as the low latency Output (native/XefgReflexRule.h): XeLL (nvapi_calls, XeFG's
     // context) gets every call with its low latency off and never sleeps, and "the other side" gets the real ones: the
-    // driver's Reflex (o_NvAPI_*), or fakenvapi's Anti-Lag 2 / Anti-Lag Vk context beside XeLL's (fakenvapi::companion*).
-    // The side that lowers latency is passed in (native::lowlatency::XefgSide), asked once per call.
+    // driver's Reflex (o_NvAPI_*), or fakenvapi's Anti-Lag 2 / Anti-Lag Vk context beside XeLL's
+    // (fakenvapi::companion*). The side that lowers latency is passed in (native::lowlatency::XefgSide), asked once per
+    // call.
     using Side = native::xefgreflex::XefgLatency;
     static NvAPI_Status sideSetSleepMode(Side side, IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* params);
     static NvAPI_Status sideSleep(Side side, IUnknown* pDev);
@@ -76,11 +77,13 @@ class ReflexHooks
     // The side's sleep mode goes out with everything off to the device it was last set on: the Output went back to XeLL
     // (or Input Off, Force Disable), and the side must stop sleeping and limiting (_sleepModeMutex)
     static void releaseSide(Side previous);
-    // The side lives on one API at a time (the bridge's D3D12 device, or the game's VkDevice): a sleep mode going to one
-    // switches off what the other was left with, so a leftover cannot keep sleeping, limiting or answering the timings
+    // The side lives on one API at a time (the bridge's D3D12 device, or the game's VkDevice): a sleep mode going to
+    // one switches off what the other was left with, so a leftover cannot keep sleeping, limiting or answering the
+    // timings
     // (_sleepModeMutex)
     static void dropSideOnOtherApi(bool nowVulkan);
-    // setFPSLimit sends the side's sleep mode to its D3D and its Vulkan device in one call on purpose: no drop in between
+    // setFPSLimit sends the side's sleep mode to its D3D and its Vulkan device in one call on purpose: no drop in
+    // between
     inline static thread_local bool _keepBothSides = false;
     // The devices the side's last sleep mode went to (null: none), and the side that took it
     inline static IUnknown* _sideDev = nullptr;
@@ -175,8 +178,8 @@ class ReflexHooks
     static NvAPI_Status ownSleep(IUnknown* pDev);
     static NvAPI_Status ownSetLatencyMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* pParams);
     static NvAPI_Status ownGetLatency(IUnknown* pDev, NV_LATENCY_RESULT_PARAMS* pParams);
-    // Same four, for a native Vulkan game (native/NativeDriverVk.cpp): vkDevice is the game's VkDevice, reinterpreted as
-    // the HANDLE the Vulkan Reflex entry points take.
+    // Same four, for a native Vulkan game (native/NativeDriverVk.cpp): vkDevice is the game's VkDevice, reinterpreted
+    // as the HANDLE the Vulkan Reflex entry points take.
     static NvAPI_Status ownSetSleepModeVulkan(HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* pParams);
     static NvAPI_Status ownSleepVulkan(HANDLE vkDevice, NvU64 signalValue);
     static NvAPI_Status ownSetLatencyMarkerVulkan(HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* pParams);
@@ -184,8 +187,9 @@ class ReflexHooks
     // NvAPI_Vulkan_InitLowLatencyDevice: initialises the device as a low latency device and returns the timeline
     // semaphore its Sleep signals (the app has to wait for it). NVAPI_NO_IMPLEMENTATION when the interface is missing.
     static NvAPI_Status ownInitLowLatencyDeviceVulkan(HANDLE vkDevice, HANDLE* signalSemaphore);
-    // The game calls Reflex through VK_NV_low_latency2 (vkSetLatencySleepModeNV, vkLatencySleepNV, vkSetLatencyMarkerNV):
-    // the game's own Reflex, as far as our low latency is concerned (it stands aside). Not for our own calls.
+    // The game calls Reflex through VK_NV_low_latency2 (vkSetLatencySleepModeNV, vkLatencySleepNV,
+    // vkSetLatencyMarkerNV): the game's own Reflex, as far as our low latency is concerned (it stands aside). Not for
+    // our own calls.
     static void noteGameVulkanLowLatency2(bool setSleepMode);
     // A Vulkan game on the present bridge with XeFG as the output: its own Reflex (NvAPI_Vulkan_*, VK_NV_low_latency2)
     // feeds XeFG's XeLL on the bridge's D3D12 device, and the driver gets the sleep mode with low latency off. Returns
@@ -203,8 +207,8 @@ class ReflexHooks
     // frame cap in place of its interval when one is set. A marker goes to XeLL when it takes it, and is noted either
     // way.
     static NvAPI_Status xellSetSleepMode(ID3D12Device* xellDevice, const native::xefgreflex::SleepMode& game);
-    // Same with the side that lowers latency given: VK_NV_low_latency2 calls are XeLL's (it does the work) when the side
-    // is Anti-Lag 2, which has no such surface; only a Reflex side takes them in the split
+    // Same with the side that lowers latency given: VK_NV_low_latency2 calls are XeLL's (it does the work) when the
+    // side is Anti-Lag 2, which has no such surface; only a Reflex side takes them in the split
     static NvAPI_Status xellSetSleepMode(ID3D12Device* xellDevice, const native::xefgreflex::SleepMode& game,
                                          native::xefgreflex::XefgLatency side);
     static NvAPI_Status xellSleep(ID3D12Device* xellDevice);

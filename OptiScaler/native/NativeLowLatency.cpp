@@ -39,9 +39,9 @@ enum class Table
 std::atomic<bool> g_running = false;    // markers are being sent
 std::atomic<bool> g_submitSent = false; // this frame's SIMULATION_END / RENDERSUBMIT_START went out
 // `device` is a D3D11/D3D12 device (the game's, or the Vulkan bridge's private D3D12 device) or -- Api::Vulkan -- the
-// game's VkDevice reinterpreted as the same pointer-sized token: never dereferenced as a COM interface here, only passed
-// back to the Reflex calls of its own API. Every call carries its Api; nothing is remembered between calls but the Api
-// each stored device was seen with (for the callers that bring no device: the first submit, the status line).
+// game's VkDevice reinterpreted as the same pointer-sized token: never dereferenced as a COM interface here, only
+// passed back to the Reflex calls of its own API. Every call carries its Api; nothing is remembered between calls but
+// the Api each stored device was seen with (for the callers that bring no device: the first submit, the status line).
 std::atomic<Api> g_deviceApi = Api::D3D;
 std::atomic<IUnknown*> g_device = nullptr;
 std::atomic<Api> g_sleepModeApi = Api::D3D;
@@ -163,8 +163,8 @@ bool FindTable()
     return ReflexHooks::ensureTable(queryInterface);
 }
 
-// The Vulkan sleep pair (NativeLowLatencyVkSync.h) of the game's VkDevice. The game's present thread, and the thread that
-// destroys the device.
+// The Vulkan sleep pair (NativeLowLatencyVkSync.h) of the game's VkDevice. The game's present thread, and the thread
+// that destroys the device.
 std::mutex g_vkMutex;
 VkSleepSync g_vkSync;
 VkDevice g_vkSyncDevice = VK_NULL_HANDLE;
@@ -274,10 +274,10 @@ Inputs GatherInputs(bool deviceAvailable)
     in.f5lowRunning = shown != DlssNrNativeMode::Shown::Off && !GameUpscalerCalledRecently();
     in.xefgRunning = state.activeFgOutput == FGOutput::XeFG && state.currentFG != nullptr &&
                      state.currentFG->SwapchainContext() != nullptr;
-    // While it is on. Its short pauses (toggles, a changed interpolation count, swap chain remakes, about ten frames) do
-    // not count: stopping and starting again for them would change the sleep mode twice and hand the cap back and forth
-    // (XeFG's check does not look at the pause either). The Vulkan present bridge is left out: FSR FG there is untested
-    // with us.
+    // While it is on. Its short pauses (toggles, a changed interpolation count, swap chain remakes, about ten frames)
+    // do not count: stopping and starting again for them would change the sleep mode twice and hand the cap back and
+    // forth (XeFG's check does not look at the pause either). The Vulkan present bridge is left out: FSR FG there is
+    // untested with us.
     in.fsrFgRunning = state.activeFgOutput == FGOutput::FSRFG && state.currentFG != nullptr &&
                       state.currentFG->IsActive() &&
                       (state.swapchainInteropApi == SwapchainInteropApi::None ||
@@ -457,8 +457,8 @@ const char* PathText(Api api)
     }
 }
 
-// What lowers latency here, whoever makes the calls (the menu's "Active: <input> -> <output>"). PathText names the method
-// our own calls reach; XeFG, Force XeLL and a game's own XeLL come first because they decide it.
+// What lowers latency here, whoever makes the calls (the menu's "Active: <input> -> <output>"). PathText names the
+// method our own calls reach; XeFG, Force XeLL and a game's own XeLL come first because they decide it.
 const char* OutputText(Api api)
 {
     // With XeFG and Reflex or Anti-Lag 2 as its Output: they lower latency, XeLL stays for XeFG
@@ -609,8 +609,8 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         }
     }
 
-    // XeLL doing nothing cannot hold the cap for the settle window either: the limiter takes it at once (XeLL's interval
-    // waits for the settled plan, it does nothing meanwhile anyway)
+    // XeLL doing nothing cannot hold the cap for the settle window either: the limiter takes it at once (XeLL's
+    // interval waits for the settled plan, it does nothing meanwhile anyway)
     g_capOwner = OwnerAfterCall(XellIdle(capInputs) ? planned : cap, g_sentRefused);
     g_xellIdle = XellIdle(capInputs);
 
@@ -636,15 +636,9 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
 }
 } // namespace
 
-void OnPresentBegin(IUnknown* device, PresentSource source)
-{
-    PresentBegin(Api::D3D, device, source);
-}
+void OnPresentBegin(IUnknown* device, PresentSource source) { PresentBegin(Api::D3D, device, source); }
 
-void OnPresentEnd(IUnknown* device, PresentSource source)
-{
-    PresentEnd(Api::D3D, device, source);
-}
+void OnPresentEnd(IUnknown* device, PresentSource source) { PresentEnd(Api::D3D, device, source); }
 
 void OnPresentBeginVulkan(VkDevice device)
 {
@@ -695,9 +689,9 @@ void NoteDxvkVulkanPresentThread()
 
 namespace
 {
-// The devices the Vulkan present published, as ONE unit: the bridge's D3D12 device and the game's VkDevice (as a token).
-// Which one the game's Present uses is chosen at the game's Present from the Output of that moment, so a change of
-// XeFG's Output never uses the last frame's choice, and no call goes to the wrong API's device.
+// The devices the Vulkan present published, as ONE unit: the bridge's D3D12 device and the game's VkDevice (as a
+// token). Which one the game's Present uses is chosen at the game's Present from the Output of that moment, so a change
+// of XeFG's Output never uses the last frame's choice, and no call goes to the wrong API's device.
 struct DxvkDevices
 {
     IUnknown* device12 = nullptr;
@@ -761,8 +755,9 @@ bool DxvkVulkanPresent(VkDevice vkDevice, IUnknown* device12, uint32_t generatio
 
     if (resync && !resyncLogged.exchange(true))
     {
-        LOG_WARN("Low latency (dxvk): the game's presents and dxvk's Vulkan presents got out of step (a present without its "
-                 "pair, or the bridge made again); the frame list was trimmed and goes on from here");
+        LOG_WARN(
+            "Low latency (dxvk): the game's presents and dxvk's Vulkan presents got out of step (a present without its "
+            "pair, or the bridge made again); the frame list was trimmed and goes on from here");
     }
 
     // Nothing queued: the Vulkan present runs the pair, as it did before the game's Present could
@@ -822,15 +817,16 @@ DxvkGameScope OnDxvkGamePresentBegin(bool keyOn, HWND window, uint32_t generatio
     scope.device = const_cast<IUnknown*>(static_cast<const IUnknown*>(target.device));
     scope.pushed = true;
 
-    // The entry's ID is the one the markers carry (0 when nobody feeds XeLL): XeFG takes it when the bridge presents the
-    // frame. Read under the site lock (NativeLowLatencyRule.h BeginGameSiteFrame).
-    scope.seq = BeginGameSiteFrame([] { return DxvkSiteLock(true); }, [] { return g_xellFrameIdForFrameGeneration.load(); },
-                                   [&](uint32_t id)
-                                   {
-                                       std::lock_guard lock(g_dxvkLedgerMutex);
-                                       return g_dxvkLedger.Push(id, SleepSite::GamePresent, generation, Util::MillisecondsNow());
-                                   },
-                                   [&] { PresentBegin(scope.api, scope.device, PresentSource::SwapChain); });
+    // The entry's ID is the one the markers carry (0 when nobody feeds XeLL): XeFG takes it when the bridge presents
+    // the frame. Read under the site lock (NativeLowLatencyRule.h BeginGameSiteFrame).
+    scope.seq = BeginGameSiteFrame(
+        [] { return DxvkSiteLock(true); }, [] { return g_xellFrameIdForFrameGeneration.load(); },
+        [&](uint32_t id)
+        {
+            std::lock_guard lock(g_dxvkLedgerMutex);
+            return g_dxvkLedger.Push(id, SleepSite::GamePresent, generation, Util::MillisecondsNow());
+        },
+        [&] { PresentBegin(scope.api, scope.device, PresentSource::SwapChain); });
     return scope;
 }
 
@@ -838,8 +834,8 @@ void OnDxvkGamePresentEnd(const DxvkGameScope& scope, HRESULT presentResult)
 {
     if (scope.began)
     {
-        // dxvk can remake its Vulkan swapchain inside this very Present, and the bridge then lets go of its D3D12 device
-        // (OnDeviceReleased): ending the pair on it would store a device that is gone
+        // dxvk can remake its Vulkan swapchain inside this very Present, and the bridge then lets go of its D3D12
+        // device (OnDeviceReleased): ending the pair on it would store a device that is gone
         const auto devices = DxvkDevicesNow();
         DxvkSiteLock lock(true);
 
@@ -961,10 +957,10 @@ bool Running()
 
 uint32_t FrameIdForFrameGeneration()
 {
-    // dxvk with the pair at the game's Present: the bridge present on dxvk's thread presents a frame the game's thread has
-    // long moved past, and takes the ID that frame's markers carried (its ledger entry, taken before the frame is touched).
-    // The game's own thread (XeFG tags the frame's resources while it renders) and everyone else are in the newest frame,
-    // as before; so is everyone when dxvk presents on the game's own thread.
+    // dxvk with the pair at the game's Present: the bridge present on dxvk's thread presents a frame the game's thread
+    // has long moved past, and takes the ID that frame's markers carried (its ledger entry, taken before the frame is
+    // touched). The game's own thread (XeFG tags the frame's resources while it renders) and everyone else are in the
+    // newest frame, as before; so is everyone when dxvk presents on the game's own thread.
     if (const auto bridge = g_dxvkBridgeFrameId.load(); bridge != 0)
     {
         const auto thread = GetCurrentThreadId();

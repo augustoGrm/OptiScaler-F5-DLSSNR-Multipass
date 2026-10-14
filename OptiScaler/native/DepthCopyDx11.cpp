@@ -172,7 +172,8 @@ const char* DepthCopyDx11::MakeStage(uint32_t width, uint32_t height, DXGI_FORMA
 
 const char* DepthCopyDx11::Take(ID3D11DeviceContext* context, ID3D11Resource* source, bool reversed)
 {
-    // Every way out below but the last leaves no copy for this buffer: the copy of an earlier one is not offered for it.
+    // Every way out below but the last leaves no copy for this buffer: the copy of an earlier one is not offered for
+    // it.
     _taken = false;
 
     // A deferred context only records: a copy made there would run when the game executes its list, if it does.
@@ -194,7 +195,8 @@ const char* DepthCopyDx11::Take(ID3D11DeviceContext* context, ID3D11Resource* so
 
     const bool multisampled = sourceDesc.SampleDesc.Count > 1;
 
-    // What is kept between copies is made on the device the buffer was made on, and made again when the game makes a new one.
+    // What is kept between copies is made on the device the buffer was made on, and made again when the game makes a
+    // new one.
     ComPtr<ID3D11Device> device;
     source->GetDevice(&device);
 
@@ -207,8 +209,8 @@ const char* DepthCopyDx11::Take(ID3D11DeviceContext* context, ID3D11Resource* so
         _device = device;
     }
 
-    // An R32 depth (D32_FLOAT, R32_TYPELESS: the most common) is already the copy's format family: copied straight, no pass.
-    // A multisampled one is resolved by the pass whatever its format.
+    // An R32 depth (D32_FLOAT, R32_TYPELESS: the most common) is already the copy's format family: copied straight, no
+    // pass. A multisampled one is resolved by the pass whatever its format.
     const bool direct = typeless == DXGI_FORMAT_R32_TYPELESS && !multisampled;
     ID3D11ComputeShader* shader = direct ? nullptr : multisampled ? ResolveShader(reversed) : Shader();
 
@@ -218,8 +220,8 @@ const char* DepthCopyDx11::Take(ID3D11DeviceContext* context, ID3D11Resource* so
     if (const char* failed = MakeCopy(sourceDesc.Width, sourceDesc.Height))
         return failed;
 
-    // Only the first subresource is copied: a whole-resource copy of a buffer with mips or slices into one with neither would
-    // be dropped by the runtime without a word.
+    // Only the first subresource is copied: a whole-resource copy of a buffer with mips or slices into one with neither
+    // would be dropped by the runtime without a word.
     if (direct)
     {
         context->CopySubresourceRegion(_copy.Get(), 0, 0, 0, 0, source, 0, nullptr);
@@ -234,7 +236,8 @@ const char* DepthCopyDx11::Take(ID3D11DeviceContext* context, ID3D11Resource* so
 
     context->CopySubresourceRegion(_stage.Get(), 0, 0, 0, 0, source, 0, nullptr);
 
-    // The game's own compute state: this runs in the middle of its frame, so what it had bound at slot 0 is put back after.
+    // The game's own compute state: this runs in the middle of its frame, so what it had bound at slot 0 is put back
+    // after.
     ComPtr<ID3D11ComputeShader> gameShader;
     ID3D11ClassInstance* gameInstances[D3D11_SHADER_MAX_INTERFACES] {};
     UINT gameInstanceCount = D3D11_SHADER_MAX_INTERFACES;

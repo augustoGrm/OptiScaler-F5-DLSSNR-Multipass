@@ -1,21 +1,23 @@
 #pragma once
 
 // Presents native input (the producer's picture, and the depth finder's depth and the optical flow as guides) to a real
-// OptiScaler upscaler backend as a synthetic Evaluate call, for a game that never calls one. Everything keyed off a live
-// upscaler feature -- the menu's status, backend switching and, above all, frame generation with the Upscaler input -- then
-// works as it does for a game's own call. An alternative to DLSS-NR's native input (DlssNr::ApplyNativeInput); the two are
-// mutually exclusive.
+// OptiScaler upscaler backend as a synthetic Evaluate call, for a game that never calls one. Everything keyed off a
+// live upscaler feature -- the menu's status, backend switching and, above all, frame generation with the Upscaler
+// input -- then works as it does for a game's own call. An alternative to DLSS-NR's native input
+// (DlssNr::ApplyNativeInput); the two are mutually exclusive.
 //
-// The call follows the real one (inputs/NVNGX_DLSS_Dx12.cpp, NVSDK_NGX_D3D12_EvaluateFeature and TryEvaluateOptiFeature):
-// DLSS-NR's EvaluateBeforeUpscale, currentFeature, UpscalerInputsDx12::UpscaleStart and UpscaleEnd (which feed frame
-// generation), Evaluate, then DLSS-NR's EvaluateAfterUpscale. It must run before frame generation presents, on the game's
-// queue: native/NativeDriverDx12.cpp drives it from FGHooks::FGPresent when frame generation owns the swapchain.
+// The call follows the real one (inputs/NVNGX_DLSS_Dx12.cpp, NVSDK_NGX_D3D12_EvaluateFeature and
+// TryEvaluateOptiFeature): DLSS-NR's EvaluateBeforeUpscale, currentFeature, UpscalerInputsDx12::UpscaleStart and
+// UpscaleEnd (which feed frame generation), Evaluate, then DLSS-NR's EvaluateAfterUpscale. It must run before frame
+// generation presents, on the game's queue: native/NativeDriverDx12.cpp drives it from FGHooks::FGPresent when frame
+// generation owns the swapchain.
 //
-// Jitter is zero and render size equals output size: there is no upscaling, the backend runs as a temporal stabiliser on the
-// native-resolution picture.
+// Jitter is zero and render size equals output size: there is no upscaling, the backend runs as a temporal stabiliser
+// on the native-resolution picture.
 //
-// The feature is kept out of the real NGX handle tables. Like a game's own feature it makes FeatureProvider_Dx12 record the
-// backend it built in Config::Dx12Upscaler, which is also the backend it builds: the user's choice, FFX when there is none.
+// The feature is kept out of the real NGX handle tables. Like a game's own feature it makes FeatureProvider_Dx12 record
+// the backend it built in Config::Dx12Upscaler, which is also the backend it builds: the user's choice, FFX when there
+// is none.
 
 #include "NativeProducer.h"
 #include "VirtualUpscalerHold.h"
@@ -45,12 +47,12 @@ class VirtualUpscalerDriver
     VirtualUpscalerDriver(const VirtualUpscalerDriver&) = delete;
     VirtualUpscalerDriver& operator=(const VirtualUpscalerDriver&) = delete;
 
-    // A NativeProducer::ApplyFn: one synthetic upscaler call on `frame`, recorded on `cmd`, with the picture written back in
-    // place. True when the backend evaluated.
+    // A NativeProducer::ApplyFn: one synthetic upscaler call on `frame`, recorded on `cmd`, with the picture written
+    // back in place. True when the backend evaluated.
     bool Run(ID3D12GraphicsCommandList* cmd, const NativeFrame& frame);
 
-    // Drops the backend the way a game releasing its feature does: frame generation is told, currentFeature is cleared, and the
-    // feature is destroyed once the GPU can no longer be using it. Nothing happens when there is none.
+    // Drops the backend the way a game releasing its feature does: frame generation is told, currentFeature is cleared,
+    // and the feature is destroyed once the GPU can no longer be using it. Nothing happens when there is none.
     void Release();
 
     // The game is calling its own upscaler for now (VirtualUpscalerHold.h): the backend and frame generation's context
@@ -95,7 +97,8 @@ class VirtualUpscalerDriver
 
     ID3D12Resource* _output = nullptr; // rests in UNORDERED_ACCESS
     Key _outputKey;
-    ID3D12Resource* _input = nullptr; // a typed copy of the picture when the picture itself is typeless; rests in COPY_DEST
+    ID3D12Resource* _input =
+        nullptr; // a typed copy of the picture when the picture itself is typeless; rests in COPY_DEST
     Key _inputKey;
     ID3D12Resource* _neutralDepth = nullptr; // all far, for frames with no depth; rests in NON_PIXEL_SHADER_RESOURCE
     Key _neutralKey;

@@ -1,17 +1,23 @@
 #pragma once
 
-// A request to retry NR after a failure, made on one thread (the menu) and consumed on another (the one that records NR).
-// The menu must not touch the GPU or the backend's lock, so it only counts; the backend compares the count with the last
-// one it handled at the start of its next evaluate, where it can drain its own device and rebuild.
+// A request to retry NR after a failure, made on one thread (the menu) and consumed on another (the one that records
+// NR). The menu must not touch the GPU or the backend's lock, so it only counts; the backend compares the count with
+// the last one it handled at the start of its next evaluate, where it can drain its own device and rebuild.
 
 #include <atomic>
 
 namespace DlssNr
 {
-// What a consumed retry does about the device it finds. Release: the device the failure happened on is still the game's,
-// so drain it and let go of NR's objects. Abandon: the game made a new device since (the old one is destroyed and took
-// every handle with it), so nothing may be called on it; the handles are only forgotten. None: nothing to retry.
-enum class RetryStep { None, Release, Abandon };
+// What a consumed retry does about the device it finds. Release: the device the failure happened on is still the
+// game's, so drain it and let go of NR's objects. Abandon: the game made a new device since (the old one is destroyed
+// and took every handle with it), so nothing may be called on it; the handles are only forgotten. None: nothing to
+// retry.
+enum class RetryStep
+{
+    None,
+    Release,
+    Abandon
+};
 
 constexpr RetryStep DecideRetry(bool requested, bool failed, bool permanent, bool haveDevice, bool deviceChanged)
 {

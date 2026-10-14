@@ -90,7 +90,6 @@ HMODULE StreamlineHooks::LoadIsolatedGamePlugin(LPCWSTR requestedPath)
     return nullptr;
 }
 
-
 #include <intrin.h>
 #pragma intrinsic(_ReturnAddress)
 
@@ -253,7 +252,8 @@ sl::Result StreamlineHooks::hkslInit(const sl::Preferences& pref, uint64_t sdkVe
     auto localSlPathStr = localSlPath.wstring();
     std::wstring minimalSlPathStr;
 
-    std::vector<const wchar_t*> storage(localPref.pathsToPlugins, localPref.pathsToPlugins + localPref.numPathsToPlugins);
+    std::vector<const wchar_t*> storage(localPref.pathsToPlugins,
+                                        localPref.pathsToPlugins + localPref.numPathsToPlugins);
 
     const bool isNvngxFG = State::Instance().activeFgInput == FGInput::NvngxFG;
     const bool ignoreStreamlineOTA = Config::Instance()->FGStreamlineIgnoreOTA.value_or_default();
@@ -275,7 +275,7 @@ sl::Result StreamlineHooks::hkslInit(const sl::Preferences& pref, uint64_t sdkVe
     // each access-violate (null read at a small offset) when loaded this way instead -- a bug
     // inside NVIDIA's own closed-source plugin, not something tied to one specific file's JSON.
     static constexpr const wchar_t* kSafeStreamlinePlugins[] = { L"sl.common.dll", L"sl.dlss.dll", L"sl.dlss_g.dll",
-                                                                  L"sl.reflex.dll", L"sl.pcl.dll" };
+                                                                 L"sl.reflex.dll", L"sl.pcl.dll" };
 
     // Builds (or refreshes) a trimmed copy of the streamline folder containing only the plugins
     // above, for handing to a caller we don't trust with the full set. Rebuilt every call rather
@@ -291,8 +291,8 @@ sl::Result StreamlineHooks::hkslInit(const sl::Preferences& pref, uint64_t sdkVe
         {
             std::filesystem::path src = localSlPath / name;
             if (std::filesystem::exists(src, ec))
-                std::filesystem::copy_file(src, minimalPath / name,
-                                            std::filesystem::copy_options::overwrite_existing, ec);
+                std::filesystem::copy_file(src, minimalPath / name, std::filesystem::copy_options::overwrite_existing,
+                                           ec);
         }
 
         return minimalPath.wstring();
@@ -1579,8 +1579,8 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
 
     const auto result = o_slDLSSGSetOptions(viewport, newOptions);
 
-    MfgUnlock::RecordSetOptions(requestedCount, newOptions.numFramesToGenerate,
-                                newOptions.mode != sl::DLSSGMode::eOff, static_cast<unsigned int>(result));
+    MfgUnlock::RecordSetOptions(requestedCount, newOptions.numFramesToGenerate, newOptions.mode != sl::DLSSGMode::eOff,
+                                static_cast<unsigned int>(result));
 
     return result;
 }

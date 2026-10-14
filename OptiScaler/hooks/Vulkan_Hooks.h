@@ -23,7 +23,8 @@ class VulkanHooks
     // vkCreateWin32SurfaceKHR without our hook (the present bridge makes a surface of its own).
     static PFN_vkCreateWin32SurfaceKHR OriginalCreateWin32Surface();
 
-    // vkDestroySurfaceKHR without our hook: the bridge destroys that surface holding its own lock, which the hook takes.
+    // vkDestroySurfaceKHR without our hook: the bridge destroys that surface holding its own lock, which the hook
+    // takes.
     static PFN_vkDestroySurfaceKHR OriginalDestroySurface();
 
     // The driver's VK_NV_low_latency2

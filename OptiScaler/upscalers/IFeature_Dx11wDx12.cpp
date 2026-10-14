@@ -133,8 +133,8 @@ bool IFeature_Dx11wDx12::ProcessDx11Textures(const NVSDK_NGX_Parameter* InParame
         LOG_DEBUG("ReactiveMask disabled!");
 
     const auto prepareResult = Dx11WithDx12::PrepareUpscalerResources(
-        ResourceCache, InParameters, mask, (UINT)_frameCount, cacheFrameKey, Config::Instance()->DontUseNTShared.value_or_default(),
-        reactiveRequired, true);
+        ResourceCache, InParameters, mask, (UINT) _frameCount, cacheFrameKey,
+        Config::Instance()->DontUseNTShared.value_or_default(), reactiveRequired, true);
 
     if (!prepareResult.Success)
     {
@@ -475,16 +475,14 @@ bool IFeature_Dx11wDx12::Evaluate(ID3D11DeviceContext* InDeviceContext, NVSDK_NG
         if (!reportedNrOffer)
         {
             reportedNrOffer = true;
-            LOG_INFO("DLSS-NR: the D3D11 bridge reached the hand-off (upscale ok: {}, enabled: {})",
-                     dx12EvalResult, Config::Instance()->DlssNrEnabled.value_or_default());
-
+            LOG_INFO("DLSS-NR: the D3D11 bridge reached the hand-off (upscale ok: {}, enabled: {})", dx12EvalResult,
+                     Config::Instance()->DlssNrEnabled.value_or_default());
         }
 
         if (dx12EvalResult && Config::Instance()->DlssNrEnabled.value_or_default())
         {
             DlssNr::EvaluateAfterUpscale(cmdList, InParameters, Dx12CommandQueue,
-                                         dx12Feature->GetUpscalerType() == Upscaler::DLSSD,
-                                         _frameCount);
+                                         dx12Feature->GetUpscalerType() == Upscaler::DLSSD, _frameCount);
 
             // Asked only after the D3D12 path has had its turn. Probing first would have made a D3D11
             // init the very first thing to ever touch the snippet, and if that had left its core

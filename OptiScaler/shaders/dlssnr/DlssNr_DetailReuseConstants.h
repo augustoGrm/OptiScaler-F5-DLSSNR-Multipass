@@ -1,8 +1,8 @@
 #pragma once
 
-// Constants of precompile/dlssnr_detail_reuse.hlsl (reuse detail between frames, dlssnr/DlssNrDetailReuse.h). No dependencies, so
-// tests/nr_detail_reuse_shader_smoke.cpp can fill it too. Same 256-byte slot as DlssNrConstants, so it goes through
-// DlssNr_Dx12's constant-buffer ring.
+// Constants of precompile/dlssnr_detail_reuse.hlsl (reuse detail between frames, dlssnr/DlssNrDetailReuse.h). No
+// dependencies, so tests/nr_detail_reuse_shader_smoke.cpp can fill it too. Same 256-byte slot as DlssNrConstants, so it
+// goes through DlssNr_Dx12's constant-buffer ring.
 
 #include <cstdint>
 
@@ -72,8 +72,8 @@ struct alignas(256) DlssNrDetailReuseConstants
     // A moved sample is distrusted where the current vectors at the place it came from differ from this pixel's own by
     // more than this share of (its length + 1), in working-size pixels: something else moves there now. 0 is off.
     float MotionReject;
-    // Steady: a difference between the full frame and the moved detail smaller than this (proxy units; about one 8-bit step) is
-    // taken as none, so rounding does not show the two apart. 0 is off.
+    // Steady: a difference between the full frame and the moved detail smaller than this (proxy units; about one 8-bit
+    // step) is taken as none, so rounding does not show the two apart. 0 is off.
     float SteadyDeadZone;
     // Reproject / Estimate: t5 holds an outside opinion of each pixel's history, distrust 0..1 in .r at any size
     // (DlssNrFrameInfo::HistoryDistrust; Optical F5Low's trust mask on native input), which scales the moved detail's

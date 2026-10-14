@@ -38,7 +38,7 @@ inline bool KnownRelaxedDepthGame()
 inline float DetailReuseDepthToleranceEffective(const Config& cfg)
 {
     return DlssNrReuseDepth::Effective(cfg.DlssNrDetailReuseDepthTolerance, KnownRelaxedDepthGame(),
-                                        kDlssNrDetailReuseDepthTolerance);
+                                       kDlssNrDetailReuseDepthTolerance);
 }
 
 // Whether Automatic follows the game's exposure: the user's choice, else on for a known unexposed game.

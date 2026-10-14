@@ -1,4 +1,5 @@
-// Not built with the precompiled header: no Direct3D in here, so tests/nr_depth_finder_core_smoke.cpp compiles it alone.
+// Not built with the precompiled header: no Direct3D in here, so tests/nr_depth_finder_core_smoke.cpp compiles it
+// alone.
 #include "DepthFinderCore.h"
 
 #include <algorithm>
@@ -20,15 +21,9 @@ int64_t NowMs()
 }
 } // namespace
 
-SyntheticUpscalerCallScope::SyntheticUpscalerCallScope()
-{
-    ++g_syntheticUpscalerDepth;
-}
+SyntheticUpscalerCallScope::SyntheticUpscalerCallScope() { ++g_syntheticUpscalerDepth; }
 
-SyntheticUpscalerCallScope::~SyntheticUpscalerCallScope()
-{
-    --g_syntheticUpscalerDepth;
-}
+SyntheticUpscalerCallScope::~SyntheticUpscalerCallScope() { --g_syntheticUpscalerDepth; }
 
 void NoteGameUpscalerCall()
 {
@@ -52,8 +47,8 @@ void DepthFinderCore::Start(LogFn log)
 
 void DepthFinderCore::NoteUpscalerCall()
 {
-    // Our own synthetic call: the finder must not see it as the game having an upscaler, or it stands down the very pipeline
-    // that is feeding the call.
+    // Our own synthetic call: the finder must not see it as the game having an upscaler, or it stands down the very
+    // pipeline that is feeding the call.
     if (g_syntheticUpscalerDepth > 0)
         return;
 
@@ -172,9 +167,9 @@ SnapshotRequest DepthFinderCore::OnDepthBound(uint64_t context, bool hadDepth, c
         boundStats = &stats;
     }
 
-    // The picked buffer is often never cleared again in the frame it was drawn (Witcher 3 clears at the start of the pass), so
-    // the clear never offers a snapshot. The moment the context moves off it is the other chance: the busiest stretch of the
-    // frame is copied there, in the state the view says the buffer is in.
+    // The picked buffer is often never cleared again in the frame it was drawn (Witcher 3 clears at the start of the
+    // pass), so the clear never offers a snapshot. The moment the context moves off it is the other chance: the busiest
+    // stretch of the frame is copied there, in the state the view says the buffer is in.
     Stats* previous = _contexts[context].stats;
 
     if (previous != nullptr && previous != boundStats && _snapshotsWanted.load(std::memory_order_relaxed) &&
@@ -222,8 +217,8 @@ SnapshotRequest DepthFinderCore::OnDepthClear(uint64_t context, const DepthBuffe
     stats.height = buffer.height;
     stats.format = buffer.format;
 
-    // Reversed-Z games clear to 0.0 (or anything but 1.0). The first clear of a frame decides afresh; any later one in the same
-    // frame can only add reversed, as before.
+    // Reversed-Z games clear to 0.0 (or anything but 1.0). The first clear of a frame decides afresh; any later one in
+    // the same frame can only add reversed, as before.
     if (!stats.clearedThisFrame)
         stats.reversed = value != 1.0f;
     else if (value != 1.0f)
@@ -239,19 +234,20 @@ SnapshotRequest DepthFinderCore::OnDepthClear(uint64_t context, const DepthBuffe
     stats.current = DrawStats {};
 
     // A clear after a render into a small viewport (a mirror, a portal) is not the scene; ReShade's rule.
-    const bool real = stretch.lastViewportWidth > 1024.0f || stretch.lastViewportWidth == 0.0f || _pictureWidth <= 1024.0f;
+    const bool real =
+        stretch.lastViewportWidth > 1024.0f || stretch.lastViewportWidth == 0.0f || _pictureWidth <= 1024.0f;
 
     if (!real)
         return request;
 
-    // The busiest stretch of the frame is the one to snapshot; ties go to the later one, so a scene drawn first into a shadow
-    // map and then for real picks the real one.
+    // The busiest stretch of the frame is the one to snapshot; ties go to the later one, so a scene drawn first into a
+    // shadow map and then for real picks the real one.
     if (stretch.vertices >= _snapshotFloor)
     {
         stats.bestClear = (int32_t) stats.clears;
 
-        // The overlay's copy: only of the buffer picked last frame, and only at the busiest stretch, so the copy that is left
-        // at the end of the frame is the scene's.
+        // The overlay's copy: only of the buffer picked last frame, and only at the busiest stretch, so the copy that
+        // is left at the end of the frame is the scene's.
         if (_snapshotsWanted.load(std::memory_order_relaxed) && _pick.valid && _pick.id == buffer.id)
         {
             request.take = true;
@@ -266,8 +262,8 @@ SnapshotRequest DepthFinderCore::OnDepthClear(uint64_t context, const DepthBuffe
     return request;
 }
 
-// A context that ends while still bound to the picked buffer never unbinds it, so the stretch drawn since its last clear
-// (Cyberpunk draws the world after the clear and ends the list there) is copied here.
+// A context that ends while still bound to the picked buffer never unbinds it, so the stretch drawn since its last
+// clear (Cyberpunk draws the world after the clear and ends the list there) is copied here.
 SnapshotRequest DepthFinderCore::OnContextEnd(uint64_t context)
 {
     SnapshotRequest request;
@@ -341,9 +337,9 @@ uint64_t DepthFinderCore::BeginPresent(uint32_t pictureWidth, uint32_t pictureHe
 
     _pictureWidth = (float) pictureWidth;
 
-    // Lists are recorded in no fixed order, so "the busiest stretch so far" picked a different copy from frame to frame (the
-    // world one, or the first-person weapon's) and the preview flickered. Every stretch that draws a fair share of what the
-    // pick drew last frame is copied instead; the one that runs last on the GPU is left, the same every frame.
+    // Lists are recorded in no fixed order, so "the busiest stretch so far" picked a different copy from frame to frame
+    // (the world one, or the first-person weapon's) and the preview flickered. Every stretch that draws a fair share of
+    // what the pick drew last frame is copied instead; the one that runs last on the GPU is left, the same every frame.
     _snapshotFloor = 0;
 
     if (_pick.valid)
@@ -515,13 +511,16 @@ void DepthFinderCore::LogCandidates(const std::vector<GenericDepthSelect::Candid
                     pictureHeight, sorted.size(), pick.valid ? "" : ", none qualifies"));
 
     const int bundleSame = _counters.bundleSameDraw.load();
-    Say(std::format("Depth finder:   hooks so far: {} depth views created, {} binds of render targets ({} with a depth "
-                    "buffer, {} of those unknown to us), {} draws, {} indirect, {} bundle executions (bundle draw code is "
-                    "the direct list's: {}), {} dispatches",
-                    _counters.depthViewsCreated.load(), _counters.binds.load(), _counters.bindsWithDepth.load(),
-                    _counters.bindsUnknownDepth.load(), _counters.draws.load(), _counters.indirect.load(),
-                    _counters.bundles.load(), bundleSame < 0 ? "unknown" : bundleSame ? "yes" : "no",
-                    _counters.dispatches.load()));
+    Say(std::format(
+        "Depth finder:   hooks so far: {} depth views created, {} binds of render targets ({} with a depth "
+        "buffer, {} of those unknown to us), {} draws, {} indirect, {} bundle executions (bundle draw code is "
+        "the direct list's: {}), {} dispatches",
+        _counters.depthViewsCreated.load(), _counters.binds.load(), _counters.bindsWithDepth.load(),
+        _counters.bindsUnknownDepth.load(), _counters.draws.load(), _counters.indirect.load(), _counters.bundles.load(),
+        bundleSame < 0 ? "unknown"
+        : bundleSame   ? "yes"
+                       : "no",
+        _counters.dispatches.load()));
 
     const uint64_t draws = (uint64_t) _counters.draws.load();
     Say(std::format(
@@ -536,10 +535,11 @@ void DepthFinderCore::LogCandidates(const std::vector<GenericDepthSelect::Candid
     for (size_t i = 0; i < shown; ++i)
     {
         const auto& c = sorted[i];
-        Say(std::format("Depth finder:   {}{:X}  {}x{}  format {}  {} vertices, {} draws ({} indirect), {} clear(s), best "
-                        "clear {}{}",
-                        pick.valid && pick.id == c.id ? "-> " : "   ", c.id, c.width, c.height, c.format, c.vertices,
-                        c.drawcalls, c.drawcallsIndirect, c.clears, c.bestClear, c.reversed ? ", reversed-Z" : ""));
+        Say(std::format(
+            "Depth finder:   {}{:X}  {}x{}  format {}  {} vertices, {} draws ({} indirect), {} clear(s), best "
+            "clear {}{}",
+            pick.valid && pick.id == c.id ? "-> " : "   ", c.id, c.width, c.height, c.format, c.vertices, c.drawcalls,
+            c.drawcallsIndirect, c.clears, c.bestClear, c.reversed ? ", reversed-Z" : ""));
     }
 }
 

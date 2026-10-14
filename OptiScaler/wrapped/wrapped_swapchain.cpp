@@ -292,9 +292,9 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             return ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
     }
 
-    // This lock will delay/prevent release of buffers while present is ongoing. Not for a dxvk game on the Vulkan bridge:
-    // the swapchain here is then the game's own (frame generation's comes from the system DXGI, unwrapped), and dxvk's
-    // present remakes its Vulkan swapchain after a resize, which takes the exclusive side on this same thread
+    // This lock will delay/prevent release of buffers while present is ongoing. Not for a dxvk game on the Vulkan
+    // bridge: the swapchain here is then the game's own (frame generation's comes from the system DXGI, unwrapped), and
+    // dxvk's present remakes its Vulkan swapchain after a resize, which takes the exclusive side on this same thread
     // (VkPresentBridge BeginResize): it would wait for itself. A native Vulkan game's present takes none either.
     std::shared_lock<std::shared_mutex> dx11wDx12PresentLock(Dx11wDx12Sync::PresentResizeMutex(), std::defer_lock);
     if (State::Instance().swapchainInteropApi != SwapchainInteropApi::None &&
@@ -362,9 +362,9 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         if (Util::CheckForRealObject(__FUNCTION__, cq, (IUnknown**) &realQueue))
             cq = realQueue;
 
-        // Not on the Vulkan bridge (native/VkPresentBridge.h): this is XeFG's D3D12 swapchain for a Vulkan game, whose own
-        // present sets swapchainApi to Vulkan. Writing D3D12 here made the menu flip between the two. The D3D12 queue and
-        // device below are still captured: frame generation needs them.
+        // Not on the Vulkan bridge (native/VkPresentBridge.h): this is XeFG's D3D12 swapchain for a Vulkan game, whose
+        // own present sets swapchainApi to Vulkan. Writing D3D12 here made the menu flip between the two. The D3D12
+        // queue and device below are still captured: frame generation needs them.
         if (State::Instance().swapchainInteropApi != SwapchainInteropApi::VkwDx12)
             State::Instance().swapchainApi = DX12;
 
@@ -387,9 +387,9 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         }
     }
 
-    // On the Vulkan bridge (native/VkPresentBridge.h) this is frame generation's D3D12 swapchain for a Vulkan game, whose
-    // own present also calls update() with isVulkan: the same answer from both, or reflexLimitsFps flips every frame
-    // and setFPSLimit resends the cap each time
+    // On the Vulkan bridge (native/VkPresentBridge.h) this is frame generation's D3D12 swapchain for a Vulkan game,
+    // whose own present also calls update() with isVulkan: the same answer from both, or reflexLimitsFps flips every
+    // frame and setFPSLimit resends the cap each time
     const bool vulkanGame = State::Instance().swapchainInteropApi == SwapchainInteropApi::VkwDx12;
     auto fg = State::Instance().currentFG;
     if (willPresent && fg != nullptr)
@@ -407,9 +407,9 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         {
             std::optional<double> upscalerTimeOpt {};
 
-            // ReadUpscalerTime takes a void*: a plain D3D12 feature casts it to ID3D12CommandQueue*, so it must never be
-            // handed a D3D11 context. A D3D11 game can own one (native::VirtualUpscalerDriver, run on the paired D3D12
-            // queue) with no D3D12 queue on this swap chain; its timers live on that paired queue.
+            // ReadUpscalerTime takes a void*: a plain D3D12 feature casts it to ID3D12CommandQueue*, so it must never
+            // be handed a D3D11 context. A D3D11 game can own one (native::VirtualUpscalerDriver, run on the paired
+            // D3D12 queue) with no D3D12 queue on this swap chain; its timers live on that paired queue.
             const bool pureDx12Feature = currentFeature->Api() == API::DX12 && !currentFeature->IsWithDx12();
 
             if (pureDx12Feature)
@@ -495,11 +495,12 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     // DXVK check, it's here because of upscaler time calculations
     if (IdentifyGpu::getPrimaryGpu().dxgiIsDxvk)
     {
-        // dxvk with the Vulkan bridge: Optical F5Low's low latency (Reflex markers and the Sleep) runs here, on the game's
-        // thread, as it does for a plain D3D11 game (Dx11wDx12SC::Present). The Vulkan present (hkvkQueuePresentKHR) runs on
-        // dxvk's thread and leaves the frames this took to it (native/NativeLowLatency.h DxvkGameScope). Only for the swap
-        // chain on the bridge's window: another one (a launcher, a video) has no Vulkan present of the bridge's to pair
-        // with. Same willPresent rule as the non-dxvk path below: a DXGI_PRESENT_TEST is not a frame.
+        // dxvk with the Vulkan bridge: Optical F5Low's low latency (Reflex markers and the Sleep) runs here, on the
+        // game's thread, as it does for a plain D3D11 game (Dx11wDx12SC::Present). The Vulkan present
+        // (hkvkQueuePresentKHR) runs on dxvk's thread and leaves the frames this took to it (native/NativeLowLatency.h
+        // DxvkGameScope). Only for the swap chain on the bridge's window: another one (a launcher, a video) has no
+        // Vulkan present of the bridge's to pair with. Same willPresent rule as the non-dxvk path below: a
+        // DXGI_PRESENT_TEST is not a frame.
         native::lowlatency::DxvkGameScope lowLatencyScope;
         const auto bridgeWindow = VkPresentBridge::OutputWindow();
 
@@ -842,9 +843,10 @@ ULONG STDMETHODCALLTYPE WrappedIDXGISwapChain4::Release()
         OwnedLockGuard lock(_localMutex, 999);
 #endif
 
-        // A dxvk game whose frames the Vulkan present bridge carries (VkPresentBridge::DxvkThroughVulkan): the menu and frame
-        // generation are the bridge's, on this same window, and it lets go of them itself when dxvk's Vulkan swapchain goes
-        // (in _real->Release() below). Tearing them down here would pull XeFG out from under its queued presents.
+        // A dxvk game whose frames the Vulkan present bridge carries (VkPresentBridge::DxvkThroughVulkan): the menu and
+        // frame generation are the bridge's, on this same window, and it lets go of them itself when dxvk's Vulkan
+        // swapchain goes (in _real->Release() below). Tearing them down here would pull XeFG out from under its queued
+        // presents.
         const bool bridgeOwns = VkPresentBridge::DxvkThroughVulkan();
 
         if (!bridgeOwns)
@@ -946,8 +948,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present(UINT SyncInterval, UIN
 
         // When Reflex can't be used to limit (and Optical F5Low's low latency does not keep the cap), sleep in present
         if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
-            State::Instance().activeFgOutput == FGOutput::NoFG &&
-            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
+            State::Instance().activeFgOutput == FGOutput::NoFG && !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk &&
+            !XellHooks::canLimit() && !InputCommon::can_limit_fps())
             FrameLimit::sleep();
     }
     else
@@ -1065,8 +1067,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers(UINT BufferCount
 
     State::Instance().scChanged = true;
 
-    if (!_composition && Config::Instance()->OverrideVsync.value_or_default() && !State::Instance().SCExclusiveFullscreen &&
-        State::Instance().currentFG == nullptr)
+    if (!_composition && Config::Instance()->OverrideVsync.value_or_default() &&
+        !State::Instance().SCExclusiveFullscreen && State::Instance().currentFG == nullptr)
     {
         LOG_DEBUG("Overriding flags");
         SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
@@ -1205,7 +1207,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers(UINT BufferCount
                 if (DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT & css)
                 {
                     result = _real3->SetColorSpace1(hdrCS);
-                    if (SUCCEEDED(result)) DlssNr::FinishedPictureColorSpace(_real3, hdrCS);
+                    if (SUCCEEDED(result))
+                        DlssNr::FinishedPictureColorSpace(_real3, hdrCS);
 
                     if (result != S_OK)
                     {
@@ -1315,8 +1318,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::Present1(UINT SyncInterval, UI
 
         // When Reflex can't be used to limit (and Optical F5Low's low latency does not keep the cap), sleep in present
         if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
-            State::Instance().activeFgOutput == FGOutput::NoFG &&
-            !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
+            State::Instance().activeFgOutput == FGOutput::NoFG && !IdentifyGpu::getPrimaryGpu().dxgiIsDxvk &&
+            !XellHooks::canLimit() && !InputCommon::can_limit_fps())
             FrameLimit::sleep();
     }
     else
@@ -1514,8 +1517,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers1(UINT BufferCoun
 
     State::Instance().scChanged = true;
 
-    if (!_composition && Config::Instance()->OverrideVsync.value_or_default() && !State::Instance().SCExclusiveFullscreen &&
-        State::Instance().currentFG == nullptr)
+    if (!_composition && Config::Instance()->OverrideVsync.value_or_default() &&
+        !State::Instance().SCExclusiveFullscreen && State::Instance().currentFG == nullptr)
     {
         LOG_DEBUG("Overriding flags");
         SwapChainFlags |= DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING;
@@ -1674,7 +1677,8 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers1(UINT BufferCoun
                 if (DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT & css)
                 {
                     result = _real3->SetColorSpace1(hdrCS);
-                    if (SUCCEEDED(result)) DlssNr::FinishedPictureColorSpace(_real3, hdrCS);
+                    if (SUCCEEDED(result))
+                        DlssNr::FinishedPictureColorSpace(_real3, hdrCS);
 
                     if (result != S_OK)
                     {

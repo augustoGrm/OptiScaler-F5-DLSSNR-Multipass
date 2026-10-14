@@ -42,15 +42,15 @@ SGSR1_Vk::SGSR1_Vk(std::string InName, VkDevice InDevice, VkPhysicalDevice InPhy
     // Binding order matches sgsr1.hlsl's VK_MODE attributes exactly: UBO 0, sampled image 1,
     // storage image 2, sampler 3 -- same order OS_Vk uses for its own 4-binding layout.
     std::vector<VkDescriptorSetLayoutBinding> bindings = { CreateBinding(0, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER),
-                                                            CreateBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
-                                                            CreateBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
-                                                            CreateBinding(3, VK_DESCRIPTOR_TYPE_SAMPLER) };
+                                                           CreateBinding(1, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE),
+                                                           CreateBinding(2, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE),
+                                                           CreateBinding(3, VK_DESCRIPTOR_TYPE_SAMPLER) };
     CreateLayouts(bindings);
 
     std::vector<VkDescriptorPoolSize> poolSizes = { { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, _maxFramesInFlight },
-                                                     { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, _maxFramesInFlight },
-                                                     { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, _maxFramesInFlight },
-                                                     { VK_DESCRIPTOR_TYPE_SAMPLER, _maxFramesInFlight } };
+                                                    { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, _maxFramesInFlight },
+                                                    { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, _maxFramesInFlight },
+                                                    { VK_DESCRIPTOR_TYPE_SAMPLER, _maxFramesInFlight } };
 
     CreateDescriptorPool(poolSizes, _maxFramesInFlight);
     CreateDescriptorSets(_descriptorSetLayout, _descriptorPool, _descriptorSets);
@@ -70,8 +70,9 @@ SGSR1_Vk::SGSR1_Vk(std::string InName, VkDevice InDevice, VkPhysicalDevice InPhy
     _init = true;
 }
 
-bool SGSR1_Vk::Dispatch(VkCommandBuffer InCmdList, const VkImageInfo& InResourceView, const VkImageInfo& OutResourceView,
-                        uint32_t reversibleMode, uint32_t passthrough, float edgeThreshold, float edgeSharpness)
+bool SGSR1_Vk::Dispatch(VkCommandBuffer InCmdList, const VkImageInfo& InResourceView,
+                        const VkImageInfo& OutResourceView, uint32_t reversibleMode, uint32_t passthrough,
+                        float edgeThreshold, float edgeSharpness)
 {
     if (!_init || InCmdList == VK_NULL_HANDLE)
         return false;

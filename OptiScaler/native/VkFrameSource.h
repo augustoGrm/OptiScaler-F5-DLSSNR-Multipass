@@ -43,15 +43,15 @@ class VkFrameSource : public IFrameSource
     // now), only on PresentWait(), or on nothing when that is null.
     bool TookPresentWaits() const { return _tookPresentWaits; }
 
-    // Presents through the bridge (native/VkPresentBridge.h): the processed picture goes to a D3D12 swapchain instead of back
-    // into the game's image, so Return copies nothing back (its semaphore still lets the game's hidden present go), Acquire
-    // copies in even while the game calls an upscaler (the D3D12 swapchain needs the picture all the same) and waits for the
-    // D3D12 side to be done with the last picture. Set before SetPresent.
+    // Presents through the bridge (native/VkPresentBridge.h): the processed picture goes to a D3D12 swapchain instead
+    // of back into the game's image, so Return copies nothing back (its semaphore still lets the game's hidden present
+    // go), Acquire copies in even while the game calls an upscaler (the D3D12 swapchain needs the picture all the same)
+    // and waits for the D3D12 side to be done with the last picture. Set before SetPresent.
     void SetBridged(bool bridged) { _bridged = bridged; }
 
-    // The bridge's use of a presented frame, after Acquire (and Return): the shared picture, the shared fence and the value
-    // the copy in signalled on it, the producer's done point (null fence: no result), and the next fence value for the
-    // bridge's own signal, which Acquire then waits for before the next copy in.
+    // The bridge's use of a presented frame, after Acquire (and Return): the shared picture, the shared fence and the
+    // value the copy in signalled on it, the producer's done point (null fence: no result), and the next fence value
+    // for the bridge's own signal, which Acquire then waits for before the next copy in.
     ID3D12Resource* BridgedPicture() const { return _acquiredPicture; }
     ID3D12Fence* BridgedFence() const { return _fence.Fence12(); }
     uint64_t BridgedCopied() const { return _copied; }
@@ -59,17 +59,17 @@ class VkFrameSource : public IFrameSource
     uint64_t NextFenceValue() { return _fence.Next(); }
     void NoteBridgeDone(uint64_t value) { _bridgeDone = value; }
 
-    // The copy to the output failed: hands the shared picture back (SharedFrameVk.h HandBackPicture) so that the signal the
-    // next copy in waits for (`done`) still comes, and only after the producer is finished with the picture. False when
-    // there was no picture to hand back (nothing signals `done`, so nothing may wait for it).
+    // The copy to the output failed: hands the shared picture back (SharedFrameVk.h HandBackPicture) so that the signal
+    // the next copy in waits for (`done`) still comes, and only after the producer is finished with the picture. False
+    // when there was no picture to hand back (nothing signals `done`, so nothing may wait for it).
     bool HandBackBridged(uint64_t done);
 
-    // Gives the present its semaphore when the producer did not run for it (Return was not called): the copy in was made,
-    // the game's own wait list was taken, and the present must still wait on something.
+    // Gives the present its semaphore when the producer did not run for it (Return was not called): the copy in was
+    // made, the game's own wait list was taken, and the present must still wait on something.
     void FinishPresent();
 
-    // The D3D12 device and queue on the Vulkan device's adapter, made now rather than at the first frame, for the swapchain
-    // on the real window. Kept (not released with the Vulkan side) while `pin` is held.
+    // The D3D12 device and queue on the Vulkan device's adapter, made now rather than at the first frame, for the
+    // swapchain on the real window. Kept (not released with the Vulkan side) while `pin` is held.
     bool EnsureD3D12(VkPhysicalDevice physical, std::string& why);
     void PinD3D12(bool pin);
     ID3D12Device* Device12() const { return _device12; }
@@ -92,12 +92,13 @@ class VkFrameSource : public IFrameSource
 
     // From the hooks. A device's queues by family, as created.
     static void NoteDevice(VkPhysicalDevice physical, VkDevice device, const VkDeviceCreateInfo& info);
-    // The device a queue belongs to and the physical device it was made on, as seen at vkCreateDevice. False for a queue
-    // that was not seen (the caller keeps what it had).
+    // The device a queue belongs to and the physical device it was made on, as seen at vkCreateDevice. False for a
+    // queue that was not seen (the caller keeps what it had).
     static bool DeviceOfQueue(VkQueue queue, VkDevice* device, VkPhysicalDevice* physical);
     // The physical device a Vulkan device was made on; null when it was not seen.
     static VkPhysicalDevice PhysicalDeviceOf(VkDevice device);
-    // The usage a swapchain is made with: TRANSFER_SRC and TRANSFER_DST added when the surface allows them and NR is on.
+    // The usage a swapchain is made with: TRANSFER_SRC and TRANSFER_DST added when the surface allows them and NR is
+    // on.
     static VkImageUsageFlags SwapchainUsage(VkPhysicalDevice physical, const VkSwapchainCreateInfoKHR& info);
     // A swapchain was made: its images, format and colour space. The one it replaces is forgotten.
     static void NoteSwapchain(VkDevice device, VkSwapchainKHR swapchain, const VkSwapchainCreateInfoKHR& info);
@@ -150,7 +151,7 @@ class VkFrameSource : public IFrameSource
     bool _bridged = false;
     bool _pinned = false;
     ID3D12Resource* _acquiredPicture = nullptr; // the shared picture of the frame being processed, null if none
-    uint64_t _copied = 0;     // the copy in's value on the shared fence
+    uint64_t _copied = 0;                       // the copy in's value on the shared fence
     uint64_t _bridgeDone = 0; // the last value the bridge signalled on it: the next copy in waits for it
     SyncPoint _producerDone;
 

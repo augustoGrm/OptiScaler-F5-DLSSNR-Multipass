@@ -65,8 +65,8 @@ AcquireStatus Dx12FrameSource::Acquire(FrameInput& input)
     if (_swapChain == nullptr || _queue == nullptr)
         return AcquireStatus::Unavailable;
 
-    // The game has an upscaler of its own: this is not the case the producer is for, and the pictures before and after a
-    // change would be compared across it.
+    // The game has an upscaler of its own: this is not the case the producer is for, and the pictures before and after
+    // a change would be compared across it.
     if (GenericDepthDx12::GameCallsUpscaler())
         return AcquireStatus::WaitingForUpscaler;
 
@@ -100,7 +100,7 @@ AcquireStatus Dx12FrameSource::Acquire(FrameInput& input)
 
     if (depth.valid)
     {
-        input.depthCount = (std::min)(depth.copyCount, (int) FrameInput::kMaxDepthCopies);
+        input.depthCount = (std::min) (depth.copyCount, (int) FrameInput::kMaxDepthCopies);
 
         for (int i = 0; i < input.depthCount; ++i)
             input.depth[i] = depth.copies[i];
@@ -119,8 +119,8 @@ void Dx12FrameSource::Return(const FrameInput& input, const FrameOutput& output)
     (void) input;
     (void) output;
 
-    // Zero-copy: the producer worked on the back buffer in place, on the queue the game presents from, so the order of the queue
-    // already puts its work before the present.
+    // Zero-copy: the producer worked on the back buffer in place, on the queue the game presents from, so the order of
+    // the queue already puts its work before the present.
     Release();
 }
 

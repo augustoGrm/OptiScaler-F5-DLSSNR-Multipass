@@ -1,7 +1,7 @@
 #pragma once
 
-// Automatic exposure's eye adaptation: the exposure the picture uses eases toward each new reading instead of jumping to
-// it.
+// Automatic exposure's eye adaptation: the exposure the picture uses eases toward each new reading instead of jumping
+// to it.
 //
 // Why: the meter re-reads every evaluation, and before this the encode and resolve used that reading as it was. In NBA
 // 2K27 a made basket's zoom swung it 1.45 -> 3.30 -> 1.46 (1.19 EV) within seconds, so the model's input brightness
@@ -13,9 +13,9 @@
 // the exponential in dt, so the response per second is the same at any frame rate. tau is the menu's "Eye adaptation"
 // in seconds, 0 = off (the reading as it is).
 //
-// Two taus, as in Unreal (Speed Up / Speed Down) and Unity HDRP (Speed Dark to Light / Light to Dark): the eye adapts to
-// light faster than to dark, so a scene getting brighter takes tauBrighter and one getting darker tauDarker. The exposure
-// is what the picture is multiplied by, so a reading BELOW the eased value is a brighter scene.
+// Two taus, as in Unreal (Speed Up / Speed Down) and Unity HDRP (Speed Dark to Light / Light to Dark): the eye adapts
+// to light faster than to dark, so a scene getting brighter takes tauBrighter and one getting darker tauDarker. The
+// exposure is what the picture is multiplied by, so a reading BELOW the eased value is a brighter scene.
 //
 // It snaps -- takes the reading at once -- on a cut the game signals (the DLSS reset), and whenever the eased value is
 // stale: the first evaluation, one after evaluations Automatic did not run on (another source, finished picture), and
@@ -30,9 +30,10 @@
 // source switch on a menu frame, a new texture's undefined contents). A 0 reads as no reading downstream too: the
 // white point falls back to the host's last value, as before.
 //
-// Pure CPU: the D3D12 and Vulkan paths work out each evaluation's Step, the shader (precompile/dlssnr_exposure_adapt.hlsl,
-// DXIL and SPIR-V) applies Ease with it to the texture it wrote the evaluation before, tests/nr_exposure_adapt_smoke.cpp
-// checks both halves. Ease is mirrored in that shader line for line; change them together.
+// Pure CPU: the D3D12 and Vulkan paths work out each evaluation's Step, the shader
+// (precompile/dlssnr_exposure_adapt.hlsl, DXIL and SPIR-V) applies Ease with it to the texture it wrote the evaluation
+// before, tests/nr_exposure_adapt_smoke.cpp checks both halves. Ease is mirrored in that shader line for line; change
+// them together.
 
 #include <algorithm>
 #include <bit>
@@ -88,8 +89,8 @@ struct Step
     float blendDarker = 1.0f;
     bool snap = true;
 
-    // The shader's constants overlay DlssNrConstants' first fields (Mode, WhitePoint, Width, Height): the brighter blend
-    // rides in WhitePoint, the snap in Width, and the darker blend, bit for bit, in Height.
+    // The shader's constants overlay DlssNrConstants' first fields (Mode, WhitePoint, Width, Height): the brighter
+    // blend rides in WhitePoint, the snap in Width, and the darker blend, bit for bit, in Height.
     uint32_t DarkerBits() const { return std::bit_cast<uint32_t>(blendDarker); }
 };
 

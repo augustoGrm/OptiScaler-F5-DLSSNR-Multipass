@@ -20,18 +20,19 @@
 #include <cstdint>
 #include <utility>
 
-namespace DlssNr::Spatial {
+namespace DlssNr::Spatial
+{
 
 // Why compression is or is not applied. The runtime publishes this; the menu owns the words.
 enum class Status : uint8_t
 {
-    Off,                // not asked for (or no frame has run since it was asked for)
-    Active,             // NR works on the packed picture
-    Proxy,              // the driver-proxy backend runs one pass of its own: compression stays off
-    BadSettings,        // a value is outside its range (a hand-edited ini)
-    TooSmall,           // the packed picture would be under a quarter of the frame on an axis
-    NothingToCompress,  // the working size is 100% on both axes
-    ThinEdge,           // the layout leaves less than one pixel on one side, or the middle is as wide as the working size
+    Off,               // not asked for (or no frame has run since it was asked for)
+    Active,            // NR works on the packed picture
+    Proxy,             // the driver-proxy backend runs one pass of its own: compression stays off
+    BadSettings,       // a value is outside its range (a hand-edited ini)
+    TooSmall,          // the packed picture would be under a quarter of the frame on an axis
+    NothingToCompress, // the working size is 100% on both axes
+    ThinEdge, // the layout leaves less than one pixel on one side, or the middle is as wide as the working size
     TurnedOffResources, // the shader or a texture could not be created
     TurnedOffDispatch,  // a compute pass failed
     TurnedOffModel,     // NR rejected the packed picture
@@ -53,22 +54,25 @@ inline uint32_t AlignedExtent(uint32_t size, uint32_t native)
     return aligned;
 }
 
-struct Settings {
+struct Settings
+{
     bool enabled = false;
     float centerX = 80, centerY = 80;
     float workX = 90, workY = 90;
     float offsetX = 0, offsetY = 0;
     float shiftX = 0, shiftY = 0;
-    bool operator==(const Settings& o) const {
+    bool operator==(const Settings& o) const
+    {
         const auto same = [](float a, float b) { return a == b || (std::isnan(a) && std::isnan(b)); };
-        return enabled == o.enabled && same(centerX, o.centerX) && same(centerY, o.centerY) &&
-               same(workX, o.workX) && same(workY, o.workY) && same(offsetX, o.offsetX) &&
-               same(offsetY, o.offsetY) && same(shiftX, o.shiftX) && same(shiftY, o.shiftY);
+        return enabled == o.enabled && same(centerX, o.centerX) && same(centerY, o.centerY) && same(workX, o.workX) &&
+               same(workY, o.workY) && same(offsetX, o.offsetX) && same(offsetY, o.offsetY) && same(shiftX, o.shiftX) &&
+               same(shiftY, o.shiftY);
     }
     bool operator!=(const Settings& o) const { return !(*this == o); }
 };
 
-template<class ConfigLike> Settings ReadSettings(const ConfigLike& cfg) {
+template <class ConfigLike> Settings ReadSettings(const ConfigLike& cfg)
+{
     Settings s;
     s.enabled = cfg.DlssNrSpatialCompression.value_or_default();
     s.centerX = cfg.DlssNrSpatialCenterX.value_or_default();
@@ -83,7 +87,11 @@ template<class ConfigLike> Settings ReadSettings(const ConfigLike& cfg) {
 }
 
 // The named layouts the menu offers (centre / working size, both axes, no offset, no shift).
-struct NamedLayout { const char* name; float center, work; };
+struct NamedLayout
+{
+    const char* name;
+    float center, work;
+};
 inline constexpr NamedLayout kNamedLayouts[3] = { { "Light", 85.0f, 95.0f },
                                                   { "Balanced", 80.0f, 90.0f },
                                                   { "Strong", 70.0f, 80.0f } };
@@ -92,7 +100,8 @@ inline constexpr int kDefaultLayout = 1;
 // Which named layout these settings are exactly, or -1 for a custom one.
 inline int MatchedLayout(const Settings& s)
 {
-    for (int i = 0; i != 3; ++i) {
+    for (int i = 0; i != 3; ++i)
+    {
         const NamedLayout& n = kNamedLayouts[i];
         if (s.centerX == n.center && s.centerY == n.center && s.workX == n.work && s.workY == n.work &&
             s.offsetX == 0 && s.offsetY == 0 && s.shiftX == 0 && s.shiftY == 0)
@@ -110,36 +119,34 @@ inline void ApplyNamedLayout(Settings& s, int index)
     s.shiftX = s.shiftY = 0;
 }
 
-inline float MaxCenterOffset(float centerPercent) {
-    return std::max(0.0f, (100.0f - centerPercent) * .5f - .5f);
-}
+inline float MaxCenterOffset(float centerPercent) { return std::max(0.0f, (100.0f - centerPercent) * .5f - .5f); }
 
 // The smallest working size (percent of the frame) that keeps the packed picture at a quarter of the frame, for the
 // model resolution NR actually applies. The 16-pixel rounding can still land a little under it; the runtime says so.
-inline float MinimumWorkPercent(float globalScale) {
-    return std::isfinite(globalScale) && globalScale > 0
-        ? std::clamp(25.0f / globalScale, 25.0f, 100.0f) : 100.0f;
+inline float MinimumWorkPercent(float globalScale)
+{
+    return std::isfinite(globalScale) && globalScale > 0 ? std::clamp(25.0f / globalScale, 25.0f, 100.0f) : 100.0f;
 }
 
 // How far the edge balance may move, in percent of the frame. Positive moves pixels from the left (top) edge to the
 // right (bottom) edge: BuildAxis gives side 0 (left/top) allotted - shift and side 1 (right/bottom) allotted + shift.
-inline std::pair<float, float> WorkShiftLimits(float centerPercent, float workPercent, float offsetPercent) {
+inline std::pair<float, float> WorkShiftLimits(float centerPercent, float workPercent, float offsetPercent)
+{
     const float c = centerPercent * .01f, w = workPercent * .01f;
     const float halfBand = c * .5f, bandCenter = .5f + offsetPercent * .01f;
-    const float periphery[2] = {std::max(0.0f, bandCenter - halfBand),
-                                std::max(0.0f, 1.0f - bandCenter - halfBand)};
+    const float periphery[2] = { std::max(0.0f, bandCenter - halfBand), std::max(0.0f, 1.0f - bandCenter - halfBand) };
     const float budget = std::max(0.0f, w - c);
     const int narrow = periphery[0] <= periphery[1] ? 0 : 1;
     float base[2] = {};
     base[narrow] = std::min(.5f * budget, periphery[narrow]);
     base[1 - narrow] = std::min(budget - base[narrow], periphery[1 - narrow]);
-    return {-100.0f * std::max(0.0f, std::min(base[1], periphery[0] - base[0])),
-             100.0f * std::max(0.0f, std::min(base[0], periphery[1] - base[1]))};
+    return { -100.0f * std::max(0.0f, std::min(base[1], periphery[0] - base[0])),
+             100.0f * std::max(0.0f, std::min(base[0], periphery[1] - base[1])) };
 }
 
-inline std::pair<float, float> WorkShiftLimits(const Settings& s, bool yAxis) {
-    return yAxis ? WorkShiftLimits(s.centerY, s.workY, s.offsetY)
-                 : WorkShiftLimits(s.centerX, s.workX, s.offsetX);
+inline std::pair<float, float> WorkShiftLimits(const Settings& s, bool yAxis)
+{
+    return yAxis ? WorkShiftLimits(s.centerY, s.workY, s.offsetY) : WorkShiftLimits(s.centerX, s.workX, s.offsetX);
 }
 
 // Brings every value a user edit can reach inside its range, for the menu and for the model resolution changing under
@@ -148,7 +155,8 @@ inline std::pair<float, float> WorkShiftLimits(const Settings& s, bool yAxis) {
 inline void Constrain(Settings& value, float globalScale)
 {
     const float minimumWork = MinimumWorkPercent(globalScale);
-    const auto axis = [&](float& center, float& work, float& offset) {
+    const auto axis = [&](float& center, float& work, float& offset)
+    {
         center = std::clamp(std::isfinite(center) ? center : 80.0f, 1.0f, 99.5f);
         work = std::clamp(std::isfinite(work) ? work : 90.0f, std::max(minimumWork, center + 0.5f), 100.0f);
         const float limit = MaxCenterOffset(center);
@@ -163,81 +171,106 @@ inline void Constrain(Settings& value, float globalScale)
 }
 
 // Fractions of the native frame (0..1), including offset and shift.
-struct Rect { float left = 0, top = 0, right = 1, bottom = 1; };
+struct Rect
+{
+    float left = 0, top = 0, right = 1, bottom = 1;
+};
 
-struct Layout {
-    Settings settings{};
+struct Layout
+{
+    Settings settings {};
     bool requested = false, active = false;
     Status status = Status::Off;
     uint32_t nativeW = 0, nativeH = 0;
     uint32_t ordinaryW = 0, ordinaryH = 0; // what NR works on without compression
     uint32_t modelW = 0, modelH = 0;       // what it works on with it (the same, when inactive)
     float globalScale = 1;
-    pw::Layout warp{};
-    Rect centerBounds{}, workBounds{};
+    pw::Layout warp {};
+    Rect centerBounds {}, workBounds {};
     // The same geometry, not the same float: the applied scale of Auto model resolution drifts by a hair under dynamic
     // resolution, and a layout that comes out the same sizes is the same layout (nothing to rebuild or reset).
-    bool operator==(const Layout& o) const {
+    bool operator==(const Layout& o) const
+    {
         return settings == o.settings && nativeW == o.nativeW && nativeH == o.nativeH && status == o.status &&
                active == o.active && ordinaryW == o.ordinaryW && ordinaryH == o.ordinaryH && modelW == o.modelW &&
-               modelH == o.modelH && (!active || (warp.x.rawExtent == o.warp.x.rawExtent &&
-                                                  warp.y.rawExtent == o.warp.y.rawExtent));
+               modelH == o.modelH &&
+               (!active || (warp.x.rawExtent == o.warp.x.rawExtent && warp.y.rawExtent == o.warp.y.rawExtent));
     }
     bool operator!=(const Layout& o) const { return !(*this == o); }
 };
 
-inline uint32_t EvenExtent(uint32_t native, double fraction) {
-    if (fraction == 1.0) return native;
+inline uint32_t EvenExtent(uint32_t native, double fraction)
+{
+    if (fraction == 1.0)
+        return native;
     double value = static_cast<double>(native) * fraction;
     const double nearest = std::round(value);
-    if (std::abs(value - nearest) <= 1e-6 * std::max(1.0, std::abs(value))) value = nearest;
+    if (std::abs(value - nearest) <= 1e-6 * std::max(1.0, std::abs(value)))
+        value = nearest;
     uint32_t result = static_cast<uint32_t>(std::ceil(value));
-    if (result & 1u) ++result;
-    if (fraction < 1.0) result = std::min(result, native & ~1u);
+    if (result & 1u)
+        ++result;
+    if (fraction < 1.0)
+        result = std::min(result, native & ~1u);
     return std::max(2u, result);
 }
 
 // gridOrdinary: whether the ordinary (uncompressed) size is rounded to the 16-pixel grid too, as Direct3D 12's is.
-inline Layout Build(const Settings& s, uint32_t nativeW, uint32_t nativeH, float globalScale, bool gridOrdinary = true) {
-    Layout result{};
+inline Layout Build(const Settings& s, uint32_t nativeW, uint32_t nativeH, float globalScale, bool gridOrdinary = true)
+{
+    Layout result {};
     result.settings = s;
     result.requested = s.enabled;
-    result.nativeW = nativeW; result.nativeH = nativeH;
+    result.nativeW = nativeW;
+    result.nativeH = nativeH;
     result.globalScale = globalScale;
     const float ordinaryScale = std::isfinite(globalScale) ? std::clamp(globalScale, .25f, 2.0f) : 1.0f;
-    const auto ordinary = [&](uint32_t native) {
+    const auto ordinary = [&](uint32_t native)
+    {
         const uint32_t size = std::max(1u, static_cast<uint32_t>(native * ordinaryScale + 0.5f));
         return gridOrdinary ? AlignedExtent(size, native) : size;
     };
     result.ordinaryW = ordinary(nativeW);
     result.ordinaryH = ordinary(nativeH);
-    result.modelW = result.ordinaryW; result.modelH = result.ordinaryH;
-    if (!s.enabled) return result;
-    if (nativeW < 2 || nativeH < 2 || !std::isfinite(globalScale) || globalScale < .25f || globalScale > 2.0f) {
-        result.status = Status::BadSettings; return result;
+    result.modelW = result.ordinaryW;
+    result.modelH = result.ordinaryH;
+    if (!s.enabled)
+        return result;
+    if (nativeW < 2 || nativeH < 2 || !std::isfinite(globalScale) || globalScale < .25f || globalScale > 2.0f)
+    {
+        result.status = Status::BadSettings;
+        return result;
     }
-    const auto validAxis = [](float center, float work, float offset, float shift) {
+    const auto validAxis = [](float center, float work, float offset, float shift)
+    {
         if (!std::isfinite(center) || !std::isfinite(work) || !std::isfinite(offset) || !std::isfinite(shift) ||
             center <= 0 || work < 25 || work > 100 || center >= work ||
-            std::abs(offset) > MaxCenterOffset(center) + 1e-4f) return false;
+            std::abs(offset) > MaxCenterOffset(center) + 1e-4f)
+            return false;
         const auto limits = WorkShiftLimits(center, work, offset);
         return shift >= limits.first - 1e-4f && shift <= limits.second + 1e-4f;
     };
-    if (!validAxis(s.centerX, s.workX, s.offsetX, s.shiftX) ||
-        !validAxis(s.centerY, s.workY, s.offsetY, s.shiftY)) {
-        result.status = Status::BadSettings; return result;
+    if (!validAxis(s.centerX, s.workX, s.offsetX, s.shiftX) || !validAxis(s.centerY, s.workY, s.offsetY, s.shiftY))
+    {
+        result.status = Status::BadSettings;
+        return result;
     }
-    if (s.workX == 100 && s.workY == 100) {
-        result.status = Status::NothingToCompress; return result;
+    if (s.workX == 100 && s.workY == 100)
+    {
+        result.status = Status::NothingToCompress;
+        return result;
     }
-    const auto packed = [&](uint32_t native, float work) {
+    const auto packed = [&](uint32_t native, float work)
+    {
         const double size = std::round(static_cast<double>(native) * static_cast<double>(globalScale) * work * .01);
         return AlignedExtent(static_cast<uint32_t>(std::max(1.0, size)), native);
     };
     const uint32_t modelW = packed(nativeW, s.workX);
     const uint32_t modelH = packed(nativeH, s.workY);
-    if (modelW < nativeW * .25f || modelH < nativeH * .25f) {
-        result.status = Status::TooSmall; return result;
+    if (modelW < nativeW * .25f || modelH < nativeH * .25f)
+    {
+        result.status = Status::TooSmall;
+        return result;
     }
     // At the native size (100% model resolution) the raw working extent is the packed extent itself: the middle band
     // then moves by whole texels and stays 1:1, and the edges take the rounding. Elsewhere the picture is resampled
@@ -245,28 +278,35 @@ inline Layout Build(const Settings& s, uint32_t nativeW, uint32_t nativeH, float
     const uint32_t rawW = result.ordinaryW == nativeW ? modelW : EvenExtent(nativeW, s.workX * .01);
     const uint32_t rawH = result.ordinaryH == nativeH ? modelH : EvenExtent(nativeH, s.workY * .01);
     if (s.centerX * .01f * static_cast<float>(nativeW) >= static_cast<float>(rawW) ||
-        s.centerY * .01f * static_cast<float>(nativeH) >= static_cast<float>(rawH)) {
-        result.status = Status::ThinEdge; return result;
+        s.centerY * .01f * static_cast<float>(nativeH) >= static_cast<float>(rawH))
+    {
+        result.status = Status::ThinEdge;
+        return result;
     }
     result.warp.x = pw::BuildAxis(nativeW, rawW, modelW, s.centerX * .01f, s.offsetX * .01f, s.shiftX * .01f);
     result.warp.y = pw::BuildAxis(nativeH, rawH, modelH, s.centerY * .01f, s.offsetY * .01f, s.shiftY * .01f);
-    const auto& x = result.warp.x; const auto& y = result.warp.y;
-    const auto invertible = [](const pw::Axis& axis) {
+    const auto& x = result.warp.x;
+    const auto& y = result.warp.y;
+    const auto invertible = [](const pw::Axis& axis)
+    {
         // A peripheral side needs at least one raw working texel. At a shift endpoint the reference split may assign
         // zero; snapping can leave a fraction of one.
         return (axis.periphery[0] <= 0 || axis.allotted[0] >= 1.0f) &&
                (axis.periphery[1] <= 0 || axis.allotted[1] >= 1.0f);
     };
-    if (!invertible(x) || !invertible(y)) {
-        result.status = Status::ThinEdge; return result;
+    if (!invertible(x) || !invertible(y))
+    {
+        result.status = Status::ThinEdge;
+        return result;
     }
-    result.centerBounds = {(x.bandCenter - x.halfBand) / nativeW, (y.bandCenter - y.halfBand) / nativeH,
-                           (x.bandCenter + x.halfBand) / nativeW, (y.bandCenter + y.halfBand) / nativeH};
-    result.workBounds = {(x.bandCenter - x.halfBand - x.allotted[0]) / nativeW,
-                         (y.bandCenter - y.halfBand - y.allotted[0]) / nativeH,
-                         (x.bandCenter + x.halfBand + x.allotted[1]) / nativeW,
-                         (y.bandCenter + y.halfBand + y.allotted[1]) / nativeH};
-    result.modelW = modelW; result.modelH = modelH;
+    result.centerBounds = { (x.bandCenter - x.halfBand) / nativeW, (y.bandCenter - y.halfBand) / nativeH,
+                            (x.bandCenter + x.halfBand) / nativeW, (y.bandCenter + y.halfBand) / nativeH };
+    result.workBounds = { (x.bandCenter - x.halfBand - x.allotted[0]) / nativeW,
+                          (y.bandCenter - y.halfBand - y.allotted[0]) / nativeH,
+                          (x.bandCenter + x.halfBand + x.allotted[1]) / nativeW,
+                          (y.bandCenter + y.halfBand + y.allotted[1]) / nativeH };
+    result.modelW = modelW;
+    result.modelH = modelH;
     result.active = true;
     result.status = Status::Active;
     return result;
@@ -275,12 +315,13 @@ inline Layout Build(const Settings& s, uint32_t nativeW, uint32_t nativeH, float
 // What the runtime publishes each frame for the menu and the on-screen layout: the status as a code, the sizes NR
 // works on (packed, and what it would have been), the model resolution the layout was built for, and the boxes as
 // fractions of the frame. The menu owns every word; the overlay draws exactly these boxes.
-struct Published {
+struct Published
+{
     Status status = Status::Off;
     bool vulkan = false;
     uint32_t nativeW = 0, nativeH = 0, ordinaryW = 0, ordinaryH = 0, modelW = 0, modelH = 0;
     float scale = 1;
-    Rect center{}, work{};
+    Rect center {}, work {};
 };
 
 inline Published Publish(const Layout& layout, Status status, bool vulkan)
@@ -288,12 +329,17 @@ inline Published Publish(const Layout& layout, Status status, bool vulkan)
     Published p;
     p.status = status;
     p.vulkan = vulkan;
-    p.nativeW = layout.nativeW; p.nativeH = layout.nativeH;
-    p.ordinaryW = layout.ordinaryW; p.ordinaryH = layout.ordinaryH;
+    p.nativeW = layout.nativeW;
+    p.nativeH = layout.nativeH;
+    p.ordinaryW = layout.ordinaryW;
+    p.ordinaryH = layout.ordinaryH;
     p.scale = layout.globalScale;
-    if (status == Status::Active) {
-        p.modelW = layout.modelW; p.modelH = layout.modelH;
-        p.center = layout.centerBounds; p.work = layout.workBounds;
+    if (status == Status::Active)
+    {
+        p.modelW = layout.modelW;
+        p.modelH = layout.modelH;
+        p.center = layout.centerBounds;
+        p.work = layout.workBounds;
     }
     return p;
 }
@@ -303,25 +349,32 @@ inline const char* Describe(Status status)
 {
     switch (status)
     {
-    case Status::Off: return "off";
-    case Status::Active: return "on";
-    case Status::Proxy: return "not used with the driver-proxy backend";
-    case Status::BadSettings: return "a setting is outside its range";
-    case Status::TooSmall: return "the packed picture would be under a quarter of the frame";
-    case Status::NothingToCompress: return "the working size is 100% on both axes";
-    case Status::ThinEdge: return "the layout leaves less than one pixel at an edge";
-    case Status::TurnedOffResources: return "its shader or textures could not be created";
-    case Status::TurnedOffDispatch: return "a compute pass failed";
-    case Status::TurnedOffModel: return "NR rejected the packed picture";
+    case Status::Off:
+        return "off";
+    case Status::Active:
+        return "on";
+    case Status::Proxy:
+        return "not used with the driver-proxy backend";
+    case Status::BadSettings:
+        return "a setting is outside its range";
+    case Status::TooSmall:
+        return "the packed picture would be under a quarter of the frame";
+    case Status::NothingToCompress:
+        return "the working size is 100% on both axes";
+    case Status::ThinEdge:
+        return "the layout leaves less than one pixel at an edge";
+    case Status::TurnedOffResources:
+        return "its shader or textures could not be created";
+    case Status::TurnedOffDispatch:
+        return "a compute pass failed";
+    case Status::TurnedOffModel:
+        return "NR rejected the packed picture";
     }
     return "?";
 }
 
 // A running hash, for a backend to fold the formats and sizes of what it packs into one number.
-inline uint64_t Mix(uint64_t hash, uint64_t value)
-{
-    return (hash ^ value) * 1099511628211ull + 0x9E3779B97F4A7C15ull;
-}
+inline uint64_t Mix(uint64_t hash, uint64_t value) { return (hash ^ value) * 1099511628211ull + 0x9E3779B97F4A7C15ull; }
 
 // The frame-to-frame bookkeeping both backends share: this frame's layout, whether compression runs, and the fallback
 // that holds it off after something went wrong. A change of layout, or of the formats and sizes that were packed (the
@@ -380,7 +433,7 @@ class Tracker
     Status fallback() const { return fallback_; }
 
   private:
-    Layout layout_{};
+    Layout layout_ {};
     Status fallback_ = Status::Off;
     uint64_t signature_ = 0;
     bool valid_ = false;
@@ -388,22 +441,24 @@ class Tracker
     uint32_t loggedW_ = 0, loggedH_ = 0;
 };
 
-struct alignas(16) Constants {
+struct alignas(16) Constants
+{
     uint32_t mode = 0;
     float unused = 0;
     uint32_t width = 0, height = 0;
-    pw::ShaderConstants warp{};
+    pw::ShaderConstants warp {};
     float depthRect[4] = {}, motionRect[4] = {}, motionScale[2] = {}, padding[6] = {};
 };
 static_assert(sizeof(Constants) == 256);
 static_assert(offsetof(Constants, warp) == 16);
 
 // Modes: 100 packs the encoded colour, 101 packs depth (point-sampled) and motion (by its end points), 102 unpacks the
-// packed model input and the model's answer back to the ordinary grid, and 103 does that and adds what the round trip took
-// from the model input (a third input: the picture the model would be shown without compression), for the Replace curves.
-// mvX / mvY take the game's motion units to native pixels (the guide scale NR already applies to its vectors).
-inline Constants MakeConstants(const Layout& layout, uint32_t mode, const GuideRegions& regions, float mvX, float mvY) {
-    Constants c{};
+// packed model input and the model's answer back to the ordinary grid, and 103 does that and adds what the round trip
+// took from the model input (a third input: the picture the model would be shown without compression), for the Replace
+// curves. mvX / mvY take the game's motion units to native pixels (the guide scale NR already applies to its vectors).
+inline Constants MakeConstants(const Layout& layout, uint32_t mode, const GuideRegions& regions, float mvX, float mvY)
+{
+    Constants c {};
     c.mode = mode;
     c.width = mode >= 102 ? layout.ordinaryW : layout.modelW;
     c.height = mode >= 102 ? layout.ordinaryH : layout.modelH;

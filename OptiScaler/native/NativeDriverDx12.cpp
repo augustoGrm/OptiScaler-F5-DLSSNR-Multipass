@@ -23,16 +23,16 @@ namespace
 native::NativeDriver g_driver("Native motion", "");
 native::Dx12FrameSource g_source;
 
-// Under frame generation the menu's present hook sees the real swap chain after frame generation ran, on its presenter's
-// thread and queue; FGPresent drives the step instead. The menu's hook stands aside while FGPresent ran within this many of
-// its presents (frame generation presents several frames for each of the game's).
+// Under frame generation the menu's present hook sees the real swap chain after frame generation ran, on its
+// presenter's thread and queue; FGPresent drives the step instead. The menu's hook stands aside while FGPresent ran
+// within this many of its presents (frame generation presents several frames for each of the game's).
 constexpr uint64_t kFgPresentGrace = 8;
 std::atomic<uint64_t> g_menuPresents { 0 };
 std::atomic<uint64_t> g_menuPresentsAtFg { 0 };
 std::atomic<bool> g_fgDriven { false };
 
-// The two hooks run on different threads while frame generation starts up. The menu's only tries it: its thread is frame
-// generation's presenter, which must never wait on the game thread.
+// The two hooks run on different threads while frame generation starts up. The menu's only tries it: its thread is
+// frame generation's presenter, which must never wait on the game thread.
 std::mutex g_runMutex;
 
 bool g_previewWanted = false; // the menu node is open
@@ -50,8 +50,8 @@ ID3D12DescriptorHeap* g_srvHeap = nullptr;
 PreviewView g_flowView;
 PreviewView g_maskView;
 
-// Shows a texture in the menu: a descriptor in the menu's heap (made once, and again if the heap or the texture changes).
-// `grayFromRed` shows a one-channel texture as gray.
+// Shows a texture in the menu: a descriptor in the menu's heap (made once, and again if the heap or the texture
+// changes). `grayFromRed` shows a one-channel texture as gray.
 bool ShowTexture(PreviewView& view, ID3D12Resource* texture, DXGI_FORMAT format, bool grayFromRed, float width,
                  float height)
 {
@@ -81,12 +81,12 @@ bool ShowTexture(PreviewView& view, ID3D12Resource* texture, DXGI_FORMAT format,
         srv.Format = format;
         srv.ViewDimension = D3D12_SRV_DIMENSION_TEXTURE2D;
         srv.Shader4ComponentMapping =
-            grayFromRed ? D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(
-                              D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
-                              D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
-                              D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
-                              D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1)
-                        : D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
+            grayFromRed
+                ? D3D12_ENCODE_SHADER_4_COMPONENT_MAPPING(D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
+                                                          D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
+                                                          D3D12_SHADER_COMPONENT_MAPPING_FROM_MEMORY_COMPONENT_0,
+                                                          D3D12_SHADER_COMPONENT_MAPPING_FORCE_VALUE_1)
+                : D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
         srv.Texture2D.MipLevels = 1;
         device->CreateShaderResourceView(texture, &srv, view.cpu);
         view.resource = texture;
@@ -117,9 +117,9 @@ namespace NativeMotionDx12
 
 void OnPresent(IDXGISwapChain* swapChain, ID3D12CommandQueue* queue, ID3D12Device* device)
 {
-    // A D3D11 game's frame generation swap chain is the interop's D3D12 one: its picture is the game's, already handled by
-    // NativeMotionDx11 from Dx11wDx12SC::Present, and this present runs inside frame generation's own present, under the
-    // lock the virtual upscaler's UpscaleStart (-> EvaluateState) takes again: that deadlocked.
+    // A D3D11 game's frame generation swap chain is the interop's D3D12 one: its picture is the game's, already handled
+    // by NativeMotionDx11 from Dx11wDx12SC::Present, and this present runs inside frame generation's own present, under
+    // the lock the virtual upscaler's UpscaleStart (-> EvaluateState) takes again: that deadlocked.
     if (State::Instance().swapchainInteropApi != SwapchainInteropApi::None)
         return;
 
@@ -148,10 +148,7 @@ void OnFGPresent(IDXGISwapChain* swapChain, ID3D12CommandQueue* queue, ID3D12Dev
     RunFrame(swapChain, queue, device);
 }
 
-void DrawStatus()
-{
-    g_driver.DrawStatus();
-}
+void DrawStatus() { g_driver.DrawStatus(); }
 
 bool NrOnlyRunning() { return g_driver.NrOnlyRunning(); }
 
@@ -161,7 +158,8 @@ void DrawAdvancedUi()
 
     g_driver.DrawFlowTuning();
 
-    // The pictures and their controls are debugging aids: off by default, nothing is recorded for them while they are hidden.
+    // The pictures and their controls are debugging aids: off by default, nothing is recorded for them while they are
+    // hidden.
     if (!debugView)
         return;
 
@@ -176,7 +174,8 @@ void DrawAdvancedUi()
         g_previewWanted = true;
 
         if (g_driver.Producer() && g_driver.Producer()->PreviewReady())
-            drawn = ShowTexture(g_flowView, g_driver.Producer()->Flow()->Preview(), DXGI_FORMAT_R8G8B8A8_UNORM, false, boxWidth, boxHeight);
+            drawn = ShowTexture(g_flowView, g_driver.Producer()->Flow()->Preview(), DXGI_FORMAT_R8G8B8A8_UNORM, false,
+                                boxWidth, boxHeight);
     }
 
     if (!drawn)
@@ -201,7 +200,8 @@ void DrawAdvancedUi()
     bool maskDrawn = false;
 
     if (g_driver.GetStatus() == native::NativeDriver::Status::Running && trustRecent && g_driver.Producer())
-        maskDrawn = ShowTexture(g_maskView, g_driver.Producer()->Trust()->Mask(), DXGI_FORMAT_R8_UNORM, true, boxWidth, boxHeight);
+        maskDrawn = ShowTexture(g_maskView, g_driver.Producer()->Trust()->Mask(), DXGI_FORMAT_R8_UNORM, true, boxWidth,
+                                boxHeight);
 
     if (!maskDrawn)
         ImGui::Dummy(ImVec2(boxWidth, boxHeight));

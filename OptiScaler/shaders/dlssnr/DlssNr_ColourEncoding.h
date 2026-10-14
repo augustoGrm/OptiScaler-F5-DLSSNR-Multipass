@@ -38,9 +38,9 @@ struct Choice
 {
     Encoding encoding = Encoding::Srgb;
     bool automatic = true;
-    bool mismatch = false;       // forced, and the format looks wrong for it (applied anyway)
-    bool refused = false;        // forced Linear HDR on a format that cannot hold it: read as Auto reads it instead
-    const char* reason = "";     // why Auto chose what it chose; empty when forced
+    bool mismatch = false;   // forced, and the format looks wrong for it (applied anyway)
+    bool refused = false;    // forced Linear HDR on a format that cannot hold it: read as Auto reads it instead
+    const char* reason = ""; // why Auto chose what it chose; empty when forced
 
     // Whether the frame reaches the model through the linear-HDR path (white point, proxy curve).
     bool LinearHdr() const { return encoding == Encoding::LinearHdr || encoding == Encoding::Pq; }
@@ -109,8 +109,8 @@ inline bool ShaderConverts(uint32_t shaderConversion)
 // the DLSS flag. The three screen paths it has: SDR (tone-mapped, passed through), scRGB (linear light, 1.0 = 80 nits)
 // and PQ (decoded to linear before the pass). A forced choice picks the path whatever the colour space says, and is
 // allowed on any of the formats those paths handle (8/10-bit UNORM, FP16) -- that is what lets an FP16 buffer holding
-// gamma values through as SDR instead of being refused. Linear HDR forced on a UNORM screen is refused as Resolve refuses
-// it (an 8/10-bit screen is not scRGB) and takes the SDR path.
+// gamma values through as SDR instead of being refused. Linear HDR forced on a UNORM screen is refused as Resolve
+// refuses it (an 8/10-bit screen is not scRGB) and takes the SDR path.
 enum class Screen : uint32_t
 {
     Sdr,
@@ -139,10 +139,10 @@ inline FinishedChoice ResolveFinished(uint32_t setting, bool detectedKnown, Scre
         out.choice.encoding = detected == Screen::Pq      ? Encoding::Pq
                               : detected == Screen::Scrgb ? Encoding::LinearHdr
                                                           : Encoding::Srgb;
-        out.choice.reason = !detectedKnown ? "screen colour space not supported"
-                            : detected == Screen::Pq      ? "screen colour space HDR10"
-                            : detected == Screen::Scrgb   ? "screen colour space scRGB"
-                                                          : "screen colour space SDR";
+        out.choice.reason = !detectedKnown              ? "screen colour space not supported"
+                            : detected == Screen::Pq    ? "screen colour space HDR10"
+                            : detected == Screen::Scrgb ? "screen colour space scRGB"
+                                                        : "screen colour space SDR";
         return out;
     }
 

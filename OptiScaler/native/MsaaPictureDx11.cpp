@@ -11,8 +11,8 @@ namespace native
 {
 namespace
 {
-// The format a view or a resolve of this texture uses: the plain (not sRGB) typed format of its family, so the bits go across
-// as they are.
+// The format a view or a resolve of this texture uses: the plain (not sRGB) typed format of its family, so the bits go
+// across as they are.
 DXGI_FORMAT PlainFormat(DXGI_FORMAT format)
 {
     switch (format)
@@ -100,8 +100,8 @@ bool MsaaPictureDx11::MakePipeline(ID3D11Device* device)
     if (_vs != nullptr)
         return true;
 
-    // Compiled ahead of time (native/MsaaPicture_Hlsl.h -> native/F5LowShaderBytecode.h): a compile here would run on the
-    // game's present thread.
+    // Compiled ahead of time (native/MsaaPicture_Hlsl.h -> native/F5LowShaderBytecode.h): a compile here would run on
+    // the game's present thread.
     const auto* vsCode = F5LowShaderBytecode::Find("MsaaPicture", "FullScreenVS");
     const auto* psCode = F5LowShaderBytecode::Find("MsaaPicture", "WriteBackPS");
 
@@ -198,8 +198,8 @@ const char* MsaaPictureDx11::ResolveIn(ID3D11DeviceContext* context, ID3D11Textu
         return nullptr;
     }
 
-    // Another format of the family: the resolve takes the source's format and the copy then carries the bits across (a copy
-    // between formats of one family is allowed; a resolve into a differently typed texture is not always).
+    // Another format of the family: the resolve takes the source's format and the copy then carries the bits across (a
+    // copy between formats of one family is allowed; a resolve into a differently typed texture is not always).
     ComPtr<ID3D11Device> device;
     source->GetDevice(&device);
 
@@ -250,8 +250,8 @@ const char* MsaaPictureDx11::WriteBack(ID3D11DeviceContext* context, ID3D11Textu
     if (!MakePipeline(device.Get()))
         return "making the write-back pass failed";
 
-    // The picture's read view is kept while the picture stays the same; the back buffer's target view never is (a swap chain
-    // cannot be resized while anything still holds one of its buffers).
+    // The picture's read view is kept while the picture stays the same; the back buffer's target view never is (a swap
+    // chain cannot be resized while anything still holds one of its buffers).
     if (_srv == nullptr || _srvSource.Get() != source)
     {
         _srv.Reset();
@@ -277,8 +277,8 @@ const char* MsaaPictureDx11::WriteBack(ID3D11DeviceContext* context, ID3D11Textu
 
     ComPtr<ID3D11RenderTargetView> rtv;
 
-    // A swap chain's back buffer may be viewed as the plain format whatever its own (an sRGB one included); the view of the
-    // resource's own format is not a fallback, it would encode the picture's bits a second time.
+    // A swap chain's back buffer may be viewed as the plain format whatever its own (an sRGB one included); the view of
+    // the resource's own format is not a fallback, it would encode the picture's bits a second time.
     if (FAILED(device->CreateRenderTargetView(dest, &rtvDesc, &rtv)))
         return "making the back buffer's target view failed";
 
@@ -343,8 +343,8 @@ const char* MsaaPictureDx11::WriteBack(ID3D11DeviceContext* context, ID3D11Textu
     ID3D11RenderTargetView* const target = rtv.Get();
     ID3D11ShaderResourceView* const read = _srv.Get();
 
-    // The depth view is left out (a game's depth buffer has the back buffer's samples or not, and a mismatch drops the draw);
-    // no geometry-side stage but the vertex shader runs.
+    // The depth view is left out (a game's depth buffer has the back buffer's samples or not, and a mismatch drops the
+    // draw); no geometry-side stage but the vertex shader runs.
     context->IASetInputLayout(nullptr);
     context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     context->VSSetShader(_vs.Get(), nullptr, 0);
@@ -360,8 +360,9 @@ const char* MsaaPictureDx11::WriteBack(ID3D11DeviceContext* context, ID3D11Textu
     context->OMSetRenderTargets(1, &target, nullptr);
     context->Draw(3, 0);
 
-    // Back as the game had them. The render targets and the UAVs share slots: the targets are the leading slots, the UAVs start
-    // at the first one bound (a game that binds both has them apart, or the runtime would not have taken them).
+    // Back as the game had them. The render targets and the UAVs share slots: the targets are the leading slots, the
+    // UAVs start at the first one bound (a game that binds both has them apart, or the runtime would not have taken
+    // them).
     context->PSSetShaderResources(0, 1, gameSrv.GetAddressOf());
     context->OMSetDepthStencilState(gameDepthState.Get(), gameStencilRef);
     context->OMSetBlendState(gameBlend.Get(), gameBlendFactor, gameSampleMask);
@@ -404,7 +405,7 @@ const char* MsaaPictureDx11::WriteBack(ID3D11DeviceContext* context, ID3D11Textu
     {
         // -1 keeps an append or counter UAV's hidden count as it is.
         const UINT keepCounts[D3D11_PS_CS_UAV_REGISTER_COUNT] = { (UINT) -1, (UINT) -1, (UINT) -1, (UINT) -1,
-                                                                    (UINT) -1, (UINT) -1, (UINT) -1, (UINT) -1 };
+                                                                  (UINT) -1, (UINT) -1, (UINT) -1, (UINT) -1 };
         context->OMSetRenderTargetsAndUnorderedAccessViews(rtvCount < firstUav ? rtvCount : firstUav, rawRtvs,
                                                            gameDsv.Get(), firstUav, lastUav - firstUav + 1,
                                                            rawUavs + firstUav, keepCounts);

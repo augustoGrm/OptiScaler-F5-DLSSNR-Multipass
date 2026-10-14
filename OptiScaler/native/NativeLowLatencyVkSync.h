@@ -1,9 +1,10 @@
 #pragma once
 
-// The Vulkan flavour of Reflex's Sleep (NvAPI_Vulkan_*, the pre-VK_NV_low_latency2 interface) is a pair: the device has to
-// be initialised as a low-latency device once, which hands back a timeline semaphore, and each frame's Sleep is given a
-// value the driver signals on that semaphore once it is time to go on -- the app has to wait for it. One device's state and
-// the order of calls, with the calls themselves passed in: no NVAPI, no Vulkan, so a host test can drive it.
+// The Vulkan flavour of Reflex's Sleep (NvAPI_Vulkan_*, the pre-VK_NV_low_latency2 interface) is a pair: the device has
+// to be initialised as a low-latency device once, which hands back a timeline semaphore, and each frame's Sleep is
+// given a value the driver signals on that semaphore once it is time to go on -- the app has to wait for it. One
+// device's state and the order of calls, with the calls themselves passed in: no NVAPI, no Vulkan, so a host test can
+// drive it.
 //
 // Anything short of a working pair leaves the device "unavailable" and makes no further call: a Sleep without the
 // semaphore signals a null handle in fakenvapi (the vendor-neutral Reflex stand-in), which crashes.
@@ -37,16 +38,16 @@ struct VkSleepSync
     void* semaphore = nullptr;
     uint64_t value = 0; // the last value given to Sleep; the next frame's is one more
     bool timeoutWarned = false;
-    uint32_t timeouts = 0; // waits in a row that timed out
+    uint32_t timeouts = 0;      // waits in a row that timed out
     bool everSignalled = false; // a wait has reached its value at least once: the driver does signal
 };
 
 // What the sync calls. All return success as 0 / true.
 struct VkSleepCalls
 {
-    std::function<bool()> timelineSemaphoresOn;      // the device has the timeline semaphore feature
-    std::function<int(void** semaphore)> init;       // NvAPI_Vulkan_InitLowLatencyDevice
-    std::function<int(uint64_t value)> sleep;        // NvAPI_Vulkan_Sleep
+    std::function<bool()> timelineSemaphoresOn; // the device has the timeline semaphore feature
+    std::function<int(void** semaphore)> init;  // NvAPI_Vulkan_InitLowLatencyDevice
+    std::function<int(uint64_t value)> sleep;   // NvAPI_Vulkan_Sleep
     std::function<bool(void* semaphore, uint64_t value, uint64_t timeoutNs)> wait; // vkWaitSemaphores; true = reached
 };
 
@@ -129,8 +130,9 @@ inline VkSleepResult VkSleepFrame(VkSleepSync& sync, const VkSleepCalls& calls, 
             *firstTimeout = true;
     }
 
-    // A driver that never signals would cost the whole timeout every frame: after a few in a row the device gives up. One
-    // that has signalled before is only hitting a hiccup (a loading screen, a stalled GPU): it is tried again next frame.
+    // A driver that never signals would cost the whole timeout every frame: after a few in a row the device gives up.
+    // One that has signalled before is only hitting a hiccup (a loading screen, a stalled GPU): it is tried again next
+    // frame.
     ++sync.timeouts;
 
     if (!sync.everSignalled && sync.timeouts >= kVkSleepTimeoutsBeforeGivingUp)

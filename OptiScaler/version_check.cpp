@@ -24,7 +24,10 @@ struct LatestReleaseInfo
     std::string url;
 };
 
-feature_version CurrentVersion() { return { NR_RELEASE_MAJOR_VERSION, NR_RELEASE_MINOR_VERSION, NR_RELEASE_HOTFIX_VERSION }; }
+feature_version CurrentVersion()
+{
+    return { NR_RELEASE_MAJOR_VERSION, NR_RELEASE_MINOR_VERSION, NR_RELEASE_HOTFIX_VERSION };
+}
 
 std::optional<LatestReleaseInfo> FetchLatestRelease()
 {
@@ -73,9 +76,8 @@ std::optional<LatestReleaseInfo> FetchLatestRelease()
         return std::nullopt;
     }
 
-    request = WinHttpOpenRequest(connection, L"GET",
-                                 L"/repos/janblade/OptiScaler-F5-DLSSNR-Multipass/releases/latest", nullptr,
-                                 WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
+    request = WinHttpOpenRequest(connection, L"GET", L"/repos/janblade/OptiScaler-F5-DLSSNR-Multipass/releases/latest",
+                                 nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE);
     if (request == nullptr)
     {
         LOG_WARN("Version check failed to open request: {}", GetLastError());

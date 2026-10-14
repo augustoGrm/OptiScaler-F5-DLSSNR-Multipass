@@ -19,8 +19,8 @@
 #include <atomic>
 #include <mutex>
 
-// See GenericDepth_Dx11.h. Reuses native::DepthFinderCore (resource_tracking/GenericDepth_Dx12.cpp is the D3D12 sibling of this
-// file; both observers feed the same core).
+// See GenericDepth_Dx11.h. Reuses native::DepthFinderCore (resource_tracking/GenericDepth_Dx12.cpp is the D3D12 sibling
+// of this file; both observers feed the same core).
 
 namespace
 {
@@ -63,35 +63,36 @@ PFN_DrawIndirect o_DrawIndexedInstancedIndirect = nullptr;
 PFN_DrawIndirect o_DrawInstancedIndirect = nullptr;
 PFN_Dispatch o_Dispatch = nullptr;
 
-// ID3D11DeviceContext vtable indices (checked against the SDK header with offsetof; see tests/ -- a host-only sanity program,
-// not shipped): DrawIndexed 12, Draw 13, DrawIndexedInstanced 20, DrawInstanced 21, OMSetRenderTargets 33,
+// ID3D11DeviceContext vtable indices (checked against the SDK header with offsetof; see tests/ -- a host-only sanity
+// program, not shipped): DrawIndexed 12, Draw 13, DrawIndexedInstanced 20, DrawInstanced 21, OMSetRenderTargets 33,
 // OMSetRenderTargetsAndUnorderedAccessViews 34, DrawAuto 38, DrawIndexedInstancedIndirect 39, DrawInstancedIndirect 40,
 // Dispatch 41, RSSetViewports 44, ClearDepthStencilView 53.
 constexpr int kDrawIndexed = 12, kDraw = 13, kDrawIndexedInstanced = 20, kDrawInstanced = 21, kOMSetRenderTargets = 33,
-             kOMSetRenderTargetsAndUAV = 34, kDrawAuto = 38, kDrawIndexedInstancedIndirect = 39,
-             kDrawInstancedIndirect = 40, kDispatch = 41, kRSSetViewports = 44, kClearDepthStencilView = 53;
+              kOMSetRenderTargetsAndUAV = 34, kDrawAuto = 38, kDrawIndexedInstancedIndirect = 39,
+              kDrawInstancedIndirect = 40, kDispatch = 41, kRSSetViewports = 44, kClearDepthStencilView = 53;
 
 std::mutex g_mutex;
 native::DepthFinderCore g_core;
 
-// The context the game draws its frames through: its device's immediate context, unwrapped from a wrapping layer's proxy
-// (Streamline's), a reference held. The hooks patch the functions themselves, so every context of the same kind runs them (a
-// deferred context under the debug layer, another device's immediate context): only this one's calls are counted. Followed to
-// the device the game presents with (FollowPresentDevice), so a device the game makes again is watched too. Set at Install and
-// on the present thread only.
+// The context the game draws its frames through: its device's immediate context, unwrapped from a wrapping layer's
+// proxy (Streamline's), a reference held. The hooks patch the functions themselves, so every context of the same kind
+// runs them (a deferred context under the debug layer, another device's immediate context): only this one's calls are
+// counted. Followed to the device the game presents with (FollowPresentDevice), so a device the game makes again is
+// watched too. Set at Install and on the present thread only.
 ID3D11DeviceContext* g_context = nullptr;
 std::atomic<uint64_t> g_contextId = 0; // g_context, as the core's id for it; read by the hooks on the game's threads
 PVOID g_hookedOMSetRenderTargets = nullptr; // the function hooked, to tell whether a context runs the hooks at all
 // The watched context set render targets since the last present (it is still the one the game draws through).
 std::atomic<bool> g_watchedBound = false;
 
-// The device of g_context, and the real device behind it when that is a proxy; a buffer of either can be copied on g_context.
-// Not held (g_context holds its device). Under g_mutex.
+// The device of g_context, and the real device behind it when that is a proxy; a buffer of either can be copied on
+// g_context. Not held (g_context holds its device). Under g_mutex.
 ID3D11Device* g_contextDevice = nullptr;
 ID3D11Device* g_contextRealDevice = nullptr;
 
-// The copy of the picked buffer for the frame: one context means one copy, unlike the D3D12 finder's several command lists.
-// Under g_mutex. Let go at stand-down and when the context changes. Never destroyed (no COM release at process exit).
+// The copy of the picked buffer for the frame: one context means one copy, unlike the D3D12 finder's several command
+// lists. Under g_mutex. Let go at stand-down and when the context changes. Never destroyed (no COM release at process
+// exit).
 native::DepthCopyDx11& g_copy = *new native::DepthCopyDx11();
 
 // The finder's own pass is being recorded on this thread: its Dispatch is not the game's.
@@ -164,14 +165,15 @@ bool Describe(ID3D11DepthStencilView* view, native::DepthBuffer* out, ID3D11Reso
     out->width = desc.Width;
     out->height = desc.Height;
     out->format = (uint32_t) desc.Format;
-    out->readOnlyDepth = false; // D3D11 has no read-only depth bind distinct from the view's own flags; not used by the pick
+    out->readOnlyDepth =
+        false; // D3D11 has no read-only depth bind distinct from the view's own flags; not used by the pick
 
     *outResource = resource; // caller releases
     return true;
 }
 
-// Copies `resource` (the picked buffer) into the frame's copy on `context` (g_context, from a hook or Present). A buffer that
-// is not copied leaves no copy for the frame: the copy of an earlier one is not offered for it.
+// Copies `resource` (the picked buffer) into the frame's copy on `context` (g_context, from a hook or Present). A
+// buffer that is not copied leaves no copy for the frame: the copy of an earlier one is not offered for it.
 void TakeSnapshot(ID3D11DeviceContext* context, ID3D11Resource* resource, const char* where)
 {
     std::lock_guard lock(g_mutex);
@@ -256,7 +258,8 @@ void STDMETHODCALLTYPE hkOMSetRenderTargets(ID3D11DeviceContext* This, UINT NumV
 void STDMETHODCALLTYPE hkOMSetRenderTargetsAndUAV(ID3D11DeviceContext* This, UINT NumRTVs,
                                                   ID3D11RenderTargetView* const* ppRenderTargetViews,
                                                   ID3D11DepthStencilView* pDepthStencilView, UINT UAVStartSlot,
-                                                  UINT NumUAVs, ID3D11UnorderedAccessView* const* ppUnorderedAccessViews,
+                                                  UINT NumUAVs,
+                                                  ID3D11UnorderedAccessView* const* ppUnorderedAccessViews,
                                                   const UINT* pUAVInitialCounts)
 {
     if (Watched(This))
@@ -269,7 +272,7 @@ void STDMETHODCALLTYPE hkOMSetRenderTargetsAndUAV(ID3D11DeviceContext* This, UIN
     }
 
     o_OMSetRenderTargetsAndUAV(This, NumRTVs, ppRenderTargetViews, pDepthStencilView, UAVStartSlot, NumUAVs,
-                              ppUnorderedAccessViews, pUAVInitialCounts);
+                               ppUnorderedAccessViews, pUAVInitialCounts);
 }
 
 void STDMETHODCALLTYPE hkClearDepthStencilView(ID3D11DeviceContext* This, ID3D11DepthStencilView* pView,
@@ -337,8 +340,8 @@ void STDMETHODCALLTYPE hkDrawInstanced(ID3D11DeviceContext* This, UINT VertexCou
     o_DrawInstanced(This, VertexCountPerInstance, InstanceCount, StartVertexLocation, StartInstanceLocation);
 }
 
-void STDMETHODCALLTYPE hkDrawIndexedInstanced(ID3D11DeviceContext* This, UINT IndexCountPerInstance,
-                                              UINT InstanceCount, UINT StartIndexLocation, INT BaseVertexLocation,
+void STDMETHODCALLTYPE hkDrawIndexedInstanced(ID3D11DeviceContext* This, UINT IndexCountPerInstance, UINT InstanceCount,
+                                              UINT StartIndexLocation, INT BaseVertexLocation,
                                               UINT StartInstanceLocation)
 {
     if (Watched(This))
@@ -348,12 +351,13 @@ void STDMETHODCALLTYPE hkDrawIndexedInstanced(ID3D11DeviceContext* This, UINT In
     }
 
     o_DrawIndexedInstanced(This, IndexCountPerInstance, InstanceCount, StartIndexLocation, BaseVertexLocation,
-                          StartInstanceLocation);
+                           StartInstanceLocation);
 }
 
 void STDMETHODCALLTYPE hkDrawAuto(ID3D11DeviceContext* This)
 {
-    // The vertex count is in a GPU buffer (from a stream-output pass): unknown here, so it is counted like an indirect draw.
+    // The vertex count is in a GPU buffer (from a stream-output pass): unknown here, so it is counted like an indirect
+    // draw.
     if (Watched(This))
         g_core.OnIndirect((uint64_t) (size_t) This, 1);
 
@@ -386,11 +390,11 @@ void STDMETHODCALLTYPE hkDispatch(ID3D11DeviceContext* This, UINT X, UINT Y, UIN
     o_Dispatch(This, X, Y, Z);
 }
 
-// The game can make its device again (after a device loss, a settings change); the device it presents with says which one it
-// draws with now. Another device's context is followed only once the watched one has set no render targets for 3 presents in a
-// row (a game still drawing through it is not left for a second swap chain's device, or for a wrapping layer's device the swap
-// chain answers with), and only if its calls run the hooks at all. A swap chain of another API (D3D12, frame generation's under
-// Dx11wDx12) says nothing: the context from Install is kept. Present thread only.
+// The game can make its device again (after a device loss, a settings change); the device it presents with says which
+// one it draws with now. Another device's context is followed only once the watched one has set no render targets for 3
+// presents in a row (a game still drawing through it is not left for a second swap chain's device, or for a wrapping
+// layer's device the swap chain answers with), and only if its calls run the hooks at all. A swap chain of another API
+// (D3D12, frame generation's under Dx11wDx12) says nothing: the context from Install is kept. Present thread only.
 void FollowPresentDevice(IDXGISwapChain* swapChain)
 {
     static ID3D11Device* presentDevice = nullptr;         // the device presented with last, a reference held
@@ -455,8 +459,9 @@ void FollowPresentDevice(IDXGISwapChain* swapChain)
         return;
     }
 
-    LOG_INFO("Depth finder (D3D11): the game presents with another device now and draws nothing through the one watched; "
-             "watching the new one's immediate context");
+    LOG_INFO(
+        "Depth finder (D3D11): the game presents with another device now and draws nothing through the one watched; "
+        "watching the new one's immediate context");
     UseContext(presentContext);
 }
 
@@ -552,20 +557,20 @@ void OnPresent(IDXGISwapChain* swapChain)
 
     FollowPresentDevice(swapChain);
 
-    // The copy taken is NOT forgotten here: the mid-frame "unbind" events that call TakeSnapshot happen while the game renders
-    // the frame that is only now finishing (well before this Present call), so forgetting it at the top of this same function
-    // would wipe out the copy they just took, before anything downstream (BestSnapshot, the diagnostic below) ever reads it. It
-    // is instead let go below when the finder stands down, and kept fresh by every TakeSnapshot (a buffer not copied leaves no
-    // copy).
+    // The copy taken is NOT forgotten here: the mid-frame "unbind" events that call TakeSnapshot happen while the game
+    // renders the frame that is only now finishing (well before this Present call), so forgetting it at the top of this
+    // same function would wipe out the copy they just took, before anything downstream (BestSnapshot, the diagnostic
+    // below) ever reads it. It is instead let go below when the finder stands down, and kept fresh by every
+    // TakeSnapshot (a buffer not copied leaves no copy).
 
     // The overlay preview (not yet drawn for D3D11) or the motion step needs the depth copy taken.
     g_core.SetSnapshotsWanted((Config::Instance()->DlssNrNativeDepthOverlay.value_or_default() &&
                                Config::Instance()->DlssNrNativeDebugView.value_or_default()) ||
                               Config::Instance()->DlssNrNativeMotion.value_or_default());
 
-    // A game that neither re-clears nor unbinds the picked buffer before Present (it stays bound across many frames) would
-    // otherwise never offer a copy: the immediate context has no "list closes" moment the way a D3D12 command list does, so this
-    // is its equivalent, once per presented frame.
+    // A game that neither re-clears nor unbinds the picked buffer before Present (it stays bound across many frames)
+    // would otherwise never offer a copy: the immediate context has no "list closes" moment the way a D3D12 command
+    // list does, so this is its equivalent, once per presented frame.
     if (g_context != nullptr)
     {
         const auto request = g_core.FlushForPresent((uint64_t) (size_t) g_context);
@@ -575,12 +580,11 @@ void OnPresent(IDXGISwapChain* swapChain)
     }
 
     g_core.BeginPresent(desc.BufferDesc.Width, desc.BufferDesc.Height);
-    const bool stoodDown =
-        g_core.EndPresent(desc.BufferDesc.Width, desc.BufferDesc.Height,
-                          Config::Instance()->DlssNrNativeDepthWarmupFrames.value_or_default());
+    const bool stoodDown = g_core.EndPresent(desc.BufferDesc.Width, desc.BufferDesc.Height,
+                                             Config::Instance()->DlssNrNativeDepthWarmupFrames.value_or_default());
 
-    // Self-diagnosis: a pick that never gets a copy despite wanting one is otherwise invisible until someone asks why the trust
-    // mask never runs.
+    // Self-diagnosis: a pick that never gets a copy despite wanting one is otherwise invisible until someone asks why
+    // the trust mask never runs.
     static uint64_t noCopyStreak = 0;
     bool copyTakenNow = false;
     {
@@ -588,9 +592,9 @@ void OnPresent(IDXGISwapChain* swapChain)
         copyTakenNow = g_copy.Taken();
     }
     const bool stillNoCopy = g_core.Armed() && g_core.CurrentPick().valid && !copyTakenNow &&
-                            (Config::Instance()->DlssNrNativeMotion.value_or_default() ||
-                             (Config::Instance()->DlssNrNativeDepthOverlay.value_or_default() &&
-                              Config::Instance()->DlssNrNativeDebugView.value_or_default()));
+                             (Config::Instance()->DlssNrNativeMotion.value_or_default() ||
+                              (Config::Instance()->DlssNrNativeDepthOverlay.value_or_default() &&
+                               Config::Instance()->DlssNrNativeDebugView.value_or_default()));
 
     if (stillNoCopy)
     {
@@ -610,8 +614,8 @@ void OnPresent(IDXGISwapChain* swapChain)
         noCopyStreak = 0;
     }
 
-    // Stood down: nothing is copied while the game calls an upscaler, so what the copies need (and the device it was made on)
-    // is let go until the finder wakes.
+    // Stood down: nothing is copied while the game calls an upscaler, so what the copies need (and the device it was
+    // made on) is let go until the finder wakes.
     if (stoodDown)
     {
         std::lock_guard lock(g_mutex);

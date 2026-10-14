@@ -2,17 +2,19 @@
 
 // Kernel-variant census and per-group GPU timing of NVIDIA's DLSS-NR model, taken from the NvAPI launches.
 //
-// The DLL launches every kernel of one evaluation through NvAPI_D3D12_LaunchCuKernelChain on the game's command list, and the wrapper
-// in DlssNrNative.cpp sees each call. A timestamp is recorded before the first launch of an evaluation and after every launch call,
-// the pairs are resolved into a readback buffer, and the deltas are attributed to the kernel group of the call that ended them.
-// Read back at least 90 evaluations later, when the command list has long since retired, so no fence is needed.
+// The DLL launches every kernel of one evaluation through NvAPI_D3D12_LaunchCuKernelChain on the game's command list,
+// and the wrapper in DlssNrNative.cpp sees each call. A timestamp is recorded before the first launch of an evaluation
+// and after every launch call, the pairs are resolved into a readback buffer, and the deltas are attributed to the
+// kernel group of the call that ended them. Read back at least 90 evaluations later, when the command list has long
+// since retired, so no fence is needed.
 //
-// What it answers, on any GPU: which kernel set runs (fp8-named or the plain fp16 ones, and how many of each), and where the GPU time
-// of one evaluation goes. Approximate on purpose: kernels of a chain wait on counters and can overlap, so a timestamp between two calls
-// marks when the earlier work reached it, not an isolated kernel time. Read the percentages as a ranking, not as exact milliseconds.
+// What it answers, on any GPU: which kernel set runs (fp8-named or the plain fp16 ones, and how many of each), and
+// where the GPU time of one evaluation goes. Approximate on purpose: kernels of a chain wait on counters and can
+// overlap, so a timestamp between two calls marks when the earlier work reached it, not an isolated kernel time. Read
+// the percentages as a ranking, not as exact milliseconds.
 //
-// Off unless asked for (ini [DlssNr] KernelProfile). It samples 3 consecutive evaluations out of every 240, a few dozen timestamps
-// per launch and one small readback each, and changes nothing that is launched.
+// Off unless asked for (ini [DlssNr] KernelProfile). It samples 3 consecutive evaluations out of every 240, a few dozen
+// timestamps per launch and one small readback each, and changes nothing that is launched.
 
 #include <d3d12.h>
 #include <wrl/client.h>
@@ -26,9 +28,11 @@
 
 namespace DlssNrKernelProfile
 {
-constexpr const char* kGroups[] = { "pre_block", "post_block", "swin_1h_32", "swin_2h_64", "swin_4h_128", "swin_8h_256",
-                                    "split_swin_16h", "vit_1d", "cg2r_post_process", "cg2r_copy", "dec_input_upsample",
-                                    "cb_clear", "other" };
+constexpr const char* kGroups[] = {
+    "pre_block",          "post_block",     "swin_1h_32", "swin_2h_64",        "swin_4h_128",
+    "swin_8h_256",        "split_swin_16h", "vit_1d",     "cg2r_post_process", "cg2r_copy",
+    "dec_input_upsample", "cb_clear",       "other"
+};
 constexpr unsigned kGroupCount = (unsigned) (sizeof(kGroups) / sizeof(kGroups[0]));
 
 struct Info
@@ -44,12 +48,16 @@ inline Info Classify(const char* name)
     info.name = name != nullptr ? name : "";
     info.fp8 = strstr(info.name.c_str(), "_fp8") != nullptr;
 
-    struct Rule { const char* part; unsigned char group; };
+    struct Rule
+    {
+        const char* part;
+        unsigned char group;
+    };
     // pre/post block names also contain swin_1h_32, and split_swin names contain swin, so the order matters
-    static const Rule rules[] = { { "pre_block", 0 },   { "post_block", 1 },         { "split_swin", 6 },
-                                  { "cc_vit_1d", 7 },   { "cg2r_post_process", 8 }, { "cg2r_copy", 9 },
-                                  { "dec_input_upsample", 10 }, { "cc_cb_clear", 11 }, { "swin_1h_32", 2 },
-                                  { "swin_2h_64", 3 },  { "swin_4h_128", 4 },      { "swin_8h_256", 5 } };
+    static const Rule rules[] = { { "pre_block", 0 },           { "post_block", 1 },        { "split_swin", 6 },
+                                  { "cc_vit_1d", 7 },           { "cg2r_post_process", 8 }, { "cg2r_copy", 9 },
+                                  { "dec_input_upsample", 10 }, { "cc_cb_clear", 11 },      { "swin_1h_32", 2 },
+                                  { "swin_2h_64", 3 },          { "swin_4h_128", 4 },       { "swin_8h_256", 5 } };
 
     for (const Rule& r : rules)
     {
@@ -66,7 +74,10 @@ inline Info Classify(const char* name)
 class Profiler
 {
   public:
-    bool Recording(const ID3D12GraphicsCommandList* cmd) const { return recording_ >= 0 && slots_[recording_].cmd == cmd; }
+    bool Recording(const ID3D12GraphicsCommandList* cmd) const
+    {
+        return recording_ >= 0 && slots_[recording_].cmd == cmd;
+    }
 
     // Start of one model evaluation on `cmd`. Also collects any finished samples.
     void Begin(ID3D12GraphicsCommandList* cmd, bool want)
@@ -195,8 +206,8 @@ class Profiler
         desc.Type = D3D12_COMMAND_LIST_TYPE_DIRECT;
         Microsoft::WRL::ComPtr<ID3D12CommandQueue> queue;
 
-        if (FAILED(device->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue))) || FAILED(queue->GetTimestampFrequency(&frequency_)) ||
-            frequency_ == 0)
+        if (FAILED(device->CreateCommandQueue(&desc, IID_PPV_ARGS(&queue))) ||
+            FAILED(queue->GetTimestampFrequency(&frequency_)) || frequency_ == 0)
         {
             failed_ = true;
             return false;
@@ -217,8 +228,9 @@ class Profiler
         for (Slot& s : slots_)
         {
             if (FAILED(device->CreateQueryHeap(&queryDesc, IID_PPV_ARGS(&s.heap))) ||
-                FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer, D3D12_RESOURCE_STATE_COPY_DEST,
-                                                       nullptr, IID_PPV_ARGS(&s.readback))))
+                FAILED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buffer,
+                                                       D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
+                                                       IID_PPV_ARGS(&s.readback))))
             {
                 failed_ = true;
                 return false;
@@ -260,7 +272,8 @@ class Profiler
 
         for (size_t i = 0; i < s.recs.size(); ++i)
         {
-            const double ms = ticks[i + 1] >= ticks[i] ? (double) (ticks[i + 1] - ticks[i]) * 1000.0 / (double) frequency_ : 0.0;
+            const double ms =
+                ticks[i + 1] >= ticks[i] ? (double) (ticks[i + 1] - ticks[i]) * 1000.0 / (double) frequency_ : 0.0;
             groupMs[s.recs[i].timeGroup] += ms;
 
             for (unsigned g = 0; g < kGroupCount; ++g)
@@ -277,10 +290,12 @@ class Profiler
 
         char head[512];
         snprintf(head, sizeof head,
-                 "DLSS-NR kernel profile #%llu (evaluation %llu): %.2f ms GPU over %zu launch calls, %u kernels: %u fp8-named, "
+                 "DLSS-NR kernel profile #%llu (evaluation %llu): %.2f ms GPU over %zu launch calls, %u kernels: %u "
+                 "fp8-named, "
                  "%u plain (fp16)%s. e.g. fp8: %s | plain: %s | ",
-                 (unsigned long long) ++reportId_, s.evaluation, totalMs, s.recs.size(), s.fp8Kernels + s.plainKernels, s.fp8Kernels,
-                 s.plainKernels, s.truncated ? ", TRUNCATED" : "", s.fp8Example.empty() ? "none" : s.fp8Example.c_str(),
+                 (unsigned long long) ++reportId_, s.evaluation, totalMs, s.recs.size(), s.fp8Kernels + s.plainKernels,
+                 s.fp8Kernels, s.plainKernels, s.truncated ? ", TRUNCATED" : "",
+                 s.fp8Example.empty() ? "none" : s.fp8Example.c_str(),
                  s.plainExample.empty() ? "none" : s.plainExample.c_str());
 
         std::string line = head;

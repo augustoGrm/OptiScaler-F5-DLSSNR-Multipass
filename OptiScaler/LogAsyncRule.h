@@ -1,8 +1,8 @@
 #pragma once
 
 // How the log reaches its sinks. A log line written on the game's thread must never wait for a disk: with the file on a
-// slow (USB, spinning) drive a synchronous flush held a present for hundreds of ms. Header-only and free of Config, State
-// and the game: a host test includes it. Logger.cpp builds the real logger from these pieces.
+// slow (USB, spinning) drive a synchronous flush held a present for hundreds of ms. Header-only and free of Config,
+// State and the game: a host test includes it. Logger.cpp builds the real logger from these pieces.
 
 #include <spdlog/async.h>
 #include <spdlog/async_logger.h>
@@ -47,18 +47,16 @@ inline Mode ChooseMode(std::optional<bool> logAsync, bool logToFile)
 }
 
 // Added as the LAST sink. FlushAndDrain posts a numbered marker line through the logger; this sink sees it after every
-// sink before it has written it, and the flush that follows reaches it after theirs, so the number it reports back means
-// the queue's lines are on disk. (A plain flush counter cannot tell, as flush_on(trace) flushes after every line.)
+// sink before it has written it, and the flush that follows reaches it after theirs, so the number it reports back
+// means the queue's lines are on disk. (A plain flush counter cannot tell, as flush_on(trace) flushes after every
+// line.)
 class FlushMarkerSink final : public spdlog::sinks::base_sink<std::mutex>
 {
   public:
     static constexpr const char* kPrefix = "Log flush ";
 
     // The last marker whose flush came through
-    uint64_t Flushed() const
-    {
-        return _flushed.load(std::memory_order_acquire);
-    }
+    uint64_t Flushed() const { return _flushed.load(std::memory_order_acquire); }
 
   protected:
     void sink_it_(const spdlog::details::log_msg& msg) override
@@ -69,10 +67,7 @@ class FlushMarkerSink final : public spdlog::sinks::base_sink<std::mutex>
             _seen = std::strtoull(std::string(text.substr(std::strlen(kPrefix))).c_str(), nullptr, 10);
     }
 
-    void flush_() override
-    {
-        _flushed.store(_seen, std::memory_order_release);
-    }
+    void flush_() override { _flushed.store(_seen, std::memory_order_release); }
 
   private:
     uint64_t _seen = 0; // under the sink's mutex
@@ -191,8 +186,8 @@ class DropReporter
 };
 
 // A rebuilt logger must not join the old one's worker on the calling thread (destroying a thread pool waits for the
-// worker to write the whole backlog, seconds on a stalled disk). The old setup is parked instead: its worker finishes the
-// backlog on its own, and a thread that still holds the old logger (the log macros use a raw pointer) stays valid.
+// worker to write the whole backlog, seconds on a stalled disk). The old setup is parked instead: its worker finishes
+// the backlog on its own, and a thread that still holds the old logger (the log macros use a raw pointer) stays valid.
 // A menu toggle is rare, so the idle worker and queue it keeps are not a cost worth a join.
 inline void Retire(std::vector<Setup*>& retired, Setup* old)
 {
@@ -202,14 +197,12 @@ inline void Retire(std::vector<Setup*>& retired, Setup* old)
 
 // The process is about to exit (ExitProcess): the worker is still alive now and gone right after, so this is the last
 // moment the queued lines can reach the disk. Only a worker-backed logger has anything to drain, once.
-inline bool ShouldDrainAtExit(Mode mode, bool alreadyDrained)
-{
-    return !alreadyDrained && mode != Mode::Sync;
-}
+inline bool ShouldDrainAtExit(Mode mode, bool alreadyDrained) { return !alreadyDrained && mode != Mode::Sync; }
 
-// The unhandled-exception filters of a process. Ours (`self`) stays the one Windows calls; the filter the game sets (before
-// or after ours) is kept as `next` and called from ours once the log is drained, so a game's own crash handling still runs
-// and its answer is honoured. Header-only and templated on the pointer type so a host test needs no windows.h.
+// The unhandled-exception filters of a process. Ours (`self`) stays the one Windows calls; the filter the game sets
+// (before or after ours) is kept as `next` and called from ours once the log is drained, so a game's own crash handling
+// still runs and its answer is honoured. Header-only and templated on the pointer type so a host test needs no
+// windows.h.
 template <class Filter> class FilterChain
 {
   public:

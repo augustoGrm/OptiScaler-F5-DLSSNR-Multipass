@@ -119,10 +119,10 @@ bool TrustMaskDx12::Init(ID3D12Device* device)
         ID3D12PipelineState** target;
     };
 
-    for (const Entry& entry : { Entry { "DepthProxy", &_depthProxy }, Entry { "ClearCounter", &_clearCounter },
-                                Entry { "Trust", &_trust }, Entry { "CopyFlow", &_copyFlow },
-                                Entry { "GuideDepth", &_guideDepthPso }, Entry { "GuideMotion", &_guideMotionPso },
-                                Entry { "Uncover", &_uncoverPso } })
+    for (const Entry& entry :
+         { Entry { "DepthProxy", &_depthProxy }, Entry { "ClearCounter", &_clearCounter }, Entry { "Trust", &_trust },
+           Entry { "CopyFlow", &_copyFlow }, Entry { "GuideDepth", &_guideDepthPso },
+           Entry { "GuideMotion", &_guideMotionPso }, Entry { "Uncover", &_uncoverPso } })
     {
         const auto* code = Compile(entry.name, &_error);
 
@@ -171,7 +171,8 @@ bool TrustMaskDx12::Init(ID3D12Device* device)
     buffer.Flags = D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS;
 
     if (FAILED(device->CreateCommittedResource(&defaultHeap, D3D12_HEAP_FLAG_NONE, &buffer,
-                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr, IID_PPV_ARGS(&_counter))))
+                                               D3D12_RESOURCE_STATE_UNORDERED_ACCESS, nullptr,
+                                               IID_PPV_ARGS(&_counter))))
     {
         _error = "creating the counter";
         return false;
@@ -219,7 +220,8 @@ bool TrustMaskDx12::CreateTexture(Tex& tex, uint32_t width, uint32_t height, DXG
 
 void TrustMaskDx12::ReleaseTextures()
 {
-    for (Tex* tex : { &_depth[0], &_depth[1], &_mask[0], &_mask[1], &_flowBefore, &_guideFlow, &_guideDepth, &_guideMotion })
+    for (Tex* tex :
+         { &_depth[0], &_depth[1], &_mask[0], &_mask[1], &_flowBefore, &_guideFlow, &_guideDepth, &_guideMotion })
     {
         if (tex->resource != nullptr)
             tex->resource->Release();
@@ -396,7 +398,7 @@ bool TrustMaskDx12::Dispatch(ID3D12GraphicsCommandList* list, const Inputs& in)
     constants.hasHistory = _haveHistory ? 1 : 0;
     constants.fullPerFlow = in.fullPerFlow;
     constants.revealTolerance = _settings.revealTolerance;
-    constants.depthCount = (uint32_t) (std::min)(in.depthCount, (int) Inputs::kMaxDepths);
+    constants.depthCount = (uint32_t) (std::min) (in.depthCount, (int) Inputs::kMaxDepths);
     constants.debugView = (uint32_t) _settings.debugView;
     // Depth coming or going compares a real depth with the all-far proxy, which would distrust every pixel.
     constants.depthBoth = in.depthCount > 0 && _hadDepth ? 1 : 0;
@@ -467,7 +469,7 @@ bool TrustMaskDx12::Dispatch(ID3D12GraphicsCommandList* list, const Inputs& in)
                                          _depth[write].resource,
                                          _depth[write].resource,
                                          _depth[write].resource };
-        const DXGI_FORMAT formats[8] = { kFlowFormat, kDepthFormat, kDepthFormat, kDepthFormat,
+        const DXGI_FORMAT formats[8] = { kFlowFormat,  kDepthFormat, kDepthFormat, kDepthFormat,
                                          kDepthFormat, kDepthFormat, kDepthFormat };
         Pass(list, _copyFlow, srv, formats, _flowBefore, kFlowFormat, groupsX, groupsY, constants);
     }
@@ -477,7 +479,8 @@ bool TrustMaskDx12::Dispatch(ID3D12GraphicsCommandList* list, const Inputs& in)
     _maskIndex = maskWrite;
 
     // The newest mask can be read by a pixel shader too (a menu preview).
-    Transition(list, _mask[_maskIndex], D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+    Transition(list, _mask[_maskIndex],
+               D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
     _haveHistory = true;
     _hadDepth = in.depthCount > 0;
     // After a Reset the other proxy is another scene's: not a frame before this one.
@@ -517,7 +520,7 @@ bool TrustMaskDx12::BuildGuides(ID3D12GraphicsCommandList* list, const Inputs& i
     constants.depthX = in.depthWidth != 0 ? in.depthWidth : width;
     constants.depthY = in.depthHeight != 0 ? in.depthHeight : height;
     constants.reversed = in.depthReversed ? 1 : 0;
-    constants.depthCount = (uint32_t) (std::min)(in.depthCount, (int) Inputs::kMaxDepths);
+    constants.depthCount = (uint32_t) (std::min) (in.depthCount, (int) Inputs::kMaxDepths);
 
     const uint32_t groupsX = (width + 7) / 8;
     const uint32_t groupsY = (height + 7) / 8;
@@ -558,10 +561,12 @@ bool TrustMaskDx12::BuildGuides(ID3D12GraphicsCommandList* list, const Inputs& i
         uncover.revealTolerance = _settings.revealTolerance;
         uncover.uncoverReach = _settings.uncoverReach;
 
-        ID3D12Resource* const srv[8] = { in.flow, in.flow, _depth[_depthIndex].resource, _depth[1 - _depthIndex].resource,
-                                         in.flow, in.flow, in.flow,                       in.flow };
+        ID3D12Resource* const srv[8] = {
+            in.flow, in.flow, _depth[_depthIndex].resource, _depth[1 - _depthIndex].resource, in.flow, in.flow,
+            in.flow, in.flow
+        };
         const DXGI_FORMAT formats[8] = { kFlowFormat, kFlowFormat, kDepthFormat, kDepthFormat,
-                                         kFlowFormat, kFlowFormat, kFlowFormat, kFlowFormat };
+                                         kFlowFormat, kFlowFormat, kFlowFormat,  kFlowFormat };
         Pass(list, _uncoverPso, srv, formats, _guideFlow, kFlowFormat, (in.flowWidth + 7) / 8, (in.flowHeight + 7) / 8,
              uncover);
         flow = _guideFlow.resource;
@@ -569,7 +574,8 @@ bool TrustMaskDx12::BuildGuides(ID3D12GraphicsCommandList* list, const Inputs& i
 
     {
         // The flow sits in its combined read state between frames; the pass reads it as a texture. By surface it also
-        // reads the depth guide just written (t2) and this frame's depth proxy at the flow's size (t3, left by Dispatch).
+        // reads the depth guide just written (t2) and this frame's depth proxy at the flow's size (t3, left by
+        // Dispatch).
         const bool surface = _settings.guideSurface && _guideDepthValid && _hadDepth;
         constants.guideSurface = surface ? 1 : 0;
 

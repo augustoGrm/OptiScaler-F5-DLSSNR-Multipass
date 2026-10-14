@@ -1521,8 +1521,9 @@ static HRESULT hkD3D12CreateDevice(IUnknown* pAdapter, D3D_FEATURE_LEVEL Minimum
         LOG_DEBUG("Device captured: {0:X}", (size_t) *ppDevice);
         auto* const createdDevice = (ID3D12Device*) *ppDevice;
 
-        // The Vulkan bridge's D3D12 swapchain runs on its own device, which is what State holds while it is up. A device
-        // the game makes after that (a Vulkan or dxvk game probing feature levels) is not the one the D3D12 side works on.
+        // The Vulkan bridge's D3D12 swapchain runs on its own device, which is what State holds while it is up. A
+        // device the game makes after that (a Vulkan or dxvk game probing feature levels) is not the one the D3D12 side
+        // works on.
         if (native::AdoptNewD3D12Device(VkPresentBridge::OutputActive()))
             State::Instance().currentD3D12Device = createdDevice;
         else
@@ -1680,8 +1681,9 @@ static HRESULT hkCreateDevice(ID3D12DeviceFactory* pFactory, IUnknown* pAdapter,
         LOG_DEBUG("Device captured: {0:X}", (size_t) *ppDevice);
         auto* const createdDevice = (ID3D12Device*) *ppDevice;
 
-        // The Vulkan bridge's D3D12 swapchain runs on its own device, which is what State holds while it is up. A device
-        // the game makes after that (a Vulkan or dxvk game probing feature levels) is not the one the D3D12 side works on.
+        // The Vulkan bridge's D3D12 swapchain runs on its own device, which is what State holds while it is up. A
+        // device the game makes after that (a Vulkan or dxvk game probing feature levels) is not the one the D3D12 side
+        // works on.
         if (native::AdoptNewD3D12Device(VkPresentBridge::OutputActive()))
             State::Instance().currentD3D12Device = createdDevice;
         else
@@ -1908,9 +1910,8 @@ static HRESULT hkCreateCommittedResource(ID3D12Device* device, const D3D12_HEAP_
         }
     }
 
-    const HRESULT created = o_CreateCommittedResource(device, pHeapProperties, HeapFlags, pDesc,
-                                                      InitialResourceState, pOptimizedClearValue,
-                                                      riidResource, ppvResource);
+    const HRESULT created = o_CreateCommittedResource(device, pHeapProperties, HeapFlags, pDesc, InitialResourceState,
+                                                      pOptimizedClearValue, riidResource, ppvResource);
 
     // Where the exposure scan sees the game's resources. Silent and cheap for everything that does
     // not match, and it does nothing at all unless Neural Rendering is running.
@@ -1946,8 +1947,8 @@ static HRESULT hkCreatePlacedResource(ID3D12Device* device, ID3D12Heap* pHeap, U
         }
     }
 
-    const HRESULT created = o_CreatePlacedResource(device, pHeap, HeapOffset, pDesc, InitialState,
-                                                   pOptimizedClearValue, riid, ppvResource);
+    const HRESULT created =
+        o_CreatePlacedResource(device, pHeap, HeapOffset, pDesc, InitialState, pOptimizedClearValue, riid, ppvResource);
 
     if (SUCCEEDED(created) && ppvResource != nullptr)
         DlssNr::ExposureScan::NoteResource(pDesc, (ID3D12Resource*) *ppvResource);
@@ -2348,7 +2349,8 @@ static void HookToDevice(ID3D12Device* InDevice)
 
     HookToCommandList(InDevice);
 
-    // Observes the depth buffers for the native input producer; nothing is hooked unless [DlssNr] NativeDepthFinder is on.
+    // Observes the depth buffers for the native input producer; nothing is hooked unless [DlssNr] NativeDepthFinder is
+    // on.
     GenericDepthDx12::Install(InDevice);
 
     if (State::Instance().activeFgInput == FGInput::Upscaler &&

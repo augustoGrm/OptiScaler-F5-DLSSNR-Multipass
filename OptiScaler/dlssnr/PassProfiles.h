@@ -46,11 +46,9 @@ inline unsigned int PassStyle(const Config& cfg, unsigned int pass)
 
 inline NrPassTuning PassTuning(const Config& cfg, unsigned int pass)
 {
-    NrPassTuning result { cfg.DlssNrIntensity.value_or_default(),
-                          cfg.DlssNrLocalStructure.value_or_default(),
+    NrPassTuning result { cfg.DlssNrIntensity.value_or_default(), cfg.DlssNrLocalStructure.value_or_default(),
                           pass == 0 ? cfg.DlssNrLocalTone.value_or_default() : 0.0f,
-                          cfg.DlssNrSkinStructure.value_or_default(),
-                          cfg.DlssNrAutoMask.value_or_default() };
+                          cfg.DlssNrSkinStructure.value_or_default(), cfg.DlssNrAutoMask.value_or_default() };
     if (pass == 1)
     {
         if (cfg.DlssNrPass2Intensity.has_value())
@@ -80,19 +78,23 @@ inline NrPassTuning PassTuning(const Config& cfg, unsigned int pass)
     if (pass >= 3 && pass < 30)
     {
         const auto& extra = cfg.DlssNrExtraPasses[pass - 3];
-        if (extra.intensity.has_value()) result.intensity = extra.intensity.value();
-        if (extra.structure.has_value()) result.structure = extra.structure.value();
-        if (extra.tone.has_value()) result.tone = extra.tone.value();
-        if (extra.skin.has_value()) result.skin = extra.skin.value();
-        if (extra.autoMask.has_value()) result.autoMask = extra.autoMask.value();
+        if (extra.intensity.has_value())
+            result.intensity = extra.intensity.value();
+        if (extra.structure.has_value())
+            result.structure = extra.structure.value();
+        if (extra.tone.has_value())
+            result.tone = extra.tone.value();
+        if (extra.skin.has_value())
+            result.skin = extra.skin.value();
+        if (extra.autoMask.has_value())
+            result.autoMask = extra.autoMask.value();
     }
-    const auto bounded = [](float value, float fallback, float minimum) {
-        return std::isfinite(value) ? std::clamp(value, minimum, 2.0f) : fallback;
-    };
+    const auto bounded = [](float value, float fallback, float minimum)
+    { return std::isfinite(value) ? std::clamp(value, minimum, 2.0f) : fallback; };
     result.intensity = bounded(result.intensity, 1.0f, 0.0f);
     result.structure = bounded(result.structure, 1.0f, 0.0f);
     result.tone = bounded(result.tone, pass == 0 ? 1.0f : 0.0f, 0.0f);
     result.skin = bounded(result.skin, -1.0f, -1.0f);
     return result;
 }
-}
+} // namespace DlssNr::Profiles

@@ -1,4 +1,5 @@
-// Not built with the precompiled header: Vulkan and Direct3D only, so tests/nr_vk_present_bridge_gpu.cpp compiles it alone.
+// Not built with the precompiled header: Vulkan and Direct3D only, so tests/nr_vk_present_bridge_gpu.cpp compiles it
+// alone.
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
@@ -38,8 +39,8 @@ std::string HiddenWindowState(HWND hidden, DWORD madeOn)
         CloseHandle(thread);
     }
 
-    return std::format("hidden window {}, made on thread {} ({}), asked on thread {}", window ? "there" : "gone", madeOn,
-                       threadRuns ? "running" : "ended", GetCurrentThreadId());
+    return std::format("hidden window {}, made on thread {} ({}), asked on thread {}", window ? "there" : "gone",
+                       madeOn, threadRuns ? "running" : "ended", GetCurrentThreadId());
 }
 
 bool WaitFence(ID3D12Fence* fence, uint64_t value)
@@ -117,7 +118,8 @@ bool VkPresentBridgeCore::Create(const BridgeTarget& target, const VkSwapchainCr
     Release();
 
     if (target.instance == VK_NULL_HANDLE || target.physical == VK_NULL_HANDLE || target.createSurface == nullptr ||
-        target.destroySurface == nullptr || target.realWindow == nullptr || target.device12 == nullptr || target.queue12 == nullptr || !make)
+        target.destroySurface == nullptr || target.realWindow == nullptr || target.device12 == nullptr ||
+        target.queue12 == nullptr || !make)
     {
         why = "the bridge was given no window or device";
         return false;
@@ -220,9 +222,9 @@ bool VkPresentBridgeCore::MakeSurface(std::string& why)
     for (uint32_t family = 0; family < families && !presentable; ++family)
     {
         VkBool32 supported = VK_FALSE;
-        presentable = vkGetPhysicalDeviceSurfaceSupportKHR(_target.physical, family, _surface, &supported) ==
-                          VK_SUCCESS &&
-                      supported == VK_TRUE;
+        presentable =
+            vkGetPhysicalDeviceSurfaceSupportKHR(_target.physical, family, _surface, &supported) == VK_SUCCESS &&
+            supported == VK_TRUE;
     }
 
     if (!presentable)
@@ -279,18 +281,17 @@ bool VkPresentBridgeCore::MakeOutput(const VkSwapchainCreateInfoKHR& game, std::
     _outputFlags = made.Flags;
     _tearingSwapchain = (made.Flags & DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING) != 0;
 
-    // A float swapchain in SRGB_NONLINEAR holds sRGB-encoded values on Vulkan, which DXGI would read as scRGB unless told.
+    // A float swapchain in SRGB_NONLINEAR holds sRGB-encoded values on Vulkan, which DXGI would read as scRGB unless
+    // told.
     DXGI_COLOR_SPACE_TYPE space;
     UINT support = 0;
 
-    if (BridgeColorSpace(game.imageColorSpace, &space) &&
-        SUCCEEDED(_output->CheckColorSpaceSupport(space, &support)) &&
+    if (BridgeColorSpace(game.imageColorSpace, &space) && SUCCEEDED(_output->CheckColorSpaceSupport(space, &support)) &&
         (support & DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT) != 0)
         _output->SetColorSpace1(space);
 
-    _syncInterval = game.presentMode == VK_PRESENT_MODE_FIFO_KHR || game.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR
-                        ? 1
-                        : 0;
+    _syncInterval =
+        game.presentMode == VK_PRESENT_MODE_FIFO_KHR || game.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR ? 1 : 0;
     return true;
 }
 
@@ -369,10 +370,10 @@ bool VkPresentBridgeCore::Patch(const VkSwapchainCreateInfoKHR& game, VkSwapchai
 
     if ((caps.supportedCompositeAlpha & game.compositeAlpha) == 0)
     {
-        out->compositeAlpha = (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) != 0
-                                  ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
-                                  : (VkCompositeAlphaFlagBitsKHR) (caps.supportedCompositeAlpha &
-                                                                   -(int) caps.supportedCompositeAlpha);
+        out->compositeAlpha =
+            (caps.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) != 0
+                ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+                : (VkCompositeAlphaFlagBitsKHR) (caps.supportedCompositeAlpha & -(int) caps.supportedCompositeAlpha);
     }
 
     // Never shown, so never paced: the game's own present mode only matters for the D3D12 swapchain.
@@ -440,9 +441,8 @@ bool VkPresentBridgeCore::Resize(const VkSwapchainCreateInfoKHR& game, std::stri
         return false;
     }
 
-    _syncInterval = game.presentMode == VK_PRESENT_MODE_FIFO_KHR || game.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR
-                        ? 1
-                        : 0;
+    _syncInterval =
+        game.presentMode == VK_PRESENT_MODE_FIFO_KHR || game.presentMode == VK_PRESENT_MODE_FIFO_RELAXED_KHR ? 1 : 0;
 
     if (!ResizeNeeded(game))
         return true;

@@ -3,11 +3,11 @@
 // The Vulkan present bridge, OptiScaler's side: a Vulkan game that gets frame generation from Optical F5Low's "NR +
 // upscaler & frame generation" mode presents through a D3D12 swapchain, the way a D3D11 game does (with_dx12/
 // dx11_with_dx12_sc.h). When the game makes its swapchain with the mode and a frame generation output chosen at start
-// (OptiFG Upscaler input), the VkSwapchain is made on a hidden window's surface, and the real window gets a D3D12 swapchain
-// from frame generation, on the private D3D12 device that native/VkFrameSource.h already shares the picture with. Per
-// present the picture goes through the producer into that swapchain's back buffer (CopyToOutput) and the D3D12 swapchain
-// presents it (PresentOutput); the game's own present only cycles its images on the hidden window. Any failure leaves the
-// game's swapchain on the real window, as it was.
+// (OptiFG Upscaler input), the VkSwapchain is made on a hidden window's surface, and the real window gets a D3D12
+// swapchain from frame generation, on the private D3D12 device that native/VkFrameSource.h already shares the picture
+// with. Per present the picture goes through the producer into that swapchain's back buffer (CopyToOutput) and the
+// D3D12 swapchain presents it (PresentOutput); the game's own present only cycles its images on the hidden window. Any
+// failure leaves the game's swapchain on the real window, as it was.
 //
 // native/VkPresentBridgeCore.h has the mechanics (it is tested alone); this file decides when and wires the rest of
 // OptiScaler in: the surface-to-window map, frame generation, the menu, State.
@@ -25,15 +25,17 @@ namespace VkPresentBridge
 // A D3D11 game running on dxvk with [DlssNr] NativeDxvkVulkan on: Optical F5Low reads dxvk's own Vulkan presents and
 // frame generation is this bridge on dxvk's Vulkan swapchain. The D3D11 side then stands aside: no D3D11 frame
 // generation bridge (Dx11wDx12SC, which cannot work on dxvk), and the game's wrapped D3D11 swapchain leaves frame
-// generation, the menu and the swapchain State to the bridge. Cached once the GPU is identified (the key is startup only).
+// generation, the menu and the swapchain State to the bridge. Cached once the GPU is identified (the key is startup
+// only).
 bool DxvkThroughVulkan();
 // The game runs on dxvk, key or not (IdentifyGpu's usesDxvk), cached the same way: it is asked on every present.
 bool DxvkGame();
 
-// The fullScreenExclusive mode of a VkSurfaceFullScreenExclusiveInfoEXT in a create info's chain, or null. The swapchain
-// made on the hidden surface is asked for DISALLOWED through it (and the game's value put back after the call): the hidden
-// window must never take the screen, and the D3D12 swapchain on the real window handles full screen as for a D3D12 game.
-// Null when there is none, and when the game's struct is in read-only memory (`readOnly` then true): it is not written.
+// The fullScreenExclusive mode of a VkSurfaceFullScreenExclusiveInfoEXT in a create info's chain, or null. The
+// swapchain made on the hidden surface is asked for DISALLOWED through it (and the game's value put back after the
+// call): the hidden window must never take the screen, and the D3D12 swapchain on the real window handles full screen
+// as for a D3D12 game. Null when there is none, and when the game's struct is in read-only memory (`readOnly` then
+// true): it is not written.
 int32_t* FullScreenExclusiveMode(const void* chain, bool* readOnly = nullptr);
 inline constexpr int32_t kFullScreenExclusiveDisallowed = 2;
 
@@ -41,11 +43,11 @@ inline constexpr int32_t kFullScreenExclusiveDisallowed = 2;
 void NoteSurface(VkSurfaceKHR surface, HWND window);
 void ForgetSurface(VkSurfaceKHR surface);
 
-// The game is making a swapchain. True when it is to be made from `out` instead of `in` (on the hidden surface); `out` is
-// then the whole create info. False: make it as the game asked, from `out` (the same, but for an old swapchain that was
-// the bridge's and cannot be continued on the game's own surface). Never fails the game's call.
-bool OnCreateSwapchain(VkInstance instance, VkPhysicalDevice physical, VkDevice device, const VkSwapchainCreateInfoKHR& in,
-                       VkSwapchainCreateInfoKHR* out);
+// The game is making a swapchain. True when it is to be made from `out` instead of `in` (on the hidden surface); `out`
+// is then the whole create info. False: make it as the game asked, from `out` (the same, but for an old swapchain that
+// was the bridge's and cannot be continued on the game's own surface). Never fails the game's call.
+bool OnCreateSwapchain(VkInstance instance, VkPhysicalDevice physical, VkDevice device,
+                       const VkSwapchainCreateInfoKHR& in, VkSwapchainCreateInfoKHR* out);
 
 // The result of the original vkCreateSwapchainKHR for a create info OnCreateSwapchain returned true for. On failure the
 // bridge is let go, and the caller makes the game's swapchain as it asked (a bridged old swapchain dropped).
@@ -79,25 +81,27 @@ ID3D12Device* Device();
 // game on dxvk matches its wrapped swapchain's window against it to find the swapchain the bridge presents.
 HWND OutputWindow();
 
-// How many D3D12 outputs the bridge has made: it moves on each time one comes up, also in place on the same window (frame
-// generation switched off and on). Lock-free, any thread.
+// How many D3D12 outputs the bridge has made: it moves on each time one comes up, also in place on the same window
+// (frame generation switched off and on). Lock-free, any thread.
 uint32_t OutputGeneration();
 
 // The up output draws the menu (and so counts the overlay's frames) on the game's presents only: frame generation's
 // swapchain from the system DXGI (a dxvk game) presents its generated frames past OptiScaler's hooks. Lock-free.
 bool MenuOnGamePresents();
 
-// The frame source has processed this present: puts the shared picture into the D3D12 swapchain's back buffer. `picture`
-// (null: none this frame) is ready once `copied` is reached on `fence` and the producer's `doneFence` (null: none) has
-// reached `doneValue`; `signalValue` is signalled on `fence` once the copy is done. False when the copy could not be queued.
+// The frame source has processed this present: puts the shared picture into the D3D12 swapchain's back buffer.
+// `picture` (null: none this frame) is ready once `copied` is reached on `fence` and the producer's `doneFence` (null:
+// none) has reached `doneValue`; `signalValue` is signalled on `fence` once the copy is done. False when the copy could
+// not be queued.
 bool CopyToOutput(ID3D12Resource* picture, ID3D12Fence* fence, uint64_t copied, ID3D12Fence* doneFence,
                   uint64_t doneValue, uint64_t signalValue);
 
-// The D3D12 swapchain presents what CopyToOutput gave it (after the game's hidden present has been queued). Returns on the
-// game's present thread, paced by the D3D12 present.
+// The D3D12 swapchain presents what CopyToOutput gave it (after the game's hidden present has been queued). Returns on
+// the game's present thread, paced by the D3D12 present.
 void PresentOutput();
 
-// The real window is not the swapchain's size and the game has not recreated the swapchain yet: its present should say so.
+// The real window is not the swapchain's size and the game has not recreated the swapchain yet: its present should say
+// so.
 bool WindowResized();
 
 // The game presents on a swapchain of its own window while the bridge is wanted (the mode was switched on after the
@@ -105,12 +109,12 @@ bool WindowResized();
 // True once per switching on of the mode.
 bool WantsNewSwapchain(VkSwapchainKHR swapchain);
 
-// The D3D12 swapchain is up on `device` (FG only: a Vulkan-on-D3D12 upscaler feeds frame generation only when it runs on
-// the bridge's device).
+// The D3D12 swapchain is up on `device` (FG only: a Vulkan-on-D3D12 upscaler feeds frame generation only when it runs
+// on the bridge's device).
 bool OutputActiveOn(ID3D12Device* device);
 
-// Why the bridge was turned off for the rest of the session because its D3D12 swapchain could not present; empty while it
-// was not. For the menu.
+// Why the bridge was turned off for the rest of the session because its D3D12 swapchain could not present; empty while
+// it was not. For the menu.
 std::string FailureReason();
 
 // FG only: the game's upscaler call, run on a Vulkan-on-D3D12 feature, queued frame generation's copies of its motion

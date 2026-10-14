@@ -1,16 +1,16 @@
 #pragma once
 
-// The shared-texture transport between a D3D11 game device and the D3D12 device the native input producer runs on (the same
-// two devices IFeature_Dx11wDx12 bridges for a game that calls an upscaler). Shared by every adapter whose game API is not
-// D3D12: a texture made on the game's device that the D3D12 device opens, and one fence both devices use to order their work
-// on the GPU, with no CPU wait.
+// The shared-texture transport between a D3D11 game device and the D3D12 device the native input producer runs on (the
+// same two devices IFeature_Dx11wDx12 bridges for a game that calls an upscaler). Shared by every adapter whose game
+// API is not D3D12: a texture made on the game's device that the D3D12 device opens, and one fence both devices use to
+// order their work on the GPU, with no CPU wait.
 //
-// Textures: made on the D3D11 side with NT shared handles, opened on the D3D12 side on first use. The D3D12 resource rests in
-// COMMON; the producer transitions it as it needs.
+// Textures: made on the D3D11 side with NT shared handles, opened on the D3D12 side on first use. The D3D12 resource
+// rests in COMMON; the producer transitions it as it needs.
 //
-// The fence: made on the D3D12 device (shared), opened on the D3D11 side (ID3D11Device5::OpenSharedFence, Windows 10 1703+).
-// One timeline serves both directions, as long as every signal is a higher value than the last: D3D11 signals "the copies are
-// done", D3D12 waits; D3D12 signals "NR is done", D3D11 waits. Both calls are GPU-side.
+// The fence: made on the D3D12 device (shared), opened on the D3D11 side (ID3D11Device5::OpenSharedFence, Windows 10
+// 1703+). One timeline serves both directions, as long as every signal is a higher value than the last: D3D11 signals
+// "the copies are done", D3D12 waits; D3D12 signals "NR is done", D3D11 waits. Both calls are GPU-side.
 
 #include <d3d11_4.h>
 #include <d3d12.h>
@@ -23,12 +23,12 @@
 namespace native
 {
 
-// The format a picture is copied through: sRGB and typeless forms of a 4-channel format become the plain UNORM one (a copy
-// between them is allowed, the bits are the same, and the producer reads the picture as encoded values).
+// The format a picture is copied through: sRGB and typeless forms of a 4-channel format become the plain UNORM one (a
+// copy between them is allowed, the bits are the same, and the producer reads the picture as encoded values).
 DXGI_FORMAT SharedPictureFormat(DXGI_FORMAT backBufferFormat);
 
-// The typeless format a depth format is copied in, and the format its depth plane is read through on the D3D12 side. False for
-// a format that is not depth.
+// The typeless format a depth format is copied in, and the format its depth plane is read through on the D3D12 side.
+// False for a format that is not depth.
 bool SharedDepthFormats(DXGI_FORMAT depth, DXGI_FORMAT* typeless, DXGI_FORMAT* view);
 
 class SharedTexture

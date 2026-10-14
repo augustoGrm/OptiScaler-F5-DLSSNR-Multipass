@@ -58,7 +58,8 @@ class KernelHooks
                                             DWORD dwFlagsAndAttributes, HANDLE hTemplateFile);
     static VOID WINAPI hk_K32_OutputDebugStringW(LPCWSTR lpOutputString);
     static VOID WINAPI hk_K32_OutputDebugStringA(LPCSTR lpOutputString);
-    static LPTOP_LEVEL_EXCEPTION_FILTER WINAPI hk_K32_SetUnhandledExceptionFilter(LPTOP_LEVEL_EXCEPTION_FILTER lpFilter);
+    static LPTOP_LEVEL_EXCEPTION_FILTER WINAPI
+    hk_K32_SetUnhandledExceptionFilter(LPTOP_LEVEL_EXCEPTION_FILTER lpFilter);
     static VOID WINAPI hk_K32_ExitProcess(UINT uExitCode);
 
     static HMODULE hk_K32_LoadLibraryW(LPCWSTR lpLibFileName);

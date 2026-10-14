@@ -46,8 +46,8 @@ struct Retired
 constexpr uint64_t kRetireAfterPresents = 8;
 
 std::mutex g_registryMutex;
-// The queues and the physical device of every Vulkan device the game made: a game that makes more devices after its swapchain
-// (a probe per feature level, as dxvk does) must be answered per device, not with whichever was made last.
+// The queues and the physical device of every Vulkan device the game made: a game that makes more devices after its
+// swapchain (a probe per feature level, as dxvk does) must be answered per device, not with whichever was made last.
 VkDeviceRegistry<VkDevice, VkPhysicalDevice, VkQueue> g_devices;
 std::unordered_map<VkSwapchainKHR, SwapchainRecord> g_swapchains;
 std::vector<Retired> g_retired;
@@ -302,7 +302,8 @@ bool VkFrameSource::EnsureDevices(std::string& why)
         if (_refusedDevice != _device)
         {
             _refusedDevice = _device;
-            _refusal = "The game also shows pictures from a second graphics device. Optical F5Low stays on the first one.";
+            _refusal =
+                "The game also shows pictures from a second graphics device. Optical F5Low stays on the first one.";
             LOG_WARN("Native motion (Vulkan): a present from another Vulkan device ({:X}) is left alone; Optical F5Low "
                      "keeps running on device {:X}",
                      (size_t) _device, (size_t) _interop.device);
@@ -367,8 +368,7 @@ bool VkFrameSource::EnsureRing(uint32_t family)
         fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
 
         if (vkCreateCommandPool(_device, &poolInfo, nullptr, &slot.pool) != VK_SUCCESS ||
-            (allocate.commandPool = slot.pool,
-             vkAllocateCommandBuffers(_device, &allocate, buffers) != VK_SUCCESS) ||
+            (allocate.commandPool = slot.pool, vkAllocateCommandBuffers(_device, &allocate, buffers) != VK_SUCCESS) ||
             vkCreateFence(_device, &fenceInfo, nullptr, &slot.done) != VK_SUCCESS)
         {
             _error = "could not make the Vulkan command buffers";
@@ -707,8 +707,8 @@ bool VkFrameSource::RecordDepth(VkCommandBuffer copyIn, uint32_t family, FrameIn
     if (!snap.valid || !VkDepthCopyFormatOf(snap.format, &format))
         return false;
 
-    const bool sizeChanged = _depthWidth != snap.width || _depthHeight != snap.height ||
-                             _depthFormat.texture != format.texture;
+    const bool sizeChanged =
+        _depthWidth != snap.width || _depthHeight != snap.height || _depthFormat.texture != format.texture;
 
     if (_depthShared.Size() < snap.size || sizeChanged || _depthTexture == nullptr)
     {
@@ -741,18 +741,17 @@ bool VkFrameSource::RecordDepth(VkCommandBuffer copyIn, uint32_t family, FrameIn
 
         _depthTexture.Reset();
 
-        if (FAILED(_device12->CreateCommittedResource(
-                &heap, D3D12_HEAP_FLAG_NONE, &desc,
-                D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE | D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE, nullptr,
-                IID_PPV_ARGS(&_depthTexture))))
+        if (FAILED(_device12->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &desc,
+                                                      D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE |
+                                                          D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE,
+                                                      nullptr, IID_PPV_ARGS(&_depthTexture))))
             return false;
 
         if (_depthList == nullptr)
         {
             for (auto& allocator : _depthAllocators)
             {
-                if (FAILED(_device12->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT,
-                                                             IID_PPV_ARGS(&allocator))))
+                if (FAILED(_device12->CreateCommandAllocator(D3D12_COMMAND_LIST_TYPE_DIRECT, IID_PPV_ARGS(&allocator))))
                     return false;
             }
 
@@ -883,8 +882,8 @@ void VkFrameSource::Return(const FrameInput& input, const FrameOutput& output)
     {
         std::lock_guard lock(g_registryMutex);
 
-        if (auto it = g_swapchains.find(_swapchain); it != g_swapchains.end() &&
-                                                     _imageIndex < it->second.presentWaits.size())
+        if (auto it = g_swapchains.find(_swapchain);
+            it != g_swapchains.end() && _imageIndex < it->second.presentWaits.size())
         {
             VkSemaphore& semaphore = it->second.presentWaits[_imageIndex];
 
@@ -901,8 +900,8 @@ void VkFrameSource::Return(const FrameInput& input, const FrameOutput& output)
 
     // The producer's done point is on its own fence, which Vulkan cannot see: a signal of ours on the same D3D12 queue,
     // right after its work, stands for it.
-    // Bridged, the processed picture stays on the D3D12 side for the swapchain: nothing is copied back, the present only
-    // waits for the copy in.
+    // Bridged, the processed picture stays on the D3D12 side for the swapchain: nothing is copied back, the present
+    // only waits for the copy in.
     if (_bridged)
         _producerDone = output.done;
 

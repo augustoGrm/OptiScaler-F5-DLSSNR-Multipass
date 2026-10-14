@@ -51,8 +51,9 @@ namespace NativeMotionDx11
 void OnPresent(IDXGISwapChain* swapChain, ID3D11Device* device)
 {
     // DlssNrNativeDxvkVulkan: on a dxvk game this driver's shared-texture bridge stands aside for the Vulkan one
-    // (NativeDriverVk.cpp), which reads dxvk's own Vulkan calls instead. OnFGPresent needs no such check: with the key on
-    // a dxvk game never gets Dx11wDx12SC (hooks/DxgiFactory_Hooks.cpp); its frame generation is the Vulkan present bridge.
+    // (NativeDriverVk.cpp), which reads dxvk's own Vulkan calls instead. OnFGPresent needs no such check: with the key
+    // on a dxvk game never gets Dx11wDx12SC (hooks/DxgiFactory_Hooks.cpp); its frame generation is the Vulkan present
+    // bridge.
     if (VkPresentBridge::DxvkThroughVulkan())
         return;
 

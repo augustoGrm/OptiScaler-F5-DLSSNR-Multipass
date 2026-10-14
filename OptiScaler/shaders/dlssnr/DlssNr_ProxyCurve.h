@@ -16,8 +16,8 @@ constexpr uint32_t kNeutwoComposed = 1;
 constexpr uint32_t kNeutwoReplace = 2;
 constexpr uint32_t kBalancedComposed = 3;
 constexpr uint32_t kBalancedReplace = 4;
-constexpr uint32_t kHlg = 5;    // ITU-R BT.2100 HLG, white at 0.75 (ITU-R BT.2408)
-constexpr uint32_t kPq = 6;     // SMPTE ST 2084, white (203 nits) at 0.58
+constexpr uint32_t kHlg = 5; // ITU-R BT.2100 HLG, white at 0.75 (ITU-R BT.2408)
+constexpr uint32_t kPq = 6;  // SMPTE ST 2084, white (203 nits) at 0.58
 // What game integrations hand the model: each channel's light as it is, clipped at white (dlssnr.hlsl SignalEncode).
 constexpr uint32_t kLinear = 7;
 constexpr uint32_t kCount = 8;
@@ -91,8 +91,8 @@ struct TuneThresholds
 
 constexpr float kKneeShoulder = 0.95f;
 constexpr float kKneeFloor = 0.02f;
-constexpr float kShoulderScene = 0.95526f;           // the soft knee stores 0.95 here (grey)
-constexpr float kFloorScene = kKneeFloor / 12.92f;   // below the knee, sRGB's linear toe: 0.02 is 0.00155 of light
+constexpr float kShoulderScene = 0.95526f;         // the soft knee stores 0.95 here (grey)
+constexpr float kFloorScene = kKneeFloor / 12.92f; // below the knee, sRGB's linear toe: 0.02 is 0.00155 of light
 
 inline TuneThresholds Thresholds(uint32_t mode)
 {

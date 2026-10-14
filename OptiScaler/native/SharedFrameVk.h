@@ -9,7 +9,8 @@
 // Needs, on the Vulkan device: VK_KHR_external_memory_win32, VK_KHR_external_semaphore_win32 and the timeline
 // semaphore feature (hooks/Vulkan_Hooks.cpp switches it on at device creation when the device offers it).
 //
-// Not built with the precompiled header: Vulkan and Direct3D only, so tests/nr_shared_frame_vk_gpu.cpp compiles it alone.
+// Not built with the precompiled header: Vulkan and Direct3D only, so tests/nr_shared_frame_vk_gpu.cpp compiles it
+// alone.
 
 #include <windows.h>
 #include <d3d12.h>
@@ -39,8 +40,8 @@ struct VkInterop
     bool Ready() const { return device != VK_NULL_HANDLE && getMemoryWin32HandleProperties != nullptr; }
 };
 
-// The adapter LUID of a Vulkan physical device, to make the D3D12 device on the same GPU. False when the driver does not
-// report one.
+// The adapter LUID of a Vulkan physical device, to make the D3D12 device on the same GPU. False when the driver does
+// not report one.
 bool VkPhysicalDeviceLuid(VkPhysicalDevice physicalDevice, LUID& luid);
 
 // The format a Vulkan picture is shared in, as a DXGI format and as the Vulkan format of the shared image. sRGB forms
@@ -113,15 +114,16 @@ class SharedFenceVk
     std::string _error;
 };
 
-// A shared picture the D3D12 side will not use after all (the copy into the output swapchain failed after the producer had
-// been given it): the queue waits for the copy in (`copied` on `sharedFence`) and the producer's done point
-// (`producerValue` on `producerFence`; null: no producer ran), then signals `doneValue` on `sharedFence`. The next copy in
-// waits for that value, so Vulkan never overwrites the picture while the producer still reads it.
+// A shared picture the D3D12 side will not use after all (the copy into the output swapchain failed after the producer
+// had been given it): the queue waits for the copy in (`copied` on `sharedFence`) and the producer's done point
+// (`producerValue` on `producerFence`; null: no producer ran), then signals `doneValue` on `sharedFence`. The next copy
+// in waits for that value, so Vulkan never overwrites the picture while the producer still reads it.
 void HandBackPicture(ID3D12CommandQueue* queue, ID3D12Fence* sharedFence, uint64_t copied, ID3D12Fence* producerFence,
                      uint64_t producerValue, uint64_t doneValue);
 
-// A buffer made on the D3D12 device and opened in Vulkan: how the scene's depth crosses. Vulkan cannot copy depth into a
-// colour image, but it can copy the depth aspect into a buffer, and D3D12 copies a buffer into a texture of any format.
+// A buffer made on the D3D12 device and opened in Vulkan: how the scene's depth crosses. Vulkan cannot copy depth into
+// a colour image, but it can copy the depth aspect into a buffer, and D3D12 copies a buffer into a texture of any
+// format.
 class SharedBufferVk
 {
   public:
@@ -145,9 +147,9 @@ class SharedBufferVk
 };
 
 // How a Vulkan depth format crosses: the bytes per texel its depth aspect takes in a buffer, the format of the D3D12
-// texture it is copied into, the format a buffer copy into it names (R24G8 is planar on D3D12: its depth plane is copied
-// as R32_TYPELESS), and the format the texture is read through. Vulkan's X8_D24 bit layout (depth in the low 24 bits) is
-// DXGI's R24G8. False for a format that is not depth.
+// texture it is copied into, the format a buffer copy into it names (R24G8 is planar on D3D12: its depth plane is
+// copied as R32_TYPELESS), and the format the texture is read through. Vulkan's X8_D24 bit layout (depth in the low 24
+// bits) is DXGI's R24G8. False for a format that is not depth.
 struct VkDepthCopyFormat
 {
     uint32_t bytes = 0;

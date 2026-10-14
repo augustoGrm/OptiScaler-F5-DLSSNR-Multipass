@@ -164,12 +164,14 @@ inline std::string StopText(const Sweep& s)
 inline std::string NoteText(const Note& n, bool measure = false)
 {
     if (measure && n.kind == Note::Kind::Retry)
-        return std::format("DLSS-NR measure: the picture moved (input change {:.5f}, limit {:.5f}), measuring again (try {})",
-                           n.value, n.against, n.count + 1);
+        return std::format(
+            "DLSS-NR measure: the picture moved (input change {:.5f}, limit {:.5f}), measuring again (try {})", n.value,
+            n.against, n.count + 1);
     if (n.kind == Note::Kind::Retry)
-        return std::format("DLSS-NR calibrate: {:+.1f} EV moved (input change {:.5f}, limit {:.5f}), measuring it again "
-                           "(try {})",
-                           Tidy(n.ev), n.value, n.against, n.count + 1);
+        return std::format(
+            "DLSS-NR calibrate: {:+.1f} EV moved (input change {:.5f}, limit {:.5f}), measuring it again "
+            "(try {})",
+            Tidy(n.ev), n.value, n.against, n.count + 1);
     return std::format("DLSS-NR calibrate: the view changed at {:+.1f} EV (input detail {:.5f}, the run started at "
                        "{:.5f}), starting over (restart {})",
                        Tidy(n.ev), n.value, n.against, n.count);
@@ -178,14 +180,14 @@ inline std::string NoteText(const Note& n, bool measure = false)
 // One measurement, for the log: the same numbers as a sweep step's line.
 inline std::string MeasureText(const StepResult& r)
 {
-    return std::format("n {} | raw {:.5f} band {:.5f} (out {:.5f} in {:.5f}) | flicker {:.5f} (out {:.5f} in {:.5f}) | "
-                       "shoulder {:.4f} floor {:.4f} | colour saturation {:+.1f}% (chroma out {:.4f} in {:.4f}) shift "
-                       "{:.4f} warmth {:+.4f} | shadows {:.3f} of the picture, darkened {:+.1f}% (out {:.5f} in {:.5f}), "
-                       "crushed {:.4f}",
-                       r.samples, r.detailRaw, r.DetailOf(Detail::BandPass), r.detailBand, r.inputBand, r.Flicker(),
-                       r.outputChange, r.inputChange, r.shoulder, r.floor, 100.0f * r.Saturation(), r.chromaOut,
-                       r.chromaIn, r.colourShift, r.warmth, r.shadowShare, 100.0f * r.ShadowDarkening(), r.shadowOut,
-                       r.shadowIn, r.crushed);
+    return std::format(
+        "n {} | raw {:.5f} band {:.5f} (out {:.5f} in {:.5f}) | flicker {:.5f} (out {:.5f} in {:.5f}) | "
+        "shoulder {:.4f} floor {:.4f} | colour saturation {:+.1f}% (chroma out {:.4f} in {:.4f}) shift "
+        "{:.4f} warmth {:+.4f} | shadows {:.3f} of the picture, darkened {:+.1f}% (out {:.5f} in {:.5f}), "
+        "crushed {:.4f}",
+        r.samples, r.detailRaw, r.DetailOf(Detail::BandPass), r.detailBand, r.inputBand, r.Flicker(), r.outputChange,
+        r.inputChange, r.shoulder, r.floor, 100.0f * r.Saturation(), r.chromaOut, r.chromaIn, r.colourShift, r.warmth,
+        r.shadowShare, 100.0f * r.ShadowDarkening(), r.shadowOut, r.shadowIn, r.crushed);
 }
 
 // "Measure detail" in words, for the menu: each measure against the game's own frame, then against the measurement
@@ -317,13 +319,14 @@ inline std::vector<std::string> ResultLines(const Sweep& s)
     const float neutral = s.Config().neutralTrim;
     const bool passes = s.Passes() > 1;
     // With several passes each line says which; one pass keeps the lines as they were.
-    const auto passText = [passes](unsigned pass) { return passes ? std::format("pass {}: ", pass + 1) : std::string(); };
+    const auto passText = [passes](unsigned pass)
+    { return passes ? std::format("pass {}: ", pass + 1) : std::string(); };
 
     if (s.AbortReason() != Abort::None)
         lines.push_back(std::format(
             "DLSS-NR calibrate: stopped after {} of {} steps{}: {}",
-            std::count_if(steps.begin(), steps.end(), [](const StepResult& r) { return r.samples > 0; }),
-            steps.size(), passes ? std::format(" of pass {} of {}", s.Pass() + 1, s.Passes()) : "", StopText(s)));
+            std::count_if(steps.begin(), steps.end(), [](const StepResult& r) { return r.samples > 0; }), steps.size(),
+            passes ? std::format(" of pass {} of {}", s.Pass() + 1, s.Passes()) : "", StopText(s)));
 
     const auto stepLines = [&](const std::vector<StepResult>& pass, unsigned index)
     {
@@ -334,16 +337,16 @@ inline std::vector<std::string> ResultLines(const Sweep& s)
             if (r.samples == 0)
                 continue;
 
-            lines.push_back(std::format("DLSS-NR calibrate: {}{:+.1f} EV (trim {:.3f}) {} | score raw {:.3f} band {:.3f}",
-                                        passText(index), Tidy(r.ev), TrimForEv(r.ev, neutral), MeasureText(r),
-                                        s.ScoreIn(pass, i, Detail::Raw), s.ScoreIn(pass, i, Detail::BandPass)));
+            lines.push_back(
+                std::format("DLSS-NR calibrate: {}{:+.1f} EV (trim {:.3f}) {} | score raw {:.3f} band {:.3f}",
+                            passText(index), Tidy(r.ev), TrimForEv(r.ev, neutral), MeasureText(r),
+                            s.ScoreIn(pass, i, Detail::Raw), s.ScoreIn(pass, i, Detail::BandPass)));
         }
     };
     const auto verdictText = [](const PassVerdict& v)
     {
         return std::format("best raw {:+.1f} EV, best band {:+.1f} EV, result {:+.2f} EV{}", Tidy(v.bestRaw),
-                           Tidy(v.bestBand), Tidy(v.result),
-                           v.unsure ? " (unsure)" : "");
+                           Tidy(v.bestBand), Tidy(v.result), v.unsure ? " (unsure)" : "");
     };
 
     // The passes before the last, then the last (or the one a stop cut short).
@@ -362,7 +365,8 @@ inline std::vector<std::string> ResultLines(const Sweep& s)
         lines.push_back(std::format(
             "DLSS-NR calibrate: current {:+.2f} EV, best raw {:+.1f} EV, best band {:+.1f} EV, result {:+.2f} EV{}",
             Tidy(s.CurrentEv()), Tidy(s.BestEv(Detail::Raw)), Tidy(s.BestEv(Detail::BandPass)), Tidy(s.ResultEv()),
-            s.Unsure()       ? " (unsure: detail varied no more than the measurement does on its own, keeps the current value)"
+            s.Unsure()
+                ? " (unsure: detail varied no more than the measurement does on its own, keeps the current value)"
             : s.Unrepeated() ? std::format(" (did not repeat: pass 1 gave {:+.1f} EV, pass 2 {:+.1f} EV, keeps the "
                                            "current value)",
                                            Tidy(s.FirstPass().result), Tidy(s.LastPass().result))
@@ -381,13 +385,16 @@ inline bool Wanted(const RunState& run, unsigned long long nowMs)
 }
 
 // An evaluation while nothing is wanted: only the clock the NR-stopped check reads.
-inline void IdleFrame(RunState& run, unsigned long long nowMs) { run.lastEvaluationMs.store(nowMs, std::memory_order_relaxed); }
+inline void IdleFrame(RunState& run, unsigned long long nowMs)
+{
+    run.lastEvaluationMs.store(nowMs, std::memory_order_relaxed);
+}
 
 // Before the white point is resolved, while Wanted(). `evaluation` counts the backend's NR evaluations (the readback
 // delay is measured in it); `baseWhitePoint` is the tuned source's (0 without a reading).
-inline FrameEvents BeginFrame(RunState& run, Backend& gpu, const StartPoints& start, unsigned int width, unsigned int height,
-                              const Situation& situation, float baseWhitePoint, unsigned long long evaluation,
-                              unsigned long long nowMs)
+inline FrameEvents BeginFrame(RunState& run, Backend& gpu, const StartPoints& start, unsigned int width,
+                              unsigned int height, const Situation& situation, float baseWhitePoint,
+                              unsigned long long evaluation, unsigned long long nowMs)
 {
     std::lock_guard<std::mutex> lock(run.mutex);
     FrameEvents events;

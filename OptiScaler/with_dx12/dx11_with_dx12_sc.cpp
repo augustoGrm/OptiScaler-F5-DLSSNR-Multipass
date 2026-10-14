@@ -557,9 +557,9 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::GetDesc(DXGI_SWAP_CHAIN_DESC* pDesc)
     return result;
 }
 
-// ResizeBuffers(0, 0) means "the window's size". With the window still hidden or minimised (a game leaving exclusive full screen
-// before it sizes its window) that is 1x1, and the picture, XeFG and the upscaler all end up at 1x1 for good. Keep the size the
-// swapchain has until the window is real: the game resizes again when it is.
+// ResizeBuffers(0, 0) means "the window's size". With the window still hidden or minimised (a game leaving exclusive
+// full screen before it sizes its window) that is 1x1, and the picture, XeFG and the upscaler all end up at 1x1 for
+// good. Keep the size the swapchain has until the window is real: the game resizes again when it is.
 static void KeepSizeWhileWindowTiny(IDXGISwapChain* swapChain, HWND window, UINT& width, UINT& height)
 {
     if (width != 0 && height != 0)
@@ -575,8 +575,8 @@ static void KeepSizeWhileWindowTiny(IDXGISwapChain* swapChain, HWND window, UINT
     if (!haveClient || swapChain == nullptr)
         return;
 
-    // A real window: say its size ourselves. The swapchain behind the bridge came out 1x1 from a 0x0 here (Call to Arms leaving
-    // exclusive full screen, window 2560x1440).
+    // A real window: say its size ourselves. The swapchain behind the bridge came out 1x1 from a 0x0 here (Call to Arms
+    // leaving exclusive full screen, window 2560x1440).
     if (client.right >= 16 && client.bottom >= 16)
     {
         width = (UINT) client.right;
@@ -659,7 +659,8 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Widt
         DXGI_SWAP_CHAIN_DESC after {};
 
         if (SUCCEEDED(_real->GetDesc(&after)))
-            LOG_INFO("ResizeBuffers: the game's swapchain is now {}x{}", after.BufferDesc.Width, after.BufferDesc.Height);
+            LOG_INFO("ResizeBuffers: the game's swapchain is now {}x{}", after.BufferDesc.Width,
+                     after.BufferDesc.Height);
     }
 
     if (SUCCEEDED(realResult) && SUCCEEDED(fgResult))
@@ -1141,8 +1142,8 @@ bool Dx11wDx12SC::_EnsureNativeInputCopyRing()
         if (_nrCopyCommandLists[i] != nullptr)
             continue;
 
-        auto result = _dx12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, _nrCopyAllocators[i],
-                                                      nullptr, IID_PPV_ARGS(&_nrCopyCommandLists[i]));
+        auto result = _dx12Device->CreateCommandList(0, D3D12_COMMAND_LIST_TYPE_DIRECT, _nrCopyAllocators[i], nullptr,
+                                                     IID_PPV_ARGS(&_nrCopyCommandLists[i]));
         if (FAILED(result))
         {
             LOG_ERROR("CreateCommandList (native input copy) failed: {:X}", (UINT) result);
@@ -1203,8 +1204,9 @@ bool Dx11wDx12SC::_RequestSharedBackBuffer(UINT index)
         desc.CPUAccessFlags = 0;
         desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
 
-        // A game with MSAA on has a multisampled swap chain (_real keeps the samples it asked for); the D3D12 side cannot
-        // open or present a multisampled texture, so the copy is single-sample and the samples are resolved into it
+        // A game with MSAA on has a multisampled swap chain (_real keeps the samples it asked for); the D3D12 side
+        // cannot open or present a multisampled texture, so the copy is single-sample and the samples are resolved into
+        // it
         // (_CopyDx11BackBufferToShared).
         desc.SampleDesc.Count = 1;
         desc.SampleDesc.Quality = 0;

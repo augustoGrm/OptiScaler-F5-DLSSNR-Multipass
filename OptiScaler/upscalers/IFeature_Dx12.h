@@ -30,9 +30,10 @@ class IFeature_Dx12 : public virtual IFeature
   protected:
     ID3D12Device* Device = nullptr;
     static inline std::unique_ptr<Menu_Dx12> Imgui = nullptr;
-    // Imgui is shared by every feature, and a replaced feature is destroyed on another thread (Util::DelayedDestroy): its
-    // destructor resetting Imgui raced the render thread drawing with it, and two features dropped together reset it at
-    // once (RE2 crash on a backend switch with the old overlay). Recursive: a feature destroyed while the menu is drawn.
+    // Imgui is shared by every feature, and a replaced feature is destroyed on another thread (Util::DelayedDestroy):
+    // its destructor resetting Imgui raced the render thread drawing with it, and two features dropped together reset
+    // it at once (RE2 crash on a backend switch with the old overlay). Recursive: a feature destroyed while the menu is
+    // drawn.
     static inline std::recursive_mutex ImguiMutex;
     std::unique_ptr<OS_Dx12> OutputScaler = nullptr;
     std::unique_ptr<RCAS_Dx12> RCAS = nullptr;

@@ -13,7 +13,8 @@ constexpr uint32_t kDescriptorsPerPass = 10; // eight SRVs and two UAVs
 constexpr uint32_t kPassesPerFrame = 1 + 2 + (OpticalFlowDx12::kLevels - 1) + OpticalFlowDx12::kLevels + 1 + 1 + 1 + 1;
 constexpr uint32_t kFramesInFlight = 8;
 constexpr DXGI_FORMAT kLumaFormat = DXGI_FORMAT_R32_FLOAT;
-constexpr DXGI_FORMAT kFlowFormat = DXGI_FORMAT_R16G16B16A16_FLOAT; // typed UAV stores of this are required of every device
+constexpr DXGI_FORMAT kFlowFormat =
+    DXGI_FORMAT_R16G16B16A16_FLOAT;                        // typed UAV stores of this are required of every device
 constexpr DXGI_FORMAT kStateFormat = DXGI_FORMAT_R32_UINT; // typed atomics on this are required of every device
 constexpr DXGI_FORMAT kAgeFormat = DXGI_FORMAT_R8_UINT;    // the still age: typed UAV stores of this are required too
 
@@ -36,8 +37,8 @@ OpticalFlowDx12::~OpticalFlowDx12()
 {
     ReleaseTextures();
 
-    for (ID3D12PipelineState** pso : { &_luma, &_lumaSdr, &_lumaScRgb, &_lumaPq, &_down, &_match, &_median, &_smooth,
-                                       &_visualise, &_global })
+    for (ID3D12PipelineState** pso :
+         { &_luma, &_lumaSdr, &_lumaScRgb, &_lumaPq, &_down, &_match, &_median, &_smooth, &_visualise, &_global })
         if (*pso != nullptr)
             (*pso)->Release();
 
@@ -122,9 +123,9 @@ bool OpticalFlowDx12::Init(ID3D12Device* device)
         ID3D12PipelineState** target;
     };
 
-    for (const Entry& entry : { Entry { "Luma", &_luma }, Entry { "Down", &_down }, Entry { "Match", &_match },
-                                Entry { "Median", &_median }, Entry { "Smooth", &_smooth },
-                                Entry { "Visualise", &_visualise }, Entry { "Global", &_global } })
+    for (const Entry& entry :
+         { Entry { "Luma", &_luma }, Entry { "Down", &_down }, Entry { "Match", &_match }, Entry { "Median", &_median },
+           Entry { "Smooth", &_smooth }, Entry { "Visualise", &_visualise }, Entry { "Global", &_global } })
     {
         const auto* code = Compile(entry.name, &_error);
 
@@ -256,8 +257,8 @@ bool OpticalFlowDx12::EnsureSize(uint32_t width, uint32_t height)
     if (width == _width && height == _height && _flow.resource != nullptr)
         return true;
 
-    // The previous work may still be reading these; a size change is rare (a resolution change) and the caller is expected
-    // to have waited, as it does before replacing its own targets.
+    // The previous work may still be reading these; a size change is rare (a resolution change) and the caller is
+    // expected to have waited, as it does before replacing its own targets.
     ReleaseTextures();
     _havePrevious = false;
     _globalReady = false;
@@ -400,14 +401,14 @@ void OpticalFlowDx12::StampEnd(ID3D12GraphicsCommandList* list, ID3D12PipelineSt
         return;
 
     list->EndQuery(_timeHeap, D3D12_QUERY_TYPE_TIMESTAMP, _timeCount);
-    _timeNames[_timeCount++] = name != nullptr ? name
+    _timeNames[_timeCount++] = name != nullptr                                                          ? name
                                : pso == _luma || pso == _lumaSdr || pso == _lumaScRgb || pso == _lumaPq ? "luma"
-                               : pso == _down                                                         ? "down"
-                               : pso == _match                                                        ? "match"
-                               : pso == _median                                                       ? "median"
-                               : pso == _smooth                                                       ? "smooth"
-                               : pso == _global                                                       ? "global"
-                                                                                                      : "other";
+                               : pso == _down                                                           ? "down"
+                               : pso == _match                                                          ? "match"
+                               : pso == _median                                                         ? "median"
+                               : pso == _smooth                                                         ? "smooth"
+                               : pso == _global                                                         ? "global"
+                                                                                                        : "other";
 }
 
 bool OpticalFlowDx12::Dispatch(ID3D12GraphicsCommandList* list, ID3D12Resource* color, DXGI_FORMAT colorFormat,
@@ -433,7 +434,7 @@ bool OpticalFlowDx12::Dispatch(ID3D12GraphicsCommandList* list, ID3D12Resource* 
     constants.sizeY = current[0].height;
     constants.auxX = (uint32_t) colorDesc.Width;
     constants.auxY = colorDesc.Height;
-    constants.whiteNits = (std::max)(_settings.hdrWhiteNits, 1.0f);
+    constants.whiteNits = (std::max) (_settings.hdrWhiteNits, 1.0f);
     Pass(list,
          !_settings.perceptualLuma     ? _luma
          : encoding == Encoding::ScRgb ? _lumaScRgb
@@ -509,8 +510,8 @@ bool OpticalFlowDx12::Dispatch(ID3D12GraphicsCommandList* list, ID3D12Resource* 
 
             // The brightness weights, on the finest level (with depth on top of the depth weights).
             constants.lookWeights = level == 0 && _settings.lookWeights ? 1 : 0;
-            constants.lookRange = (std::max)(_settings.lookRange, 1e-4f);
-            constants.lookDistance = (std::max)(_settings.lookDistance, 0.5f);
+            constants.lookRange = (std::max) (_settings.lookRange, 1e-4f);
+            constants.lookDistance = (std::max) (_settings.lookDistance, 0.5f);
 
             if (!coarsest)
             {
@@ -552,7 +553,8 @@ bool OpticalFlowDx12::Dispatch(ID3D12GraphicsCommandList* list, ID3D12Resource* 
         constants = Constants {};
         constants.sizeX = _flow.width;
         constants.sizeY = _flow.height;
-        constants.radius = std::clamp(_settings.smoothRadius, 0, 4); // the shader's tile holds at most four pixels around a group
+        constants.radius =
+            std::clamp(_settings.smoothRadius, 0, 4); // the shader's tile holds at most four pixels around a group
         Pass(list, _smooth, _flowMedian.resource, kFlowFormat, current[0].resource, kLumaFormat, nullptr,
              DXGI_FORMAT_UNKNOWN, _flow, kFlowFormat, constants);
 

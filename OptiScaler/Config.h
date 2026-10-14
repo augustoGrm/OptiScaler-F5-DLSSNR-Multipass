@@ -292,9 +292,12 @@ class Config
     // and apply it after the game's upscaler. Takes precedence over RunBeforeSR; opt-in.
     CustomOptional<bool> DlssNrDeferredDlss { false };
     CustomOptional<bool> DlssNrResidualFg { false }; // forced off: not read from the ini, not in the menu
-    CustomOptional<uint32_t> DlssNrPrecision { 0 }; // 0 NVIDIA FP8 (default), 4 Experimental NVFP4 hybrid
-    CustomOptional<uint32_t> DlssNrVitEvery { 2 };  // NVIDIA model: compute the ViT bottleneck every N-th frame (1 = always; 2 = every other frame, default), reuse it in between
-    CustomOptional<uint32_t> DlssNrVitEveryPlain { 2 }; // the same for the plain fp16 kernel set (used by some modified DLSS-NR DLLs); VitEvery is the fp8 set
+    CustomOptional<uint32_t> DlssNrPrecision { 0 };  // 0 NVIDIA FP8 (default), 4 Experimental NVFP4 hybrid
+    CustomOptional<uint32_t> DlssNrVitEvery { 2 };   // NVIDIA model: compute the ViT bottleneck every N-th frame (1 =
+                                                     // always; 2 = every other frame, default), reuse it in between
+    CustomOptional<uint32_t> DlssNrVitEveryPlain {
+        2
+    }; // the same for the plain fp16 kernel set (used by some modified DLSS-NR DLLs); VitEvery is the fp8 set
     // Reuse detail between frames (dlssnr/DlssNrDetailReuse.h, shaders/dlssnr/DlssNr_DetailReuse.inl): run the model
     // every other frame and move the last frame's detail onto the new input in between. D3D12, NR after SR only, and
     // off while frame generation is on. Experimental, off by default.
@@ -316,10 +319,20 @@ class Config
     // with, which have never been measured against a game; they are here so that can finally be done in one, without
     // a rebuild. Moving them changes the picture on reused frames, and on full frames too wherever Steady is on,
     // since Steady pulls the full frame toward the same estimate.
-    CustomOptional<float> DlssNrDetailReuseDepthTolerance { 0.051f }; // relative depth outside the saved 2x2 range still trusted fully; trust is gone at twice it. Fill uses three times it as its neighbour depth window, so this widens that too. Raised from 0.02 on 2026-10-01, see DlssNr_DetailReuseConstants.h
-    CustomOptional<float> DlssNrDetailReuseClipGamma { 1.25f };      // half-width of the colour box around the current 3x3 mean, in standard deviations
-    CustomOptional<float> DlssNrDetailReuseClipFalloff { 1.0f };     // distance outside that box, in standard deviations, over which trust fades to zero
-    CustomOptional<float> DlssNrDetailReuseSigmaFloor { 0.01f };     // smallest standard deviation used (proxy units), so flat areas do not reject on noise
+    CustomOptional<float> DlssNrDetailReuseDepthTolerance {
+        0.051f
+    }; // relative depth outside the saved 2x2 range still trusted fully; trust is gone at twice it. Fill uses three
+       // times it as its neighbour depth window, so this widens that too. Raised from 0.02 on 2026-10-01, see
+       // DlssNr_DetailReuseConstants.h
+    CustomOptional<float> DlssNrDetailReuseClipGamma {
+        1.25f
+    }; // half-width of the colour box around the current 3x3 mean, in standard deviations
+    CustomOptional<float> DlssNrDetailReuseClipFalloff {
+        1.0f
+    }; // distance outside that box, in standard deviations, over which trust fades to zero
+    CustomOptional<float> DlssNrDetailReuseSigmaFloor {
+        0.01f
+    }; // smallest standard deviation used (proxy units), so flat areas do not reject on noise
     // Keep reusing detail while frame generation is on. On by default since the edges of the screen stopped flickering
     // in fast motion (DlssNrDetailReuseMaxDropped): before that, reuse turned itself off here, which also meant its
     // saving quietly disappeared for anyone using frame generation. Full and reused frames still cost differently, so
@@ -334,10 +347,10 @@ class Config
     // pause, so that is the top of the range. (DlssNrDetailReuse::MotionGuard; the default is from in-game
     // measurements: a Witcher 3 run measured 3% while calm and 21% while running.)
     CustomOptional<float> DlssNrDetailReuseMaxDropped { 10.0f };
-    // Scene cuts the game does not flag (dlssnr/DlssNrSceneCut.h, shaders/dlssnr/DlssNr_SceneCut.inl), D3D12 game input:
-    // 0 off, 1 found and counted only (log, menu; the picture is untouched), 2 also acted on (Reuse detail drops the
-    // moved detail on the cut frame, and the model resets when the answer arrives, a few frames later). 1 by default
-    // until in-game counts show how often games leave cuts unflagged and that nothing else reads as one.
+    // Scene cuts the game does not flag (dlssnr/DlssNrSceneCut.h, shaders/dlssnr/DlssNr_SceneCut.inl), D3D12 game
+    // input: 0 off, 1 found and counted only (log, menu; the picture is untouched), 2 also acted on (Reuse detail drops
+    // the moved detail on the cut frame, and the model resets when the answer arrives, a few frames later). 1 by
+    // default until in-game counts show how often games leave cuts unflagged and that nothing else reads as one.
     CustomOptional<uint32_t> DlssNrSceneCut { 1 };
     // Edit cache (dlssnr/DlssNrEditCache.h, shaders/dlssnr/DlssNr_EditCache.inl): run the model one frame in N and show
     // its last answer, carried along the game's vectors, in between. D3D12, NR after SR only; not together with
@@ -415,9 +428,9 @@ class Config
     // 1 linear HDR, 2 tone-mapped sRGB, 3 tone-mapped gamma 2.2, 4 PQ. Values are DlssNr_ColourEncoding.h's.
     CustomOptional<uint32_t> DlssNrColourEncoding { 0 };
 
-    // The game's HDR paper white in nits, the white NR is given on a display-referred HDR picture (forced PQ, or Finished
-    // Picture on an HDR10 / scRGB screen), where no exposure applies. 203 = ITU-R BT.2408's reference white, the value
-    // used before this existed. Bounded 80..1000 at the point of use (DlssNr_ExposureState.h).
+    // The game's HDR paper white in nits, the white NR is given on a display-referred HDR picture (forced PQ, or
+    // Finished Picture on an HDR10 / scRGB screen), where no exposure applies. 203 = ITU-R BT.2408's reference white,
+    // the value used before this existed. Bounded 80..1000 at the point of use (DlssNr_ExposureState.h).
     CustomOptional<float> DlssNrDisplayPaperWhiteNits { 203.0f };
 
     // LUT-apply epic (dlssnr-lut-apply), Story 2: a .cube file graded onto the
@@ -435,7 +448,6 @@ class Config
     // only clean way to A/B our settings. A live testing toggle, not really a saved preference; off by
     // default. See dlssnr/design/frame-hold.md.
     CustomOptional<bool> DlssNrHoldFrame { false };
-
 
     // The most the pass may brighten a pixel, in Composed mode -- a detail pass has no business
     // restyling a light source, whatever the model returns. Darkening in Composed is intentionally
@@ -458,7 +470,6 @@ class Config
     //
     // The slider is the supported control until the loop is broken. This stays as an opt-in so the
     // behaviour can still be looked at.
-
 
     // Take the white point from the game's own exposure texture instead of measuring or guessing.
     // Off by default until it has been seen to work in more than one game.
@@ -549,9 +560,9 @@ class Config
     CustomOptional<bool> DlssNrModelResolutionAuto { false };
 
     // Compress screen edges (shaders/dlssnr/DlssNr_Spatial.h): NR works on a smaller picture whose middle stays 1:1 and
-    // whose edges are squeezed, and the answer is stretched back. Off by default. Centre and work are percentages of the
-    // frame on each axis (centre < work <= 100); offset moves the centre band and shift moves pixels between the two
-    // edges, both in percent of the frame. Out-of-range values leave compression off (the menu says why).
+    // whose edges are squeezed, and the answer is stretched back. Off by default. Centre and work are percentages of
+    // the frame on each axis (centre < work <= 100); offset moves the centre band and shift moves pixels between the
+    // two edges, both in percent of the frame. Out-of-range values leave compression off (the menu says why).
     CustomOptional<bool> DlssNrSpatialCompression { false };
     CustomOptional<float> DlssNrSpatialCenterX { 80.0f };
     CustomOptional<float> DlssNrSpatialCenterY { 80.0f };
@@ -642,14 +653,15 @@ class Config
     // AutoExposureTrim is a multiplier on the white point (higher = darker model input). While unset (ini `auto`) the
     // Trim used is the default (DlssNrAutoTrim::Effective, shaders/dlssnr/DlssNr_AutoTrimDefault.h):
     // 1.77 (+1.5 EV) for every game; the 5.0 below is only the menu's 0 EV
-    // point. The menu shows it as "Model input brightness" in stops around 5x: EV = -log2(trim / 5), so 0 EV = 5x, + is brighter.
-    // AutoExposureShadowProtection is the menu's "Ignore bright highlights" (percent).
+    // point. The menu shows it as "Model input brightness" in stops around 5x: EV = -log2(trim / 5), so 0 EV = 5x, + is
+    // brighter. AutoExposureShadowProtection is the menu's "Ignore bright highlights" (percent).
     CustomOptional<float> DlssNrAutoExposureTrim { 5.0f };
     CustomOptional<float> DlssNrAutoExposureShadowProtection { 100.0f };
-    // AutoExposureMeter is the menu's "Meter": 0 the plain average with the highlight knee above (AutoExposureShadowProtection),
-    // 1 the log-average between two percentiles of brightness, as Unreal and Unity HDRP meter (the Low / High percent are the
-    // window). Default 1 (user decision 2026-10-03, after NBA 2K27: "looking good, the image quality even upped"); an ini
-    // that sets 0 keeps the plain average. See shaders/dlssnr/DlssNr_ExposureMeter.h.
+    // AutoExposureMeter is the menu's "Meter": 0 the plain average with the highlight knee above
+    // (AutoExposureShadowProtection), 1 the log-average between two percentiles of brightness, as Unreal and Unity HDRP
+    // meter (the Low / High percent are the window). Default 1 (user decision 2026-10-03, after NBA 2K27: "looking
+    // good, the image quality even upped"); an ini that sets 0 keeps the plain average. See
+    // shaders/dlssnr/DlssNr_ExposureMeter.h.
     CustomOptional<uint32_t> DlssNrAutoExposureMeter { 1 };
     CustomOptional<float> DlssNrAutoExposureMeterLowPercent { 10.0f };
     CustomOptional<float> DlssNrAutoExposureMeterHighPercent { 90.0f };
@@ -661,23 +673,25 @@ class Config
     // game's depth" under the menu's Advanced section. See resource_tracking/GenericDepth_Dx12.h and
     // GenericDepth_Dx11.h.
     CustomOptional<bool> DlssNrNativeDepthFinder { false };
-    // NativeDepthVkCopyUsage: Vulkan only. With NativeDepthFinder on, depth images the game makes for rendering are made
-    // copyable (TRANSFER_SRC added to their usage), or the finder could not copy the scene's depth: a Vulkan game seldom
-    // asks for that itself. Can cost a little depth compression on some GPUs. Off: Vulkan depth reads as not readable,
-    // and Optical F5Low runs on motion only. Startup only (images are made once). See resource_tracking/GenericDepth_Vk.h.
+    // NativeDepthVkCopyUsage: Vulkan only. With NativeDepthFinder on, depth images the game makes for rendering are
+    // made copyable (TRANSFER_SRC added to their usage), or the finder could not copy the scene's depth: a Vulkan game
+    // seldom asks for that itself. Can cost a little depth compression on some GPUs. Off: Vulkan depth reads as not
+    // readable, and Optical F5Low runs on motion only. Startup only (images are made once). See
+    // resource_tracking/GenericDepth_Vk.h.
     CustomOptional<bool> DlssNrNativeDepthVkCopyUsage { true };
     // NativeDxvkVulkan: experimental. A D3D11 game running on dxvk (doitsujin/dxvk: its D3D11 calls become Vulkan ones)
-    // normally gets Optical F5Low's D3D11 driver (native/NativeDriverDx11.h), the same shared-texture bridge to a private
-    // D3D12 device a real D3D11 game gets. On: that D3D11 driver stands aside, and the Vulkan driver (native/NativeDriverVk.h,
-    // resource_tracking/GenericDepth_Vk.h -- the same code a native Vulkan game uses) reads dxvk's own Vulkan calls instead,
-    // and frame generation (FGInput=Upscaler) goes through the Vulkan present bridge (native/VkPresentBridge.h) on dxvk's
-    // Vulkan swapchain, its D3D12 swapchain from Windows' own DXGI, instead of the D3D11 bridge, which cannot work on dxvk
-    // (dxvk's shared handles do not open on a native D3D12 device). Off by default. See misc/IdentifyGpu.h (usesDxvk).
+    // normally gets Optical F5Low's D3D11 driver (native/NativeDriverDx11.h), the same shared-texture bridge to a
+    // private D3D12 device a real D3D11 game gets. On: that D3D11 driver stands aside, and the Vulkan driver
+    // (native/NativeDriverVk.h, resource_tracking/GenericDepth_Vk.h -- the same code a native Vulkan game uses) reads
+    // dxvk's own Vulkan calls instead, and frame generation (FGInput=Upscaler) goes through the Vulkan present bridge
+    // (native/VkPresentBridge.h) on dxvk's Vulkan swapchain, its D3D12 swapchain from Windows' own DXGI, instead of the
+    // D3D11 bridge, which cannot work on dxvk (dxvk's shared handles do not open on a native D3D12 device). Off by
+    // default. See misc/IdentifyGpu.h (usesDxvk).
     CustomOptional<bool> DlssNrNativeDxvkVulkan { false };
-    // NativeDepthWarmupFrames: presented frames to watch before the finder trusts that the game makes no upscaler call of its
-    // own (it stands down for good the moment one is seen). NativeDepthOverlay: debug; copies the picked depth buffer at its
-    // busiest clear and shows it in the DLSS-NR menu (D3D12 only; no preview round-trip exists for D3D11 yet). That copy is
-    // recorded into the game's own command list.
+    // NativeDepthWarmupFrames: presented frames to watch before the finder trusts that the game makes no upscaler call
+    // of its own (it stands down for good the moment one is seen). NativeDepthOverlay: debug; copies the picked depth
+    // buffer at its busiest clear and shows it in the DLSS-NR menu (D3D12 only; no preview round-trip exists for D3D11
+    // yet). That copy is recorded into the game's own command list.
     CustomOptional<uint32_t> DlssNrNativeDepthWarmupFrames { 300 };
     CustomOptional<bool> DlssNrNativeDepthOverlay { false };
     // NativeDebugView: show the pictures of the depth finder and the motion estimate on the menu's Optical F5Low page
@@ -708,24 +722,25 @@ class Config
     // sets NativeDepthFinder, NativeMotion and this together, clears NativeInput, and switches NR Pass at: off Finished
     // Picture if it was on (see dlssnr/DlssNr_NativeMode.h). See native/VirtualUpscalerDriver.h.
     CustomOptional<bool> DlssNrNativeUpscaler { false };
-    // NativeFrameGenerationOnly: a Vulkan game that calls DLSS, FSR or XeSS of its own gets OptiScaler's frame generation
-    // from that call. The Vulkan present bridge (native/VkPresentBridge.h) puts frame generation's D3D12 swapchain on the
-    // window, and the game's upscaler runs through a Vulkan-on-D3D12 backend (DLSS_on12, FFX_on12, FSR21_on12) on the
-    // bridge's device, whose evaluate hands frame generation the game's motion vectors, depth and output
-    // (upscalers/IFeature_VkwDx12.cpp). No Optical F5Low motion. The Optical F5Low page's "FG only (game's upscaler)" Mode.
+    // NativeFrameGenerationOnly: a Vulkan game that calls DLSS, FSR or XeSS of its own gets OptiScaler's frame
+    // generation from that call. The Vulkan present bridge (native/VkPresentBridge.h) puts frame generation's D3D12
+    // swapchain on the window, and the game's upscaler runs through a Vulkan-on-D3D12 backend (DLSS_on12, FFX_on12,
+    // FSR21_on12) on the bridge's device, whose evaluate hands frame generation the game's motion vectors, depth and
+    // output (upscalers/IFeature_VkwDx12.cpp). No Optical F5Low motion. The Optical F5Low page's "FG only (game's
+    // upscaler)" Mode.
     CustomOptional<bool> DlssNrNativeFrameGenerationOnly { false };
     // NativeLowLatencyBoost: Reflex's Boost with it (the GPU keeps its clocks up between frames), also for DLSS frame
     // generation's Streamline Reflex on an Optical F5Low game. NVIDIA Reflex only: XeLL, Anti-Lag 2 and LatencyFlex
     // ignore it (XeLL: "Boost is not supported as of now").
     CustomOptional<bool> DlssNrNativeLowLatencyBoost { false };
-    // NativeLowLatencyDxvkGameThread: a D3D11 game on dxvk with the Vulkan present bridge runs Optical F5Low's low latency
-    // (markers and Sleep) at the game's own D3D11 Present, on the game's thread, instead of at dxvk's Vulkan present on
-    // dxvk's thread (native/NativeLowLatencyRule.h SleepSite). Read every present (no restart needed after a config
-    // reload). Only dxvk through the Vulkan bridge looks at it.
+    // NativeLowLatencyDxvkGameThread: a D3D11 game on dxvk with the Vulkan present bridge runs Optical F5Low's low
+    // latency (markers and Sleep) at the game's own D3D11 Present, on the game's thread, instead of at dxvk's Vulkan
+    // present on dxvk's thread (native/NativeLowLatencyRule.h SleepSite). Read every present (no restart needed after a
+    // config reload). Only dxvk through the Vulkan bridge looks at it.
     CustomOptional<bool> DlssNrNativeLowLatencyDxvkGameThread { true };
     // AutoExposureAdaptBrighterSeconds / AutoExposureAdaptDarkerSeconds are the menu's "Eye adaptation": how long
-    // Automatic takes to follow a scene getting brighter / darker, as a time constant in seconds; 0 = at once. Faster to
-    // brighter, as in Unreal and Unity HDRP. See shaders/dlssnr/DlssNr_ExposureAdapt.h.
+    // Automatic takes to follow a scene getting brighter / darker, as a time constant in seconds; 0 = at once. Faster
+    // to brighter, as in Unreal and Unity HDRP. See shaders/dlssnr/DlssNr_ExposureAdapt.h.
     CustomOptional<float> DlssNrAutoExposureAdaptBrighterSeconds { 0.5f };
     CustomOptional<float> DlssNrAutoExposureAdaptDarkerSeconds { 1.5f };
     // The single speed both used to share: read, and copied into both new keys when they are absent. Never written.
@@ -746,8 +761,8 @@ class Config
 
     CustomOptional<bool> DlssNrScanMeter { false };
 
-    CustomOptional<float> DlssNrScanAnchorValue { 0.0f };       // legacy single anchor, migrated then unused
-    CustomOptional<float> DlssNrScanAnchorWhitePoint { 0.0f };  // legacy single anchor, migrated then unused
+    CustomOptional<float> DlssNrScanAnchorValue { 0.0f };      // legacy single anchor, migrated then unused
+    CustomOptional<float> DlssNrScanAnchorWhitePoint { 0.0f }; // legacy single anchor, migrated then unused
 
     // The multi-point anchor table, serialised as "scan:white;scan:white;..." ascending. See
     // dlssnr/design/multi-point-anchoring.md. Replaces the single pair above; a pre-existing single
@@ -761,12 +776,6 @@ class Config
     // says which. Rather than guess and be silently wrong in half the games, this is one click: if
     // the picture moves the wrong way, flip it.
     CustomOptional<bool> DlssNrScanInverted { false };
-
-
-
-
-
-
 
     // The trim on an exposure-derived white point, kept apart from the manual divisor on purpose.
     //
@@ -822,19 +831,11 @@ class Config
     // folder is cleared at the start of each run, so it holds one session's worth and never grows.
     CustomOptional<bool> DlssNrAutoCapture { true };
 
-
-
-
-
     // The manual white point (WhitePointSource 0, and the fallback while Game exposure has no reading yet): what the
     // model considers "white" on a linear HDR frame. Higher means highlights sit lower on the curve and the model
     // treats them as less extreme. Not applied to a tone-mapped frame (passed through as it is) or to display HDR
     // (white at the paper white); there it only scales the debug views.
     CustomOptional<float> DlssNrWhitePointScale { 1.0f };
-
-
-
-
 
     // --- end DLSS 5 Neural Rendering -------------------------------------------------------------
 
@@ -1118,16 +1119,16 @@ class Config
     CustomOptional<bool> FGDLSSGAdaMfgUnlock { false };
     CustomOptional<bool, NoDefault> FGDLSSGAdaBlackwellKernels;
     CustomOptional<std::string, NoDefault> FGDLSSGAdaTemporalFix; // Auto / Retarget / Ptx
-    CustomOptional<bool> FGDLSSGAdaFlipMeteringPatch { false };  // pin sl.dlss_g to software frame pacing
+    CustomOptional<bool> FGDLSSGAdaFlipMeteringPatch { false };   // pin sl.dlss_g to software frame pacing
     // Ampere/Turing (SM86/SM75) MFG unlocker — sideloads the dlssg_for_sm86 proxy
     CustomOptional<bool> FGDLSSGAmpereMfgUnlock { false };
-    CustomOptional<int>  FGDLSSGAmpereMfgMaxFrames { 5 };       // 1..5 generated frames, up to X6
+    CustomOptional<int> FGDLSSGAmpereMfgMaxFrames { 5 };  // 1..5 generated frames, up to X6
     CustomOptional<int> FGDLSSGAmpereMfgMultiplier { 0 }; // 0 follows game, 2..6 fixed factor
     CustomOptional<bool> FGDLSSGAmpereMfgDynamic { false };
     CustomOptional<int> FGDLSSGAmpereMfgTargetFPS { 0 }; // 0 = refresh rate, 1..1000 FPS
 
-    CustomOptional<std::string, NoDefault> FGDLSSGAmpereMfgKernelImage;     // Auto / PTX / Cubin
-    CustomOptional<bool> FGDLSSGAmpereMfgHardwareBilinear { false };        // Optional approximate sampling (SM86 only)
+    CustomOptional<std::string, NoDefault> FGDLSSGAmpereMfgKernelImage; // Auto / PTX / Cubin
+    CustomOptional<bool> FGDLSSGAmpereMfgHardwareBilinear { false };    // Optional approximate sampling (SM86 only)
     CustomOptional<FGOutput> FGOutput { FGOutput::NoFG };
     // Keeps Streamline from picking up the driver's OTA/downloaded plugins; only files in
     // OptiScaler/streamline are used for sl.* plugins and nvngx_dlssg.dll
@@ -1221,9 +1222,9 @@ class Config
     CustomOptional<bool> FGXeFGHighResMV { false };
     CustomOptional<bool> FGXeFGDebugView { false };
     CustomOptional<bool> FGXeFGForceBorderless { false };
-    // [XeFG] LowLatencyOutput, what lowers latency with XeFG (native/NativeLowLatencyRule.h XefgLatency): xell (default),
-    // reflex (NVIDIA, real nvapi) or antilag2 (AMD, fakenvapi). XeLL stays in place for XeFG either way, with low latency
-    // off when the other two are chosen. A choice the setup lacks reads as xell.
+    // [XeFG] LowLatencyOutput, what lowers latency with XeFG (native/NativeLowLatencyRule.h XefgLatency): xell
+    // (default), reflex (NVIDIA, real nvapi) or antilag2 (AMD, fakenvapi). XeLL stays in place for XeFG either way,
+    // with low latency off when the other two are chosen. A choice the setup lacks reads as xell.
     CustomOptional<native::lowlatency::XefgLatency> FGXeFGLowLatencyOutput { native::lowlatency::XefgLatency::XeLL };
 
     // DLSSG
@@ -1275,11 +1276,11 @@ class Config
     // Framerate
     CustomOptional<float> FramerateLimit { 0.0f };
     // [Framerate] LowLatencyInput, the Framerate page's low latency "Input" (native/NativeLowLatencyRule.h): OptiScaler
-    // calls the Reflex API itself, since a game that makes no upscaler call makes no Reflex call either, and XeFG's XeLL
-    // needs the calls (native/NativeLowLatency.h). auto: the game's own Reflex when it makes the calls, else ours while
-    // an Optical F5Low mode, XeFG or FSR FG runs; game: only the game's; optiscaler: ours in any game without Reflex;
-    // off: no low latency, the game's Reflex is sent with it off. The old [DlssNr] NativeLowLatency is read when this
-    // key is missing (auto, true = optiscaler, false = game) and still written beside it.
+    // calls the Reflex API itself, since a game that makes no upscaler call makes no Reflex call either, and XeFG's
+    // XeLL needs the calls (native/NativeLowLatency.h). auto: the game's own Reflex when it makes the calls, else ours
+    // while an Optical F5Low mode, XeFG or FSR FG runs; game: only the game's; optiscaler: ours in any game without
+    // Reflex; off: no low latency, the game's Reflex is sent with it off. The old [DlssNr] NativeLowLatency is read
+    // when this key is missing (auto, true = optiscaler, false = game) and still written beside it.
     CustomOptional<native::lowlatency::Input> FramerateLowLatencyInput { native::lowlatency::Input::Auto };
 
     // HDR

@@ -15,10 +15,11 @@ void NoteDroppedLogLinesOnPresent();
 void InstallCrashHandler();
 // What the hook on SetUnhandledExceptionFilter hands the game's call to: ours stays the top-level filter, the game's is
 // kept and called after the log is drained; returns the filter it replaces, like the real API.
-LPTOP_LEVEL_EXCEPTION_FILTER CrashFilterFromGame(LPTOP_LEVEL_EXCEPTION_FILTER filter,
-                                                LPTOP_LEVEL_EXCEPTION_FILTER(WINAPI* original)(LPTOP_LEVEL_EXCEPTION_FILTER));
-// Tells Logger.cpp the real API (the hook's original) so its own calls bypass the hook, and re-takes the top place if a game
-// set a filter before the hook was in.
+LPTOP_LEVEL_EXCEPTION_FILTER
+CrashFilterFromGame(LPTOP_LEVEL_EXCEPTION_FILTER filter,
+                    LPTOP_LEVEL_EXCEPTION_FILTER(WINAPI* original)(LPTOP_LEVEL_EXCEPTION_FILTER));
+// Tells Logger.cpp the real API (the hook's original) so its own calls bypass the hook, and re-takes the top place if a
+// game set a filter before the hook was in.
 void CrashFilterApiHooked(LPTOP_LEVEL_EXCEPTION_FILTER(WINAPI* original)(LPTOP_LEVEL_EXCEPTION_FILTER));
 // Writes the queued log lines (bounded wait) because the process is exiting; at most once.
 void DrainLogForExit();

@@ -29,7 +29,7 @@ class SGSR1_Dx12 : public Shader_Dx12
     // tuned for, smoothing detail bilinear preserved -- retuned and now fixed at 0.300/2.00,
     // passed in from the caller rather than baked into the shader.
     bool Dispatch(ID3D12GraphicsCommandList* InCmdList, ID3D12Resource* InResource, ID3D12Resource* OutResource,
-                 uint32_t reversibleMode, uint32_t passthrough, float edgeThreshold, float edgeSharpness);
+                  uint32_t reversibleMode, uint32_t passthrough, float edgeThreshold, float edgeSharpness);
 
     SGSR1_Dx12(std::string InName, ID3D12Device* InDevice);
 

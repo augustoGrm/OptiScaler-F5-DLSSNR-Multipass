@@ -38,10 +38,7 @@ inline bool NvApiMarkerFromVulkanNV(uint32_t vkMarker, uint32_t* nvapiMarker)
 }
 
 // The markers XeLL takes (fakenvapi's XeLL: the six frame markers). The driver still gets every one the game sent.
-inline bool XellTakesMarker(uint32_t nvapiMarker)
-{
-    return nvapiMarker <= 5;
-}
+inline bool XellTakesMarker(uint32_t nvapiMarker) { return nvapiMarker <= 5; }
 
 struct SleepMode
 {
@@ -95,8 +92,8 @@ inline constexpr SleepMode kDriverSleepMode {};
 using lowlatency::XefgLatency;
 
 // The side that lowers latency right now. XeLL is today's behaviour and the answer whenever the setup lacks the choice,
-// XeFG is not the output, the Framerate page's Input is Off (nothing to lower) or fakenvapi's Force Reflex is set (Force
-// Disable wants everything off; Force Enable would make XeLL sleep next to the other side).
+// XeFG is not the output, the Framerate page's Input is Off (nothing to lower) or fakenvapi's Force Reflex is set
+// (Force Disable wants everything off; Force Enable would make XeLL sleep next to the other side).
 inline XefgLatency EffectiveXefgLatency(const lowlatency::OutputInputs& in, bool blockLowLatency, bool forceReflexSet)
 {
     if (!in.xefgOutput || blockLowLatency || forceReflexSet || !lowlatency::XefgLatencyAvailable(in.xefgLatency, in))
@@ -119,9 +116,9 @@ struct Route
     bool driver = false; // the other side: the driver's Reflex, or Anti-Lag 2 / Anti-Lag Vk (not for XeLL)
 };
 
-// Where one Reflex call goes. A bridged Vulkan game's semaphore is signalled by the other side's Sleep (the driver's, or
-// fakenvapi's NvAPI_Vulkan_Sleep): with XeLL as the output it is signalled from the host instead (VK_NV_low_latency2) or
-// by the driver's Sleep with its mode off (NvAPI_Vulkan).
+// Where one Reflex call goes. A bridged Vulkan game's semaphore is signalled by the other side's Sleep (the driver's,
+// or fakenvapi's NvAPI_Vulkan_Sleep): with XeLL as the output it is signalled from the host instead
+// (VK_NV_low_latency2) or by the driver's Sleep with its mode off (NvAPI_Vulkan).
 inline Route RouteFor(XefgLatency side, Call call)
 {
     if (side == XefgLatency::XeLL)

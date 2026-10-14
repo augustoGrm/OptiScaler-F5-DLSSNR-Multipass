@@ -11,11 +11,12 @@
 //     matching end. A render pass never spans command buffers, so "a list closes while bound" does not happen.
 //   - A clear is a depth attachment loaded with CLEAR (its clear value), vkCmdClearDepthStencilImage, or
 //     vkCmdClearAttachments inside a pass.
-//   - A copy cannot be recorded inside a render pass. The core's requests come at the end of a pass ("unbind"): the copy
-//     goes after the end, in the attachment's final layout (dynamic rendering: the layout it rendered in). A clear request
-//     at the start of a pass copies before the begin, in the attachment's initial layout; UNDEFINED there means the
-//     contents are not kept, and there is nothing to copy. Requests that fall inside a pass (vkCmdClearAttachments, a
-//     subpass with another depth attachment, a suspended dynamic pass) are dropped and counted.
+//   - A copy cannot be recorded inside a render pass. The core's requests come at the end of a pass ("unbind"): the
+//   copy
+//     goes after the end, in the attachment's final layout (dynamic rendering: the layout it rendered in). A clear
+//     request at the start of a pass copies before the begin, in the attachment's initial layout; UNDEFINED there means
+//     the contents are not kept, and there is nothing to copy. Requests that fall inside a pass (vkCmdClearAttachments,
+//     a subpass with another depth attachment, a suspended dynamic pass) are dropped and counted.
 //   - Draws recorded into a secondary command buffer that continues a render pass are kept with it, and counted for the
 //     primary when vkCmdExecuteCommands runs them there.
 
@@ -129,7 +130,8 @@ class Tracker
   public:
     explicit Tracker(native::DepthFinderCore& core) : _core(core) {}
 
-    // ---- what the game made ---------------------------------------------------------------------------------------------
+    // ---- what the game made
+    // ---------------------------------------------------------------------------------------------
     void OnImage(VkImage image, const ImageInfo& info)
     {
         std::unique_lock lock(_resources);
@@ -184,7 +186,8 @@ class Tracker
         return true;
     }
 
-    // ---- what a command buffer does -------------------------------------------------------------------------------------
+    // ---- what a command buffer does
+    // -------------------------------------------------------------------------------------
 
     // vkBeginCommandBuffer (and an implicit reset). A secondary buffer that continues a render pass keeps its draws.
     void Begin(VkCommandBuffer cmd, bool secondaryContinue)
@@ -272,8 +275,8 @@ class Tracker
                 depth = ResolveLocked(pass->second, subpass, begin);
         }
 
-        const auto request =
-            _core.OnDepthBound((uint64_t) cmd, depth.image != VK_NULL_HANDLE, depth.image != VK_NULL_HANDLE ? &depth.buffer : nullptr);
+        const auto request = _core.OnDepthBound((uint64_t) cmd, depth.image != VK_NULL_HANDLE,
+                                                depth.image != VK_NULL_HANDLE ? &depth.buffer : nullptr);
         Dropped(request);
 
         std::lock_guard lock(_commands);
@@ -457,7 +460,7 @@ class Tracker
     {
         VkImage depth = VK_NULL_HANDLE; // bound now
         VkImageLayout finalLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-        PassBegin begin;                // the render pass being recorded (not its pointers: only used for the ids)
+        PassBegin begin; // the render pass being recorded (not its pointers: only used for the ids)
         uint32_t subpass = 0;
         std::vector<VkImageView> views; // an imageless framebuffer's views, kept for NextSubpass
         bool suspending = false;

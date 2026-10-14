@@ -91,8 +91,8 @@ constexpr uint64_t kRetireAfterPresents = 8;
 
 std::mutex g_copyMutex;
 CopyBuffer g_slots[kSlots];
-int g_write = 0;  // the slot this frame's copies go into
-int g_read = -1;  // the slot of the frame being presented, -1 none
+int g_write = 0; // the slot this frame's copies go into
+int g_read = -1; // the slot of the frame being presented, -1 none
 uint64_t g_presents = 0;
 std::vector<Retired> g_retired;
 std::atomic<const char*> g_notReadable { nullptr };
@@ -235,7 +235,8 @@ void Record(VkCommandBuffer cmd, const Copy& copy)
 
 bool Watching() { return g_installed.load(std::memory_order_relaxed) && g_core.Active(); }
 
-// ---- the resource hooks -----------------------------------------------------------------------------------------------
+// ---- the resource hooks
+// -----------------------------------------------------------------------------------------------
 
 PFN_vkCreateImage o_vkCreateImage = nullptr;
 PFN_vkDestroyImage o_vkDestroyImage = nullptr;
@@ -248,8 +249,8 @@ PFN_vkCreateRenderPass2 o_vkCreateRenderPass2 = nullptr;
 PFN_vkCreateRenderPass2KHR o_vkCreateRenderPass2KHR = nullptr;
 PFN_vkDestroyRenderPass o_vkDestroyRenderPass = nullptr;
 
-VkResult VKAPI_CALL hkCreateImage(VkDevice device, const VkImageCreateInfo* info, const VkAllocationCallbacks* allocator,
-                                  VkImage* image)
+VkResult VKAPI_CALL hkCreateImage(VkDevice device, const VkImageCreateInfo* info,
+                                  const VkAllocationCallbacks* allocator, VkImage* image)
 {
     const bool watch = g_installed.load(std::memory_order_relaxed) && info != nullptr && IsDepthFormat(info->format);
     VkImageCreateInfo local {};
@@ -268,8 +269,8 @@ VkResult VKAPI_CALL hkCreateImage(VkDevice device, const VkImageCreateInfo* info
 
     if (watch && result == VK_SUCCESS && image != nullptr)
     {
-        g_tracker.OnImage(*image, { info->format, info->extent.width, info->extent.height, info->samples,
-                                    info->usage });
+        g_tracker.OnImage(*image,
+                          { info->format, info->extent.width, info->extent.height, info->samples, info->usage });
     }
 
     return result;
@@ -326,8 +327,7 @@ VkResult VKAPI_CALL hkCreateFramebuffer(VkDevice device, const VkFramebufferCrea
     return result;
 }
 
-void VKAPI_CALL hkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer,
-                                     const VkAllocationCallbacks* allocator)
+void VKAPI_CALL hkDestroyFramebuffer(VkDevice device, VkFramebuffer framebuffer, const VkAllocationCallbacks* allocator)
 {
     if (g_installed.load(std::memory_order_relaxed) && framebuffer != VK_NULL_HANDLE)
         g_tracker.OnFramebufferDestroyed(framebuffer);
@@ -340,8 +340,7 @@ VkResult VKAPI_CALL hkCreateRenderPass(VkDevice device, const VkRenderPassCreate
 {
     const VkResult result = o_vkCreateRenderPass(device, info, allocator, renderPass);
 
-    if (g_installed.load(std::memory_order_relaxed) && result == VK_SUCCESS && info != nullptr &&
-        renderPass != nullptr)
+    if (g_installed.load(std::memory_order_relaxed) && result == VK_SUCCESS && info != nullptr && renderPass != nullptr)
     {
         GenericDepthVkEvents::RenderPassInfo pass;
 
@@ -395,8 +394,7 @@ VkResult VKAPI_CALL hkCreateRenderPass2(VkDevice device, const VkRenderPassCreat
 {
     const VkResult result = o_vkCreateRenderPass2(device, info, allocator, renderPass);
 
-    if (g_installed.load(std::memory_order_relaxed) && result == VK_SUCCESS && info != nullptr &&
-        renderPass != nullptr)
+    if (g_installed.load(std::memory_order_relaxed) && result == VK_SUCCESS && info != nullptr && renderPass != nullptr)
         g_tracker.OnRenderPass(*renderPass, FromCreateInfo2(info));
 
     return result;
@@ -407,8 +405,7 @@ VkResult VKAPI_CALL hkCreateRenderPass2KHR(VkDevice device, const VkRenderPassCr
 {
     const VkResult result = o_vkCreateRenderPass2KHR(device, info, allocator, renderPass);
 
-    if (g_installed.load(std::memory_order_relaxed) && result == VK_SUCCESS && info != nullptr &&
-        renderPass != nullptr)
+    if (g_installed.load(std::memory_order_relaxed) && result == VK_SUCCESS && info != nullptr && renderPass != nullptr)
         g_tracker.OnRenderPass(*renderPass, FromCreateInfo2(info));
 
     return result;
@@ -699,8 +696,8 @@ void OnPresent(VkDevice device, uint32_t width, uint32_t height)
 
     g_core.SetSnapshotsWanted(Config::Instance()->DlssNrNativeMotion.value_or_default());
     g_core.BeginPresent(width, height);
-    const bool stoodDown = g_core.EndPresent(width, height,
-                                             Config::Instance()->DlssNrNativeDepthWarmupFrames.value_or_default());
+    const bool stoodDown =
+        g_core.EndPresent(width, height, Config::Instance()->DlssNrNativeDepthWarmupFrames.value_or_default());
 
     std::lock_guard lock(g_copyMutex);
     ++g_presents;

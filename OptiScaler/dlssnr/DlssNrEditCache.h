@@ -27,7 +27,9 @@ constexpr uint32_t kAutoCrossfade[kMaxInterval + 1] = { 1, 1, 2, 3, 3, 4, 4, 5, 
 inline uint32_t CrossfadeFor(uint32_t interval, uint32_t crossfade)
 {
     if (crossfade == 0)
-        return kAutoCrossfade[interval < kMinInterval ? kMinInterval : interval > kMaxInterval ? kMaxInterval : interval];
+        return kAutoCrossfade[interval < kMinInterval   ? kMinInterval
+                              : interval > kMaxInterval ? kMaxInterval
+                                                        : interval];
     return crossfade > kMaxCrossfade ? kMaxCrossfade : crossfade;
 }
 
@@ -42,29 +44,29 @@ struct Inputs
     bool targetWritable = true; // the output takes a UAV (the cache writes it in place)
     bool workAbove100 = false;  // Model resolution above 100%
     bool edgeCompression = false;
-    bool convertedEncoding = false; // a forced gamma 2.2 / PQ encoding converted at the pass's edges (not supported)
-    bool blocked = false;           // Tune, frame hold, a capture: the real model must run
-    bool debugOrCompare = false;    // a debug view or Compare is on: they show the model's own answer
-    bool reset = false;             // the game reset its history (a cut) or the model starts over
+    bool convertedEncoding = false;  // a forced gamma 2.2 / PQ encoding converted at the pass's edges (not supported)
+    bool blocked = false;            // Tune, frame hold, a capture: the real model must run
+    bool debugOrCompare = false;     // a debug view or Compare is on: they show the model's own answer
+    bool reset = false;              // the game reset its history (a cut) or the model starts over
     unsigned long long revision = 0; // changes when anything that changes the model's answer changes
     uint32_t width = 0, height = 0;  // output size
     uint32_t motionWidth = 0, motionHeight = 0;
-    unsigned long long clock = 0;    // the frame clock (present epoch)
+    unsigned long long clock = 0; // the frame clock (present epoch)
 };
 
 // What to do on this frame.
 struct Step
 {
-    bool runs = false;     // the cache is on for this frame (its ring is written)
-    bool refresh = false;  // the model runs; its answer becomes the anchor
-    bool cached = false;   // the model is skipped; the carried edit is shown
+    bool runs = false;    // the cache is on for this frame (its ring is written)
+    bool refresh = false; // the model runs; its answer becomes the anchor
+    bool cached = false;  // the model is skipped; the carried edit is shown
     uint32_t ringSlice = 0;
-    uint32_t traceSteps = 0;   // cached: frames back to the anchor; refresh: frames back to the last model run (compose)
-    bool firstCarried = false; // cached: last frame was the anchor
-    bool composeForModel = false; // refresh after cached frames: hand the model vectors back to its last run
-    uint32_t fadeSteps = 0;    // frames back to the fade source (0 = no crossfade on this frame)
-    float fadeWeight = 1.0f;   // how much of the new edit is shown
-    float age = 0.0f;          // frames since the anchor over the interval (debug view)
+    uint32_t traceSteps = 0; // cached: frames back to the anchor; refresh: frames back to the last model run (compose)
+    bool firstCarried = false;         // cached: last frame was the anchor
+    bool composeForModel = false;      // refresh after cached frames: hand the model vectors back to its last run
+    uint32_t fadeSteps = 0;            // frames back to the fade source (0 = no crossfade on this frame)
+    float fadeWeight = 1.0f;           // how much of the new edit is shown
+    float age = 0.0f;                  // frames since the anchor over the interval (debug view)
     const char* standsAside = nullptr; // why it does not run (null while it runs or is off)
 };
 

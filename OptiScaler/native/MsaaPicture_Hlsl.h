@@ -1,15 +1,15 @@
 #pragma once
 
-// The write-back of native/MsaaPictureDx11.cpp: Optical F5Low's single-sample result drawn into a game's multisampled back
-// buffer.
-// Compiled ahead of time into native/F5LowShaderBytecode.h by tests/nr_shader_bytecode_smoke.cpp (run it with --write
-// after changing anything here; without, it checks the embedded bytecode is current).
+// The write-back of native/MsaaPictureDx11.cpp: Optical F5Low's single-sample result drawn into a game's multisampled
+// back buffer. Compiled ahead of time into native/F5LowShaderBytecode.h by tests/nr_shader_bytecode_smoke.cpp (run it
+// with --write after changing anything here; without, it checks the embedded bytecode is current).
 
 namespace MsaaPictureHlsl
 {
-// One triangle that covers the whole target, from the vertex number alone: the caller binds no vertex buffer and no input
-// layout. The pixel shader reads the single-sample picture at the pixel's own position, so a target of the same size gets it
-// 1:1. It runs once per pixel and its colour goes to every covered sample, which is all of them for this triangle.
+// One triangle that covers the whole target, from the vertex number alone: the caller binds no vertex buffer and no
+// input layout. The pixel shader reads the single-sample picture at the pixel's own position, so a target of the same
+// size gets it 1:1. It runs once per pixel and its colour goes to every covered sample, which is all of them for this
+// triangle.
 inline constexpr const char* kSource = R"HLSL(
 Texture2D<float4> Src : register(t0);
 

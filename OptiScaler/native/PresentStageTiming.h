@@ -12,8 +12,8 @@
 namespace native::presenttiming
 {
 // What hkvkQueuePresentKHR times (Present = the original vkQueuePresentKHR, the hidden one when bridged), and what
-// FGHooks::FGPresent times (FrameGenerationPresent = o_FGSCPresent, XeFG's own present). FrameGenerationMutexWait is the
-// time FGPresent waited for frame generation's mutex before it; on the game's present thread that wait sits inside
+// FGHooks::FGPresent times (FrameGenerationPresent = o_FGSCPresent, XeFG's own present). FrameGenerationMutexWait is
+// the time FGPresent waited for frame generation's mutex before it; on the game's present thread that wait sits inside
 // BridgePresent, so a stall there says whether it was our work or the wait for the other present.
 enum class Stage : uint32_t
 {
@@ -56,29 +56,21 @@ inline constexpr double kStallLogIntervalMs = 1000.0;
 
 // FGPresent's own timing is a diagnostic of the Vulkan bridge (a game on D3D12 or D3D11 frame generation would log a
 // summary every 300 presents and a warning for every loading screen): only a bridged Vulkan game gets it.
-inline constexpr bool FrameGenerationTimingWanted(bool vulkanBridgeInterop)
-{
-    return vulkanBridgeInterop;
-}
+inline constexpr bool FrameGenerationTimingWanted(bool vulkanBridgeInterop) { return vulkanBridgeInterop; }
 
 // How long this thread's last FGPresent waited for frame generation's mutex. FGPresent sets it on every call (0 when it
-// took no lock); the game's present hook takes it after the bridge's present (the same thread) and records it as a stage.
+// took no lock); the game's present hook takes it after the bridge's present (the same thread) and records it as a
+// stage.
 inline double& ThreadMutexWaitMs()
 {
     thread_local double waitMs = 0.0;
     return waitMs;
 }
 
-inline void NoteFrameGenerationMutexWait(double ms)
-{
-    ThreadMutexWaitMs() = ms;
-}
+inline void NoteFrameGenerationMutexWait(double ms) { ThreadMutexWaitMs() = ms; }
 
 // Read and keep: FGPresent's own timing
-inline double PeekFrameGenerationMutexWait()
-{
-    return ThreadMutexWaitMs();
-}
+inline double PeekFrameGenerationMutexWait() { return ThreadMutexWaitMs(); }
 
 // Read and clear: a frame whose present never reached FGPresent must not report the last frame's wait
 inline double TakeFrameGenerationMutexWait()
@@ -92,10 +84,7 @@ class StageTiming
 {
   public:
     // This present's time in `stage`, ms. Stages not recorded count as 0 for that present.
-    void Record(Stage stage, double ms)
-    {
-        _current[Index(stage)] = ms;
-    }
+    void Record(Stage stage, double ms) { _current[Index(stage)] = ms; }
 
     struct Outcome
     {
@@ -140,16 +129,10 @@ class StageTiming
     }
 
     // The line for Outcome::stall: each stage's time in this present
-    const std::string& StallLine() const
-    {
-        return _stallLine;
-    }
+    const std::string& StallLine() const { return _stallLine; }
 
     // The line for Outcome::summary
-    const std::string& SummaryLine() const
-    {
-        return _summaryLine;
-    }
+    const std::string& SummaryLine() const { return _summaryLine; }
 
     void Restart()
     {
@@ -162,10 +145,7 @@ class StageTiming
     static constexpr size_t N = static_cast<size_t>(Stage::Count);
     using Row = std::array<double, N>;
 
-    static size_t Index(Stage stage)
-    {
-        return static_cast<size_t>(stage);
-    }
+    static size_t Index(Stage stage) { return static_cast<size_t>(stage); }
 
     // Stages that never recorded anything are left out
     static std::string Format(const char* what, const Row& values, const Row* averages)

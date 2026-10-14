@@ -3,13 +3,27 @@ param(
     [string]$SourceDirectory
 )
 $ErrorActionPreference = 'Stop'
+
+# MSBuild can launch Windows PowerShell with PowerShell 7's PSModulePath.
+# Use the .NET API so verification does not depend on Get-FileHash autoloading.
+function Get-Sm86Sha256([string]$Path) {
+    $algorithm = [Security.Cryptography.SHA256]::Create()
+    $stream = [IO.File]::OpenRead($Path)
+    try {
+        return [BitConverter]::ToString($algorithm.ComputeHash($stream)).Replace('-', '').ToLowerInvariant()
+    } finally {
+        $stream.Dispose()
+        $algorithm.Dispose()
+    }
+}
+
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $manifest = Get-Content -LiteralPath "$PSScriptRoot\redist\sm86\manifest.json" -Raw | ConvertFrom-Json
 New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 foreach ($entry in $manifest.files) {
     $target = Join-Path $Destination $entry.path
     if ((Test-Path -LiteralPath $target) -and
-        (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash -eq $entry.sha256) { continue }
+        (Get-Sm86Sha256 $target) -eq $entry.sha256) { continue }
     $temp = "$target.$([Guid]::NewGuid().ToString('N')).tmp"
     try {
         if ($SourceDirectory) {
@@ -18,7 +32,7 @@ foreach ($entry in $manifest.files) {
             $url = "https://raw.githubusercontent.com/$($manifest.repository)/$($manifest.commit)/$($entry.path)"
             Invoke-WebRequest -Uri $url -OutFile $temp -UseBasicParsing
         }
-        if ((Get-FileHash -LiteralPath $temp -Algorithm SHA256).Hash -ne $entry.sha256) {
+        if ((Get-Sm86Sha256 $temp) -ne $entry.sha256) {
             throw "SM86 checksum mismatch: $($entry.path)"
         }
         Move-Item -LiteralPath $temp -Destination $target -Force

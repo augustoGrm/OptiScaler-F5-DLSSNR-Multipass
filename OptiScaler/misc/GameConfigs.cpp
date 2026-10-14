@@ -138,9 +138,28 @@ const std::vector<GameConfig> gameConfigs = {
     { .exes = { "kingdomcome.exe" }, .quirks = { GameQuirk::Kcd2DlssgHdr10 } },
     { .exes = { "mgsvtpp.exe" }, .quirks = { GameQuirk::XeFGBridgeResizeAsCreated } },
     // REFramework compatibility is resolved after the per-game defaults are applied.
-    { .exes = { "re2.exe", "re3.exe", "re4.exe", "re7.exe", "re8.exe", "re9.exe", "re9demo.exe", "devilmaycry5.exe", "streetfighter6.exe", "dd2.exe", "dd2ccs.exe", "monsterhunterwilds.exe", "monsterhunterrise.exe", "monster_hunter_stories_3_twisted_reflection.exe", "pragmata.exe", "pragmata_sketchbook.exe", "drdr.exe", "kunitsugami.exe", "kunitsugamidemo.exe", "onimushawots.exe", "onimushawots_demo.exe" },
+    { .exes = { "re2.exe",
+                "re3.exe",
+                "re4.exe",
+                "re7.exe",
+                "re8.exe",
+                "re9.exe",
+                "re9demo.exe",
+                "devilmaycry5.exe",
+                "streetfighter6.exe",
+                "dd2.exe",
+                "dd2ccs.exe",
+                "monsterhunterwilds.exe",
+                "monsterhunterrise.exe",
+                "monster_hunter_stories_3_twisted_reflection.exe",
+                "pragmata.exe",
+                "pragmata_sketchbook.exe",
+                "drdr.exe",
+                "kunitsugami.exe",
+                "kunitsugamidemo.exe",
+                "onimushawots.exe",
+                "onimushawots_demo.exe" },
       .quirks = { GameQuirk::REFrameworkCompat } },
-
 
     // Red Dead Redemption 2
     // Spoofing causes FSR2 inputs crash, DLSS inputs need OptiPatcher to avoid artifacts/crashes anyway

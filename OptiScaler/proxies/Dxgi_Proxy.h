@@ -75,8 +75,8 @@ class DxgiProxy
 
     // Windows' own DXGI factory, for a swapchain on a real D3D12 queue when the loaded dxgi.dll is a layer that cannot
     // make one: dxvk's returns DXGI_ERROR_UNSUPPORTED, so frame generation's D3D12 swapchain for a dxvk game
-    // (native/VkPresentBridge.h, NativeDxvkVulkan) comes from here. Loaded from System32 the way OptiScaler loads it for
-    // itself as dxgi.dll. Not hooked: its methods are called directly. The caller owns the reference; null when the
+    // (native/VkPresentBridge.h, NativeDxvkVulkan) comes from here. Loaded from System32 the way OptiScaler loads it
+    // for itself as dxgi.dll. Not hooked: its methods are called directly. The caller owns the reference; null when the
     // system DLL cannot be told apart from the loaded one or the factory fails.
     static IDXGIFactory2* CreateSystemFactory2()
     {

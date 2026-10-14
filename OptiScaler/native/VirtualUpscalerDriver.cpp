@@ -22,8 +22,8 @@ namespace
 // The feature the virtual upscaler is running now, for IsVirtualUpscalerFeature (read by the menu thread).
 std::atomic<const void*> g_virtualFeature { nullptr };
 
-// Our feature's handle id: never in the real NGX handle tables (HandleToFeature, Dx12Contexts), so no game call finds it. It is
-// in State::changeBackend, so the menu's backend switch reaches it like any other feature.
+// Our feature's handle id: never in the real NGX handle tables (HandleToFeature, Dx12Contexts), so no game call finds
+// it. It is in State::changeBackend, so the menu's backend switch reaches it like any other feature.
 constexpr UINT kVirtualHandleId = 0x4E524631; // 'NRF1'
 
 // Releases a texture once the GPU can no longer be using it, by the same delay Util::DelayedDestroy gives features.
@@ -83,10 +83,10 @@ bool IsUnrealGame()
            state.gameQuirks & GameQuirk::ForceUnrealEngine;
 }
 
-// The FSR and XeSS backends take each input in the state its *ResourceBarrier setting names (and hand it back in it), and in
-// an Unreal game set colour and motion to RENDER_TARGET and UNORDERED_ACCESS on their first Evaluate. Setting those here,
-// before UpscaleStart, makes frame generation's copies (which read the same settings) agree with the backend from the first
-// frame. DLSS takes everything in its working state.
+// The FSR and XeSS backends take each input in the state its *ResourceBarrier setting names (and hand it back in it),
+// and in an Unreal game set colour and motion to RENDER_TARGET and UNORDERED_ACCESS on their first Evaluate. Setting
+// those here, before UpscaleStart, makes frame generation's copies (which read the same settings) agree with the
+// backend from the first frame. DLSS takes everything in its working state.
 bool UsesBarrierSettings(Upscaler backend) { return backend != Upscaler::DLSS && backend != Upscaler::DLSSD; }
 
 D3D12_RESOURCE_STATES SettingOr(const CustomOptional<int32_t, NoDefault>& setting, D3D12_RESOURCE_STATES working)
@@ -125,8 +125,8 @@ void VirtualUpscalerDriver::DropFeature(bool destroyFgContext)
 {
     auto& state = State::Instance();
 
-    // What NVSDK_NGX_D3D12_ReleaseFeature (destroyFgContext) and FeatureProvider_Dx12::ChangeFeature (not) do for a game's
-    // feature.
+    // What NVSDK_NGX_D3D12_ReleaseFeature (destroyFgContext) and FeatureProvider_Dx12::ChangeFeature (not) do for a
+    // game's feature.
     if (state.currentFG != nullptr && state.activeFgInput == FGInput::Upscaler)
     {
         state.fgChanged = true;
@@ -183,8 +183,8 @@ bool VirtualUpscalerDriver::CreateFeature(ID3D12GraphicsCommandList* cmd, const 
     _params->Set(NVSDK_NGX_Parameter_OutHeight, key.height);
     _params->Set(NVSDK_NGX_Parameter_PerfQualityValue, 1);
 
-    // Not jittered and not low-res: the guides are output-sized, unjittered motion. AutoExposure because there is no exposure
-    // texture to give: without both, FFXFeatureDx12::EvaluateInternal returns true having dispatched nothing.
+    // Not jittered and not low-res: the guides are output-sized, unjittered motion. AutoExposure because there is no
+    // exposure texture to give: without both, FFXFeatureDx12::EvaluateInternal returns true having dispatched nothing.
     unsigned int flags = NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
 
     if (key.depthReversed)
@@ -278,7 +278,8 @@ bool VirtualUpscalerDriver::EnsureFeature(ID3D12GraphicsCommandList* cmd, const 
     _failed = false;
     auto& state = State::Instance();
 
-    // GetFeature recorded what it built in Dx12Upscaler, which WantedBackend reads: the key matches it from the next frame on.
+    // GetFeature recorded what it built in Dx12Upscaler, which WantedBackend reads: the key matches it from the next
+    // frame on.
     _featureKey = key;
     _featureKey.backend = (int) WantedBackend();
     _backendName = _feature->Name();
@@ -409,11 +410,13 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     key.hdr = frame.space == ColorSpace::ScRgb; // PQ is a perceptual encoding, as sRGB is: passed as it comes
     key.backend = (int) WantedBackend();
 
-    // No usable size yet (a swapchain still being made or resized; the FSR backend throws below a few pixels): wait for the next frame, build nothing.
+    // No usable size yet (a swapchain still being made or resized; the FSR backend throws below a few pixels): wait for
+    // the next frame, build nothing.
     if (key.width < 16 || key.height < 16)
     {
         if (_zeroSizeFrames++ == 0)
-            LOG_WARN("Virtual upscaler: the picture is {}x{}, too small, waiting for a real size", key.width, key.height);
+            LOG_WARN("Virtual upscaler: the picture is {}x{}, too small, waiting for a real size", key.width,
+                     key.height);
 
         return false;
     }
@@ -426,8 +429,8 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     // Our own call, for all of it: GetFeature and Evaluate both tell the depth finder a game is calling an upscaler.
     SyntheticUpscalerCallScope guard;
 
-    // A backend switch from the menu, or a backend asking to be rebuilt (FeatureProvider_Dx12::ChangeFeature's job for a game's
-    // feature).
+    // A backend switch from the menu, or a backend asking to be rebuilt (FeatureProvider_Dx12::ChangeFeature's job for
+    // a game's feature).
     bool rebuild = false;
 
     if (const auto change = state.changeBackend.find(kVirtualHandleId);
@@ -452,7 +455,8 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
                        D3D12_RESOURCE_STATE_UNORDERED_ACCESS, "output"))
         return false;
 
-    if (copyIn && !EnsureTexture(_input, _inputKey, key, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, "input"))
+    if (copyIn &&
+        !EnsureTexture(_input, _inputKey, key, D3D12_RESOURCE_FLAG_NONE, D3D12_RESOURCE_STATE_COPY_DEST, "input"))
         return false;
 
     // The backend and frame generation need depth, NR does not: with none, they get an all-far depth and NR gets none.
@@ -461,8 +465,8 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     if (depth == nullptr)
         return false;
 
-    // Frame generation's Upscaler input only has a device once NVSDK_NGX_D3D12_Init gave it one, which a game with no upscaler
-    // never calls.
+    // Frame generation's Upscaler input only has a device once NVSDK_NGX_D3D12_Init gave it one, which a game with no
+    // upscaler never calls.
     UpscalerInputsDx12::Init(_device);
 
     const auto backend = _feature->GetUpscalerType();
@@ -495,8 +499,8 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     const auto inDepth = usesSettings ? fgDepth : kRead;
     const auto inOutput = usesSettings ? fgOutput : kWrite;
 
-    // The colour the backend reads: the picture itself, or a typed copy of it. The picture stays in COPY_SOURCE until the
-    // result is copied back over it.
+    // The colour the backend reads: the picture itself, or a typed copy of it. The picture stays in COPY_SOURCE until
+    // the result is copied back over it.
     ID3D12Resource* color = frame.color;
     D3D12_RESOURCE_STATES pictureNow = frame.pictureState;
 
@@ -531,8 +535,8 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     Transition(cmd, depth, kRead, inDepth);
     Transition(cmd, _output, kWrite, inOutput);
 
-    // DLSS-NR hangs off NVSDK_NGX_D3D12_EvaluateFeature around the upscaler, not off the feature: before it (Run before SR,
-    // or the finished-picture capture of depth and motion) and after it (over Output).
+    // DLSS-NR hangs off NVSDK_NGX_D3D12_EvaluateFeature around the upscaler, not off the feature: before it (Run before
+    // SR, or the finished-picture capture of depth and motion) and after it (over Output).
     DlssNr::EvaluateBeforeUpscale(cmd, _params);
     _params->Set(NVSDK_NGX_Parameter_Depth, depth);
 

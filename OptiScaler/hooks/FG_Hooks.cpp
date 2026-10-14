@@ -1231,27 +1231,29 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     // Work on the game's picture before frame generation takes it must go on the queue frame generation takes it on.
     ID3D12CommandQueue* gameQueue = state.currentCommandQueue;
 
-    if (auto* fg12 = dynamic_cast<IFGFeature_Dx12*>(state.currentFG); fg12 != nullptr && fg12->GameCommandQueue() != nullptr)
+    if (auto* fg12 = dynamic_cast<IFGFeature_Dx12*>(state.currentFG);
+        fg12 != nullptr && fg12->GameCommandQueue() != nullptr)
     {
         static bool logged = false;
 
         if (!logged && fg12->GameCommandQueue() != state.currentCommandQueue)
         {
             logged = true;
-            LOG_INFO("FGPresent: frame generation's game queue {:X} is not State::currentCommandQueue {:X}; native input "
-                     "and the finished-picture pass use frame generation's",
-                     (size_t) fg12->GameCommandQueue(), (size_t) state.currentCommandQueue);
+            LOG_INFO(
+                "FGPresent: frame generation's game queue {:X} is not State::currentCommandQueue {:X}; native input "
+                "and the finished-picture pass use frame generation's",
+                (size_t) fg12->GameCommandQueue(), (size_t) state.currentCommandQueue);
         }
 
         gameQueue = fg12->GameCommandQueue();
     }
 
-    // Native input runs here, on the game's picture and queue, ahead of frame generation and before its lock below: when it
-    // presents to the virtual upscaler, that call feeds frame generation (UpscaleStart takes the same lock).
+    // Native input runs here, on the game's picture and queue, ahead of frame generation and before its lock below:
+    // when it presents to the virtual upscaler, that call feeds frame generation (UpscaleStart takes the same lock).
     //
-    // Not under the Vulkan bridge's D3D12 swapchain: its picture belongs to the Vulkan driver (hooks/Vulkan_Hooks.cpp), which
-    // runs the same step on the Vulkan game's presents. The interop state alone is not enough to tell: it is reset when a
-    // device of the game's is destroyed, and this driver then ran on the bridge's own D3D12 device.
+    // Not under the Vulkan bridge's D3D12 swapchain: its picture belongs to the Vulkan driver (hooks/Vulkan_Hooks.cpp),
+    // which runs the same step on the Vulkan game's presents. The interop state alone is not enough to tell: it is
+    // reset when a device of the game's is destroyed, and this driver then ran on the bridge's own D3D12 device.
     if (willPresent && state.swapchainInteropApi == SwapchainInteropApi::None && gameQueue != nullptr &&
         state.currentD3D12Device != nullptr && !VkPresentBridge::OutputActive())
     {
@@ -1266,9 +1268,9 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         {
             std::optional<double> upscalerTimeOpt {};
 
-            // ReadUpscalerTime takes a void*: a plain D3D12 feature casts it to ID3D12CommandQueue*, so it must never get
-            // the D3D11 context. Under Dx11wDx12 that feature is native::VirtualUpscalerDriver's, recorded on the queue
-            // gameQueue names (WithDx12's paired one).
+            // ReadUpscalerTime takes a void*: a plain D3D12 feature casts it to ID3D12CommandQueue*, so it must never
+            // get the D3D11 context. Under Dx11wDx12 that feature is native::VirtualUpscalerDriver's, recorded on the
+            // queue gameQueue names (WithDx12's paired one).
             const bool pureDx12Feature = currentFeature->Api() == API::DX12 && !currentFeature->IsWithDx12();
 
             if (pureDx12Feature && state.swapchainInteropApi != SwapchainInteropApi::None)
@@ -1537,11 +1539,12 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     if (state.swapchainInteropApi == SwapchainInteropApi::None)
         Hudfix_Dx12::PresentEnd();
 
-    // A dxvk game's frame generation through the Vulkan present bridge (NativeDxvkVulkan) presents a real D3D12 swapchain
-    // here, as a native Vulkan game's does: the limiter applies to it.
+    // A dxvk game's frame generation through the Vulkan present bridge (NativeDxvkVulkan) presents a real D3D12
+    // swapchain here, as a native Vulkan game's does: the limiter applies to it.
     if (willPresent && !state.reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
         state.activeFgOutput != FGOutput::NoFG &&
-        (!IdentifyGpu::getPrimaryGpu().dxgiIsDxvk || VkPresentBridge::DxvkThroughVulkan()) && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
+        (!IdentifyGpu::getPrimaryGpu().dxgiIsDxvk || VkPresentBridge::DxvkThroughVulkan()) && !XellHooks::canLimit() &&
+        !InputCommon::can_limit_fps())
     {
         // Shown frames per rendered one only while it generates (native::lowlatency::ShownPerRendered)
         FrameLimit::sleep(native::lowlatency::ShownPerRendered(fg != nullptr && fg->IsGenerating(),
@@ -1623,8 +1626,8 @@ ULONG FGHooks::hkFGRelease(IUnknown* This)
             ((IDXGISwapChain*) This)->GetDesc(&scDesc);
 
             // The loops below release references OptiScaler never took (a backbuffer down to one, the game's wrapped
-            // swapchain down to none). Next to a REFramework drawing on XeFG's frames those are REFramework's own, and it
-            // releases them again later: misc/REFrameworkCompat.h leaves both alone.
+            // swapchain down to none). Next to a REFramework drawing on XeFG's frames those are REFramework's own, and
+            // it releases them again later: misc/REFrameworkCompat.h leaves both alone.
             const bool onlyOwnReferences = REFrameworkCompat::Active();
 
             if (onlyOwnReferences)

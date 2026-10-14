@@ -63,7 +63,6 @@ enum class UiTargetMode
     HLG
 };
 
-
 #define MARK_ALL_BACKENDS_CHANGED()                                                                                    \
     for (auto& singleChangeBackend : State::Instance().changeBackend)                                                  \
         singleChangeBackend.second = true;
@@ -1973,8 +1972,8 @@ void MenuCommon::UpdateRenderTiming(RenderMenuContext& ctx)
 
     // A dxvk game on the Vulkan bridge: the menu is drawn on the game's presents only, frame generation's swapchain
     // presents the generated frames past our hooks. The shown frames come that many times as often.
-    if (auto fg = state.currentFG; VkPresentBridge::MenuOnGamePresents() && fg != nullptr && fg->IsGenerating() &&
-                                   frameTime > 0.0)
+    if (auto fg = state.currentFG;
+        VkPresentBridge::MenuOnGamePresents() && fg != nullptr && fg->IsGenerating() && frameTime > 0.0)
     {
         frameTime /= (double) (fg->GetInterpolatedFrameCount() + 1);
         frameRate = 1000.0 / frameTime;
@@ -2410,8 +2409,7 @@ void MenuCommon::RenderNrCompareTags()
         return;
 
     const bool swap = config->DlssNrCompareSwap.value_or_default();
-    const float split = mode == 1 ? 0.5f
-                                  : std::clamp(config->DlssNrCompareSplit.value_or_default(), 0.0f, 1.0f);
+    const float split = mode == 1 ? 0.5f : std::clamp(config->DlssNrCompareSplit.value_or_default(), 0.0f, 1.0f);
     const float splitX = split * screen.x;
 
     const float scale = std::clamp(config->DlssNrTagScale.value_or_default(), 0.5f, 5.0f);
@@ -2455,7 +2453,6 @@ void MenuCommon::RenderNrCompareTags()
 void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
 {
     RenderNrCompareTags();
-
 
     auto& state = ctx.state;
     auto config = ctx.config;
@@ -2882,10 +2879,11 @@ void MenuCommon::RenderPerformanceOverlay(RenderMenuContext& ctx)
                     // is its own, so it is only shown next to the markers' ID
                     if (fg != nullptr && state.activeFgOutput == FGOutput::XeFG && fg->IsActive())
                     {
-                        ImGui::Text("XeFG ID: %u (%s), marker ID: %llu", state.xefgPresentId.load(std::memory_order_relaxed),
-                                    state.xefgPresentIdFollowsMarkers.load(std::memory_order_relaxed) ? "follows the markers"
-                                                                                                                      : "own numbering",
-                                    markerId);
+                        ImGui::Text(
+                            "XeFG ID: %u (%s), marker ID: %llu", state.xefgPresentId.load(std::memory_order_relaxed),
+                            state.xefgPresentIdFollowsMarkers.load(std::memory_order_relaxed) ? "follows the markers"
+                                                                                              : "own numbering",
+                            markerId);
                     }
                     else
                     {
@@ -3801,8 +3799,7 @@ static bool RenderRatioOverrideSlider(const char* label, CustomOptional<int, NoD
 // Options for the built-in RTX 40 unlock, shown only while it is on and not overridden by another
 // unlocker. Startup settings: they apply when DLSSG loads, so a change needs a restart, and the result of
 // each is shown directly under it.
-static void RenderAdaUnlockOptions(Config* config, const MfgUnlock::Status& status,
-                                   void (*showHelp)(const char*))
+static void RenderAdaUnlockOptions(Config* config, const MfgUnlock::Status& status, void (*showHelp)(const char*))
 {
     if (!ImGui::CollapsingHeader("RTX 40 (Ada) MFG Unlock Options"))
         return;
@@ -3811,9 +3808,8 @@ static void RenderAdaUnlockOptions(Config* config, const MfgUnlock::Status& stat
 
     // Frame timing fix. Auto is resolved inline, like the RTX 20/30 "Kernel Image" combo below.
     const auto resolved = MfgUnlock::ConfiguredTemporalMethod();
-    const std::string autoLabel = resolved == MfgUnlock::TemporalMethod::None
-                                      ? "Auto (off: AdaBlackwellKernels=false)"
-                                      : "Auto (reuse Blackwell kernel)";
+    const std::string autoLabel = resolved == MfgUnlock::TemporalMethod::None ? "Auto (off: AdaBlackwellKernels=false)"
+                                                                              : "Auto (reuse Blackwell kernel)";
     const char* options[] = { autoLabel.c_str(), "Reuse Blackwell kernel", "Rewrite blend weight (PTX)" };
 
     const std::string chosen = config->FGDLSSGAdaTemporalFix.value_or("Auto");
@@ -3923,7 +3919,8 @@ static void RenderDlssgTelemetry()
 
     // Only when the symptom is there: 3X or more sent, fewer presented, and nothing pacing in software.
     if (result == 0 && sentX > 2 && presented < sentX && MfgUnlock::UnlockedMax() > 0 && !MfgUnlock::SoftwarePacing())
-        ImGui::TextColored(amber, "If the picture froze: try Software frame pacing under RTX 40 (Ada) MFG Unlock Options.");
+        ImGui::TextColored(amber,
+                           "If the picture froze: try Software frame pacing under RTX 40 (Ada) MFG Unlock Options.");
 }
 
 void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
@@ -3940,7 +3937,8 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         bool external = config->ExternalFrameGeneration.value_or_default();
         if (ImGui::Checkbox("Use external FG (restart)", &external))
             config->ExternalFrameGeneration = external;
-        ShowHelpMarker("For a separately installed FG provider. Save Settings and restart. Built-in SM86 uses its own controls above.");
+        ShowHelpMarker("For a separately installed FG provider. Save Settings and restart. Built-in SM86 uses its own "
+                       "controls above.");
     }
     bool adaUnlock = config->FGDLSSGAdaMfgUnlock.value_or_default();
     const bool disableAda = config->FGDLSSGAmpereMfgUnlock.value_or_default() || state.externalFrameGeneration;
@@ -3982,15 +3980,16 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
         RenderAdaUnlockOptions(config, status, [](const char* tip) { ShowHelpMarker(tip); });
     }
 
-
     // The bundled runtime owns the game's native Streamline swapchain. Its
     // settings remain in this menu, through its control API, with one FG engine.
     if (config->FGDLSSGAmpereMfgUnlock.value_or_default() || state.externalFrameGeneration)
     {
         if (config->FGDLSSGAmpereMfgUnlock.value_or_default())
-            ImGui::TextWrapped("Built-in NVIDIA MFG: select the multiplier above and enable DLSS Frame Generation in the game.");
+            ImGui::TextWrapped(
+                "Built-in NVIDIA MFG: select the multiplier above and enable DLSS Frame Generation in the game.");
         else
-            ImGui::TextWrapped("External FG is active. Disable FrameGen External and restart to use OptiScaler's FG outputs.");
+            ImGui::TextWrapped(
+                "External FG is active. Disable FrameGen External and restart to use OptiScaler's FG outputs.");
         return;
     }
 
@@ -6129,10 +6128,9 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         {
             if (xefgOutput)
             {
-                config->FGXeFGLowLatencyOutput = shown == Output::Reflex
-                                                     ? XefgLatency::Reflex
-                                                     : (shown == Output::AntiLag2 ? XefgLatency::AntiLag2
-                                                                                  : XefgLatency::XeLL);
+                config->FGXeFGLowLatencyOutput =
+                    shown == Output::Reflex ? XefgLatency::Reflex
+                                            : (shown == Output::AntiLag2 ? XefgLatency::AntiLag2 : XefgLatency::XeLL);
             }
             else
             {
@@ -6151,8 +6149,9 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
             config->DlssNrNativeLowLatencyBoost = boost;
         ImGui::EndDisabled();
 
-        std::string boostTip = "The GPU keeps its clocks up between frames: a little lower latency, a little more power.\n"
-                               "NVIDIA Reflex only, in OptiScaler's calls.";
+        std::string boostTip =
+            "The GPU keeps its clocks up between frames: a little lower latency, a little more power.\n"
+            "NVIDIA Reflex only, in OptiScaler's calls.";
 
         if (!boostAvailable)
         {
@@ -6355,7 +6354,8 @@ void MenuCommon::RenderFakenvapiSettings(RenderMenuContext& ctx)
     // What lowers latency (Force XeLL, Force LatencyFlex) is the Output on the low latency section; what stays here is
     // how fakenvapi does it.
     // Using state.reflexLimitsFps as a detection for Reflex being used on Nvidia
-    // With XeFG as the output the section is always up: Force Reflex is what the low latency page's notes send the player to
+    // With XeFG as the output the section is always up: Force Reflex is what the low latency page's notes send the
+    // player to
     const bool showFakenvapi = fakenvapi::isUsingAsMainNvapi() || state.activeFgOutput == FGOutput::XeFG;
 
     if (!showFakenvapi)
@@ -9874,8 +9874,6 @@ void MenuCommon::RenderShaderTimes(RenderMenuContext& ctx)
     }
 }
 
-
-
 void MenuCommon::RenderMipmapBiasWindow(RenderMenuContext& ctx, ImGuiWindowFlags flags)
 {
     auto config = ctx.config;
@@ -10331,8 +10329,8 @@ void RenderExposureScanIndicator(float alpha)
     }
 
     const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 12.0f, vp->WorkPos.y + 12.0f),
-                            ImGuiCond_Always, ImVec2(1.0f, 0.0f));
+    ImGui::SetNextWindowPos(ImVec2(vp->WorkPos.x + vp->WorkSize.x - 12.0f, vp->WorkPos.y + 12.0f), ImGuiCond_Always,
+                            ImVec2(1.0f, 0.0f));
     ImGui::SetNextWindowBgAlpha(alpha);
 
     if (ImGui::Begin("DlssNrExposureScan", nullptr,
@@ -10563,7 +10561,6 @@ void MenuCommon::HideMenu()
     io.WantCaptureMouse = _isVisible;
 }
 
-
 void MenuCommon::RenderMenuScaleSettings(RenderMenuContext& ctx)
 {
     auto config = ctx.config;
@@ -10601,7 +10598,6 @@ void MenuCommon::RenderMenuScaleSettings(RenderMenuContext& ctx)
 
     ImGui::PopItemWidth();
 }
-
 
 void MenuCommon::RenderUpscalerStateMessage(RenderMenuContext& ctx)
 {

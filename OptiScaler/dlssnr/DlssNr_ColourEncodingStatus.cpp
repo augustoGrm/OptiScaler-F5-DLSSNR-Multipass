@@ -23,8 +23,7 @@ void ReportColourEncoding(const DlssNrColourEncoding::Choice& choice, const char
         std::lock_guard<std::mutex> lock(g_mutex);
         const bool same = g_seen && g_choice.encoding == choice.encoding && g_choice.automatic == choice.automatic &&
                           g_choice.mismatch == choice.mismatch && g_choice.refused == choice.refused &&
-                          g_choice.reason == choice.reason &&
-                          g_finishedPicture == finishedPicture &&
+                          g_choice.reason == choice.reason && g_finishedPicture == finishedPicture &&
                           std::strncmp(g_format, format, sizeof(g_format) - 1) == 0;
         if (same)
             return;

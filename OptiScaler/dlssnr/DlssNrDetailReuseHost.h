@@ -4,8 +4,8 @@
 //
 // DlssNr_DetailReuse.inl (D3D12) and DlssNr_DetailReuse_Vk.inl (Vulkan) own the textures and record the GPU work. What
 // does not depend on the API lives here, once: whether reuse may run this frame and why not, the frame rate gate, the
-// cadence and its decision, the shader constants, the recent GPU times and the status the menu reads. The cadence itself
-// is DlssNrDetailReuse.h.
+// cadence and its decision, the shader constants, the recent GPU times and the status the menu reads. The cadence
+// itself is DlssNrDetailReuse.h.
 
 #include <Config.h>
 #include <State.h>
@@ -33,7 +33,8 @@ struct HostFrame
     const Config* cfg = nullptr;
     bool beforeUpscale = false;   // NR runs before SR
     bool finishedPicture = false; // NR runs on the finished picture
-    bool motionMatchesPicture = false; // the vectors were measured on this picture (DlssNrFrameInfo::MotionMatchesPicture)
+    bool motionMatchesPicture =
+        false; // the vectors were measured on this picture (DlssNrFrameInfo::MotionMatchesPicture)
     unsigned int workWidth = 0, workHeight = 0;
     unsigned int motionWidth = 0, motionHeight = 0, motionBaseX = 0, motionBaseY = 0;
     unsigned int motionAllocWidth = 0, motionAllocHeight = 0; // the motion texture itself
@@ -88,12 +89,11 @@ struct Wanted
     unsigned int spread = 1;   // frames the full frame's jump is spread over (1 = none)
 };
 
-
 // Frame generation is built from two real frames, so reused frames next to full ones show under it: the edges of the
 // screen flickered in fast motion (NBA 2K27 with OptiFG 2026-09-28, The Witcher 3 2026-09-30) until MotionGuard stopped
-// reuse from running through motion it cannot carry detail across. DetailReuseWithFG (on by default) keeps reuse running
-// here; turned off, any of these reasons stands reuse down. Returns the reason, or null when none is seen: OptiScaler's own (active, not paused), the game's DLSS-G seen through NGX, or one owned by
-// an external module.
+// reuse from running through motion it cannot carry detail across. DetailReuseWithFG (on by default) keeps reuse
+// running here; turned off, any of these reasons stands reuse down. Returns the reason, or null when none is seen:
+// OptiScaler's own (active, not paused), the game's DLSS-G seen through NGX, or one owned by an external module.
 inline const char* FrameGenerationInUse(unsigned long long present, bool vulkan)
 {
     auto& state = State::Instance();
@@ -165,7 +165,7 @@ class Host
         }
         _why = on && whyNot != nullptr ? whyNot : "";
 
-        const std::string state = !_why.empty()       ? _why
+        const std::string state = !_why.empty()    ? _why
                                   : on && w.withFg ? "available, kept on with frame generation"
                                                    : "available";
         if (state != _loggedWhy)
@@ -254,9 +254,9 @@ class Host
         params.Steady = w.steady;
         params.FillStrength = w.fill;
         // Scaled with the working size, like the colour box: the same reach on screen at any model resolution.
-        params.FillRadius = kDlssNrDetailReuseFillRadius1080p *
-                            std::clamp(std::sqrt((float) f.workWidth * (float) f.workHeight / (1920.0f * 1080.0f)),
-                                       0.5f, 2.0f);
+        params.FillRadius =
+            kDlssNrDetailReuseFillRadius1080p *
+            std::clamp(std::sqrt((float) f.workWidth * (float) f.workHeight / (1920.0f * 1080.0f)), 0.5f, 2.0f);
         params.DebugView = f.cfg->DlssNrDetailReuseDebug.value_or_default() ? 1u : 0u;
         params.ReplaceCurve = replaceCurve;
         params.MotionReject = kDlssNrDetailReuseMotionReject;
@@ -309,10 +309,11 @@ class Host
         }
         else if (std::chrono::duration<double>(now - _droppedLogged).count() >= kDroppedLogSeconds)
         {
-            LOG_INFO("{}: over the last {:.0f}s, {:.1f}% of the picture had no detail to move on average of {} measured "
-                     "frames ({:.1f}% to {:.1f}%); reuse paused on {} of them",
-                     _logName, kDroppedLogSeconds, 100.0 * _droppedSum / _droppedSeen, _droppedSeen,
-                     100.0 * _droppedLow, 100.0 * _droppedHigh, held - _droppedHeld);
+            LOG_INFO(
+                "{}: over the last {:.0f}s, {:.1f}% of the picture had no detail to move on average of {} measured "
+                "frames ({:.1f}% to {:.1f}%); reuse paused on {} of them",
+                _logName, kDroppedLogSeconds, 100.0 * _droppedSum / _droppedSeen, _droppedSeen, 100.0 * _droppedLow,
+                100.0 * _droppedHigh, held - _droppedHeld);
             _droppedLogged = now;
             _droppedHeld = held;
             _droppedSeen = 0;

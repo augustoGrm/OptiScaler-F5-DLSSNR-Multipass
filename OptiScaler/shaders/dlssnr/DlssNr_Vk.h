@@ -36,8 +36,8 @@ class DlssNr_Vk : public Shader_Vk
     static constexpr uint32_t kFramesInFlight = 3;
     static constexpr uint32_t kSlots = kSlotsPerFrame * kFramesInFlight;
 
-    VkDeviceSize _slotStride = 0;   // sizeof(DlssNrConstants), rounded up to the device's alignment
-    uint32_t _slot = 0;             // next slot to hand out, wrapping
+    VkDeviceSize _slotStride = 0; // sizeof(DlssNrConstants), rounded up to the device's alignment
+    uint32_t _slot = 0;           // next slot to hand out, wrapping
 
     // Stands in for a resource a given mode does not read. One pixel, never sampled for its content,
     // present only because Vulkan will not accept an unwritten binding.
@@ -57,8 +57,8 @@ class DlssNr_Vk : public Shader_Vk
                 uint32_t groupsY, VkImageView source, VkImageView model, VkImageView original, VkImageView motion,
                 VkImageView target, VkImageView keep, VkImageLayout sourceLayout, VkImageLayout motionLayout);
 
-    // Automatic exposure's eye adaptation (dlssnr_exposure_adapt.hlsl, SPIR-V), on this pass's pipeline layout. Built on
-    // first use; not retried once it failed, and the meter then writes the exposure directly, as before.
+    // Automatic exposure's eye adaptation (dlssnr_exposure_adapt.hlsl, SPIR-V), on this pass's pipeline layout. Built
+    // on first use; not retried once it failed, and the meter then writes the exposure directly, as before.
     VkPipeline _adaptPipeline = VK_NULL_HANDLE;
     bool _adaptFailed = false;
 

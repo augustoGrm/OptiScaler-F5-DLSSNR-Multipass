@@ -50,8 +50,8 @@ void EvaluateAfterUpscaleVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* para
 // Returns an owned, readable replacement Color, or null to leave the game's input unchanged.
 // The caller must restore the original Color parameter after the upscaler, on every exit.
 NVSDK_NGX_Resource_VK* EvaluateBeforeUpscaleVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* params,
-                                             VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device,
-                                             bool& handled, bool rayReconstruction = false);
+                                               VkInstance instance, VkPhysicalDevice physicalDevice, VkDevice device,
+                                               bool& handled, bool rayReconstruction = false);
 
 // Whether the native Vulkan path is up, and why not if it is not.
 bool IsRunningVk();

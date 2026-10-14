@@ -1,12 +1,14 @@
 #pragma once
 
-// The contract between a game-API adapter and the native input producer (DLSS-NR in a game that makes no upscaler call).
+// The contract between a game-API adapter and the native input producer (DLSS-NR in a game that makes no upscaler
+// call).
 //
-// The producer (optical flow, trust mask, guides, DLSS-NR) runs on one D3D12 device and knows nothing of the game's API. An
-// adapter (Dx12 today; D3D11, D3D10 and D3D9 later) does the rest: it observes how the game uses depth (native/DepthFinderCore.h),
-// and once per presented frame it hands the producer a FrameInput, and takes the FrameOutput back. Everything crosses as D3D12
-// resources and fence points, never as pointers into the game's API, so the same contract works when the adapter lives in
-// another process (the 32-bit bridge) and the resources are shared handles. See docs/NATIVE-INPUT-ADAPTERS.md.
+// The producer (optical flow, trust mask, guides, DLSS-NR) runs on one D3D12 device and knows nothing of the game's
+// API. An adapter (Dx12 today; D3D11, D3D10 and D3D9 later) does the rest: it observes how the game uses depth
+// (native/DepthFinderCore.h), and once per presented frame it hands the producer a FrameInput, and takes the
+// FrameOutput back. Everything crosses as D3D12 resources and fence points, never as pointers into the game's API, so
+// the same contract works when the adapter lives in another process (the 32-bit bridge) and the resources are shared
+// handles. See docs/NATIVE-INPUT-ADAPTERS.md.
 
 #include <d3d12.h>
 #include <dxgi.h>
@@ -24,18 +26,18 @@ enum class Api
     Vulkan
 };
 
-// The frame number native input hands to NR (DlssNr::ApplyNativeInput's epoch): the present count of the API the picture
-// came from, `dxgiPresents` (State::frameCount) or `vulkanPresents` (State::vulkanPresentCount). Neither a sum nor the
-// larger of the two moves by exactly 1 per frame: a dxvk game ticks both, on different threads, and a native Vulkan game
-// bridged to frame generation ticks the DXGI one for every generated frame. Detail reuse reads any other step as a
-// skipped frame, and a count that stops moving keeps a new NR model on "Preparing".
+// The frame number native input hands to NR (DlssNr::ApplyNativeInput's epoch): the present count of the API the
+// picture came from, `dxgiPresents` (State::frameCount) or `vulkanPresents` (State::vulkanPresentCount). Neither a sum
+// nor the larger of the two moves by exactly 1 per frame: a dxvk game ticks both, on different threads, and a native
+// Vulkan game bridged to frame generation ticks the DXGI one for every generated frame. Detail reuse reads any other
+// step as a skipped frame, and a count that stops moving keeps a new NR model on "Preparing".
 inline uint64_t PresentEpoch(Api api, uint64_t dxgiPresents, uint64_t vulkanPresents)
 {
     return api == Api::Vulkan ? vulkanPresents : dxgiPresents;
 }
 
-// What the picture's values mean. The producer supports Srgb (SDR) and ScRgb (linear, 1.0 = 80 nits) today; Pq (HDR10) is
-// reported, not processed.
+// What the picture's values mean. The producer supports Srgb (SDR) and ScRgb (linear, 1.0 = 80 nits) today; Pq (HDR10)
+// is reported, not processed.
 enum class ColorSpace
 {
     Srgb,
@@ -43,7 +45,8 @@ enum class ColorSpace
     Pq
 };
 
-// A point on a D3D12 fence: wait until `value` has been reached before using what it guards. A null fence is "already there".
+// A point on a D3D12 fence: wait until `value` has been reached before using what it guards. A null fence is "already
+// there".
 struct SyncPoint
 {
     ID3D12Fence* fence = nullptr;
@@ -74,8 +77,8 @@ struct FrameInput
     uint32_t width = 0;
     uint32_t height = 0;
 
-    // The scene's depth: one or more copies of the picked buffer (a game that splits the scene over several lists leaves each
-    // copy holding part of it; the nearest surface over all of them is the scene). They rest in
+    // The scene's depth: one or more copies of the picked buffer (a game that splits the scene over several lists
+    // leaves each copy holding part of it; the nearest surface over all of them is the scene). They rest in
     // NON_PIXEL_SHADER_RESOURCE | PIXEL_SHADER_RESOURCE and are read through depthView.
     ID3D12Resource* depth[kMaxDepthCopies] = {};
     int depthCount = 0;
@@ -99,7 +102,8 @@ struct FrameOutput
 enum class AcquireStatus
 {
     Ready,              // a frame was filled in
-    WaitingForUpscaler, // the game calls an upscaler of its own: this is not the case the producer is for (the status line says so)
+    WaitingForUpscaler, // the game calls an upscaler of its own: this is not the case the producer is for (the status
+                        // line says so)
     Unavailable         // nothing to process now: no picture could be had, a resource could not be shared
 };
 
@@ -116,12 +120,13 @@ class IFrameSource
     virtual ID3D12Device* Device() const = 0;
     virtual ID3D12CommandQueue* Queue() const = 0;
 
-    // Once per presented frame, before the overlay is drawn: when a frame is ready, fill `input`. Missing depth is not a
-    // failure (the producer then runs the flow only); the game's picture is left alone whenever the status is not Ready.
+    // Once per presented frame, before the overlay is drawn: when a frame is ready, fill `input`. Missing depth is not
+    // a failure (the producer then runs the flow only); the game's picture is left alone whenever the status is not
+    // Ready.
     virtual AcquireStatus Acquire(FrameInput& input) = 0;
 
-    // The producer finished with the frame it was given. The adapter gets its picture ready for the game's present: for a
-    // zero-copy adapter nothing; for a shared-texture adapter, a copy back into the game's back buffer.
+    // The producer finished with the frame it was given. The adapter gets its picture ready for the game's present: for
+    // a zero-copy adapter nothing; for a shared-texture adapter, a copy back into the game's back buffer.
     virtual void Return(const FrameInput& input, const FrameOutput& output) = 0;
 
     // The picture size or the device changed; drop what depends on them.

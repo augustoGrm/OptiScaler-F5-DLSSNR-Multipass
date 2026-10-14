@@ -43,8 +43,9 @@ class SceneCutDx12
     bool Init(ID3D12Device* device);
 
     // Records the detector for `luma` (R32_FLOAT, at least 3x3, NON_PIXEL_SHADER_RESOURCE, which it stays in). After it
-    // Flag() and Distrust() hold this frame's answer. The first frame, and the first after Reset(), has nothing to compare
-    // with and is never a cut. `threshold`: the divergence past which the frame is a cut (0 alike .. 1 nothing alike).
+    // Flag() and Distrust() hold this frame's answer. The first frame, and the first after Reset(), has nothing to
+    // compare with and is never a cut. `threshold`: the divergence past which the frame is a cut (0 alike .. 1 nothing
+    // alike).
     bool Detect(ID3D12GraphicsCommandList* list, ID3D12Resource* luma, float threshold);
 
     // The same for a colour (any size, readable as colorFormat, NON_PIXEL_SHADER_RESOURCE, which it stays in): its luma

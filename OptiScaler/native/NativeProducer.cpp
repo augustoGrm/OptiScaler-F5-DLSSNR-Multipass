@@ -1,4 +1,5 @@
-// Not built with the precompiled header: no game headers in here, so tests/nr_native_producer_gpu.cpp compiles it alone.
+// Not built with the precompiled header: no game headers in here, so tests/nr_native_producer_gpu.cpp compiles it
+// alone.
 #include "NativeProducer.h"
 
 #include <algorithm>
@@ -243,7 +244,8 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
         if (options.flowPreview)
             _previewReady = _flow->Visualise(list, options.previewMaxSpeed) || _previewReady;
 
-        // The trust mask uses the scene's depth as the adapter copied it this frame; without any it runs on flow and luma.
+        // The trust mask uses the scene's depth as the adapter copied it this frame; without any it runs on flow and
+        // luma.
         TrustMaskDx12::Inputs in;
         in.flow = _flow->Flow();
         in.flowWidth = _flow->FlowWidth();
@@ -255,7 +257,7 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
 
         if (input.depthCount > 0 && input.depthView != DXGI_FORMAT_UNKNOWN)
         {
-            in.depthCount = (std::min)(input.depthCount, (int) TrustMaskDx12::Inputs::kMaxDepths);
+            in.depthCount = (std::min) (input.depthCount, (int) TrustMaskDx12::Inputs::kMaxDepths);
 
             for (int i = 0; i < in.depthCount; ++i)
                 in.depths[i] = input.depth[i];

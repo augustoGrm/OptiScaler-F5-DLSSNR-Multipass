@@ -1,13 +1,13 @@
 #pragma once
 
-// The API-neutral half of the native input producer: given a FrameInput (a finished picture and the scene's depth copies, as
-// D3D12 resources) it runs the optical flow, the trust mask and the guides on one command list of its own, and hands the
-// picture and the guides to a consumer. It knows nothing of the game's API (native/FrameContract.h); an adapter supplies the
-// frames.
+// The API-neutral half of the native input producer: given a FrameInput (a finished picture and the scene's depth
+// copies, as D3D12 resources) it runs the optical flow, the trust mask and the guides on one command list of its own,
+// and hands the picture and the guides to a consumer. It knows nothing of the game's API (native/FrameContract.h); an
+// adapter supplies the frames.
 //
 // The consumer is not linked in here: the caller passes it in as a function (DLSS-NR's DlssNr::ApplyNativeInput, or an
-// upscaler backend through native::VirtualUpscalerDriver, in the game; a stand-in in tests/nr_native_producer_gpu.cpp), so
-// this class and everything it uses build and run without either.
+// upscaler backend through native::VirtualUpscalerDriver, in the game; a stand-in in tests/nr_native_producer_gpu.cpp),
+// so this class and everything it uses build and run without either.
 
 #include "FrameContract.h"
 
@@ -24,8 +24,8 @@ namespace native
 // What the producer hands its consumer for one frame. The consumer works on the picture in place.
 struct NativeFrame
 {
-    ID3D12Resource* color = nullptr;                          // the picture: in pictureState, and left in it
-    DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN;            // a typed format to view it as (the resource may be typeless)
+    ID3D12Resource* color = nullptr;               // the picture: in pictureState, and left in it
+    DXGI_FORMAT colorFormat = DXGI_FORMAT_UNKNOWN; // a typed format to view it as (the resource may be typeless)
     D3D12_RESOURCE_STATES pictureState = D3D12_RESOURCE_STATE_COMMON;
     ColorSpace space = ColorSpace::Srgb;
     ID3D12Resource* depth = nullptr;  // the guides (TrustMaskDx12::BuildGuides): picture-sized, unjittered, and in
@@ -35,7 +35,7 @@ struct NativeFrame
                                                // history can be trusted at each pixel, R8_UNORM at the flow's size,
                                                // in a state readable by a non-pixel shader, which the consumer leaves
     bool depthReversed = false;
-    bool reset = false;               // the frame does not continue the last one
+    bool reset = false; // the frame does not continue the last one
 };
 
 // How a hard scene cut is handled, end to end. Three signals can report one cut; Run() makes it one Result::sceneCut
@@ -73,19 +73,19 @@ class NativeProducer
 
     struct Options
     {
-        bool apply = false;           // run the consumer (needs flow; depth is optional); off: flow and trust mask only
-        bool flowPreview = false;     // also draw the flow picture for the menu
+        bool apply = false;       // run the consumer (needs flow; depth is optional); off: flow and trust mask only
+        bool flowPreview = false; // also draw the flow picture for the menu
         float previewMaxSpeed = 24.0f; // pixels per frame that show as full brightness
     };
 
     struct Result
     {
-        bool submitted = false;  // the work was recorded and sent to the queue (the output is then valid)
+        bool submitted = false; // the work was recorded and sent to the queue (the output is then valid)
         bool flowValid = false;
-        bool trustRan = false;   // the trust mask ran in this frame (depth or not; it degrades gracefully with none)
-        bool sceneCut = false;   // the mask saw a hard cut: the histories were reset
+        bool trustRan = false; // the trust mask ran in this frame (depth or not; it degrades gracefully with none)
+        bool sceneCut = false; // the mask saw a hard cut: the histories were reset
         float distrustedShare = 0.0f;
-        bool nativeRan = false;  // the consumer ran on the picture
+        bool nativeRan = false;          // the consumer ran on the picture
         const char* stoppedAt = nullptr; // when nothing was submitted: the step that gave up (for the log)
         long stoppedHr = 0;              // and the HRESULT it got, when it had one
         long deviceRemoved = 0;          // the device's removed reason at that moment (0: not removed)
@@ -103,8 +103,8 @@ class NativeProducer
     ID3D12Device* Device() const { return _device; }
     const std::string& Error() const { return _error; }
 
-    // One frame. `queue` is a direct queue of Device(); the work goes onto it after waiting for input.ready, and output.done is
-    // the point it finishes at. The picture is processed in place.
+    // One frame. `queue` is a direct queue of Device(); the work goes onto it after waiting for input.ready, and
+    // output.done is the point it finishes at. The picture is processed in place.
     Result Run(ID3D12CommandQueue* queue, const FrameInput& input, const Options& options, const ApplyFn& apply,
                FrameOutput& output);
 

@@ -163,21 +163,19 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
     // their place so every descriptor in the table is valid.
     // One compute pass. The public entry below drives three of these plus the model.
     bool DispatchPass(ID3D12GraphicsCommandList* InCmdList, const DlssNrConstants& InConstants,
-                  ID3D12Resource* InSource, ID3D12Resource* InModel, ID3D12Resource* InOriginal,
-                  ID3D12Resource* InMotion,
-                  // Vestigial. Fed to the slot the removed edit accumulator read its history from;
-                  // nothing reads it now and every caller passes nullptr. Kept only so the binding
-                  // table keeps its shape -- not evidence that temporal accumulation exists.
-                  ID3D12Resource* InPrevEdit, ID3D12Resource* OutTarget,
-                  ID3D12Resource* OutKeep);
+                      ID3D12Resource* InSource, ID3D12Resource* InModel, ID3D12Resource* InOriginal,
+                      ID3D12Resource* InMotion,
+                      // Vestigial. Fed to the slot the removed edit accumulator read its history from;
+                      // nothing reads it now and every caller passes nullptr. Kept only so the binding
+                      // table keeps its shape -- not evidence that temporal accumulation exists.
+                      ID3D12Resource* InPrevEdit, ID3D12Resource* OutTarget, ID3D12Resource* OutKeep);
 
     // One compute pass of Finished Picture's shader (dlssnr_finished_color.hlsl). Same descriptor
     // table shape as DispatchPass; binds _finishedColorPipelineState instead of _pipelineState.
     // t4/u1 are bound with a stand-in for parity. Returns false (no-op) if that PSO is absent.
     bool DispatchResidualPass(ID3D12GraphicsCommandList* InCmdList, const DlssNrConstants& InConstants,
-                              ID3D12Resource* InSource, ID3D12Resource* InModel,
-                              ID3D12Resource* InOriginal, ID3D12Resource* InMotion,
-                              ID3D12Resource* OutTarget);
+                              ID3D12Resource* InSource, ID3D12Resource* InModel, ID3D12Resource* InOriginal,
+                              ID3D12Resource* InMotion, ID3D12Resource* OutTarget);
 
     // One stats pass of "Tune for this scene" (dlssnr_detail_stats.hlsl): 64x64 thread groups, one per tile, into
     // the 256x64 RGBA32F grid. Same descriptor table shape as DispatchPass. False (no-op) if the PSO cannot be built.
@@ -216,8 +214,9 @@ class DlssNr_Dx12 : public Shader_Dx12, public DlssNr_Common
     // DispatchPass; Width x Height threads come from the constants. By mode:
     //   100  In0 the encoded colour (native size)                               -> Out0 the packed colour
     //   101  In1 depth, In2 motion (a null In0 gets In1)                        -> Out0 R32F depth, Out1 RG32F motion
-    //   102  In0 the packed model input, In1 the model's answer                 -> Out0 the unpacked input, Out1 the answer
-    //   103  as 102, and In2 the picture the uncompressed path would show the model (ordinary grid): the answer gets
+    //   102  In0 the packed model input, In1 the model's answer                 -> Out0 the unpacked input, Out1 the
+    //   answer 103  as 102, and In2 the picture the uncompressed path would show the model (ordinary grid): the answer
+    //   gets
     //        In2 minus the unpacked input added (the Replace curves, which never read the proxy)
     // The sampler is the shared linear clamp. Resources are left in the state they arrived in.
     bool SpatialReady();

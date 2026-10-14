@@ -28,9 +28,8 @@ RWTexture2D<uint> State : register(u0); // x is the bin; row t (0..8) holds tile
                                         // finished groups
 RWTexture2D<uint> Cut : register(u1);   // texel 0 the flag, texel 1 the divergence (float bits)
 RWTexture2D<unorm float> Distrust : register(u2); // 1x1: 1 on a cut, else 0 (a history-distrust input read by uv)
-)HLSL"
-                      F5LOW_LUMA_HLSL
-                      R"HLSL(
+)HLSL" F5LOW_LUMA_HLSL
+                                       R"HLSL(
 // The detector's own luma, for a caller that has none (DLSS-NR's game input): the colour shrunk by `step` each way, each
 // pixel the mean luma of up to 4x4 samples spread over its block. A few hundred pixels across are plenty for nine
 // histograms, and the cost stays the same at any resolution.

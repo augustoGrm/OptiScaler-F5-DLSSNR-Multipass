@@ -14,22 +14,25 @@
 
 namespace NativeMotionVk
 {
-// Once per present, from the vkQueuePresentKHR hook, before the menu is drawn. When the frame was processed, `present`'s
-// wait list is replaced by one semaphore of ours (its arrays then point into storage that lives until the next call).
+// Once per present, from the vkQueuePresentKHR hook, before the menu is drawn. When the frame was processed,
+// `present`'s wait list is replaced by one semaphore of ours (its arrays then point into storage that lives until the
+// next call).
 void OnPresent(VkQueue queue, VkPresentInfoKHR* present, VkDevice device, VkPhysicalDevice physical);
 
-// After the game's own (hidden) present was queued: with the Vulkan present bridge up, the D3D12 swapchain presents the picture
-// OnPresent put into it.
+// After the game's own (hidden) present was queued: with the Vulkan present bridge up, the D3D12 swapchain presents the
+// picture OnPresent put into it.
 void AfterPresent(VkSwapchainKHR swapchain);
 
-// The Vulkan present bridge (native/VkPresentBridge.h) makes its D3D12 swapchain on the frame source's private D3D12 device and
-// queue: made now and kept until ReleaseBridgeDevice.
-bool AcquireBridgeDevice(VkPhysicalDevice physical, ID3D12Device** device, ID3D12CommandQueue** queue, std::string& why);
+// The Vulkan present bridge (native/VkPresentBridge.h) makes its D3D12 swapchain on the frame source's private D3D12
+// device and queue: made now and kept until ReleaseBridgeDevice.
+bool AcquireBridgeDevice(VkPhysicalDevice physical, ID3D12Device** device, ID3D12CommandQueue** queue,
+                         std::string& why);
 void ReleaseBridgeDevice();
 
-// "FG only (game's upscaler)": a Vulkan-on-D3D12 upscaler (upscalers/IFeature_VkwDx12.h) is made on the same private device
-// the bridge presents with, whichever of the two comes first, so its evaluate can feed frame generation. Made now if it
-// is not there; returned with a reference of the caller's (Release it when done), nullptr with `why` when it cannot be.
+// "FG only (game's upscaler)": a Vulkan-on-D3D12 upscaler (upscalers/IFeature_VkwDx12.h) is made on the same private
+// device the bridge presents with, whichever of the two comes first, so its evaluate can feed frame generation. Made
+// now if it is not there; returned with a reference of the caller's (Release it when done), nullptr with `why` when it
+// cannot be.
 ID3D12Device* ShareBridgeDevice(VkPhysicalDevice physical, std::string& why);
 
 // The game is destroying `device`: everything made on it goes.

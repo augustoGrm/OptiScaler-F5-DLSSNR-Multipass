@@ -128,9 +128,9 @@ inline bool Upsert(std::vector<Anchor>& anchors, float key, float trim)
     return true;
 }
 
-// The table lives in the ini as text, so the menu works on the text: Tune's result becomes a point (replacing one within 2%
-// of the same brightness), a point can be removed. AddPoint is false when nothing changed (an unusable key, or the table
-// is full and nothing was within reach to replace).
+// The table lives in the ini as text, so the menu works on the text: Tune's result becomes a point (replacing one
+// within 2% of the same brightness), a point can be removed. AddPoint is false when nothing changed (an unusable key,
+// or the table is full and nothing was within reach to replace).
 inline bool AddPoint(std::string& text, float baseWhitePoint, float trim)
 {
     std::vector<Anchor> anchors = Parse(text);
@@ -185,8 +185,8 @@ inline float TrimForKey(float key, float sliderTrim, const std::vector<Anchor>& 
 
 // Writes the trim fields of the constants the shader reads. The shader recomputes the same white point
 // from these when it is reading a live exposure texture.
-inline void FillConstants(DlssNrConstants& params, float sliderTrim, const std::vector<Anchor>& anchors,
-                          bool preview, float shadowProtection)
+inline void FillConstants(DlssNrConstants& params, float sliderTrim, const std::vector<Anchor>& anchors, bool preview,
+                          float shadowProtection)
 {
     params.ExposureTrim = ClampTrim(sliderTrim);
     params.ExposureTrimPreview = preview ? 1u : 0u;

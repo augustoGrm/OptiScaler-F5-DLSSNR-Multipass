@@ -11,8 +11,8 @@ enum class Mode
     Off,
     NrOnly,
     NrAndFrameGeneration,
-    // A Vulkan game that calls an upscaler of its own: frame generation from that call (the game's upscaler runs through
-    // a Vulkan-on-D3D12 backend on the present bridge's device). No Optical F5Low motion.
+    // A Vulkan game that calls an upscaler of its own: frame generation from that call (the game's upscaler runs
+    // through a Vulkan-on-D3D12 backend on the present bridge's device). No Optical F5Low motion.
     FrameGenerationOnly
 };
 
@@ -180,8 +180,8 @@ inline GameApi GameApiFor(PresentApi present, Interop interop, bool d3d11DeviceP
 
 // The modes are for a game with no upscaler call of its own; the frame sources stand aside while the game makes one
 // (gameUpscaler: GenericDepthDx12/Dx11::GameCallsUpscaler). Then only Off can be chosen: a click on another mode would
-// change NR Pass at: under the game's own upscaler for nothing. Frame generation only is the reverse: it is for a Vulkan
-// game that calls one (a D3D11/D3D12 game already has frame generation on its own call).
+// change NR Pass at: under the game's own upscaler for nothing. Frame generation only is the reverse: it is for a
+// Vulkan game that calls one (a D3D11/D3D12 game already has frame generation on its own call).
 inline bool Selectable(Mode mode, bool gameUpscaler, bool vulkan = false)
 {
     if (mode == Mode::Off)
@@ -201,8 +201,8 @@ enum class Warning
     None,
     GameUpscaler,        // a mode is on while the game calls an upscaler of its own: it stands aside
     Dx11FrameGeneration, // NR only, while frame generation replaces a D3D11 game's swap chain
-    VulkanNeedsRestart,  // NR + upscaler & frame generation in a Vulkan game whose swapchain was made without the bridge
-    NrDisabled,           // Enable Neural Rendering is off
+    VulkanNeedsRestart, // NR + upscaler & frame generation in a Vulkan game whose swapchain was made without the bridge
+    NrDisabled,         // Enable Neural Rendering is off
     NeedsFinishedPicture, // NR only, with NR Pass at: not on Finished Picture
     NeedsGameUpscaler,    // frame generation only, while the game makes no upscaler call (DLSS/FSR off in its settings)
     NeedsOn12Backend      // frame generation only, while the game's upscaler runs on a Vulkan backend (not *_on12)

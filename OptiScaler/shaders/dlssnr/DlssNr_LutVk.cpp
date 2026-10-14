@@ -85,8 +85,8 @@ bool DlssNr_LutVk::Build()
     // and sampler are separate descriptors because the shader declares them separately.
     VkDescriptorSetLayoutBinding bindings[6] {};
     const VkDescriptorType types[6] = { VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
-                                        VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLER,
-                                        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE };
+                                        VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,  VK_DESCRIPTOR_TYPE_SAMPLER,
+                                        VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,  VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE };
     for (uint32_t i = 0; i < 6; ++i)
     {
         bindings[i].binding = i;

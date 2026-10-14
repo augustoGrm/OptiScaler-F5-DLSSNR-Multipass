@@ -25,11 +25,12 @@ void BeginFrameNow(Backend& gpu, const ::Config& cfg, unsigned int width, unsign
     RunState& run = TheRun();
 
     // Each slider in its own EV: Automatic around its 5x neutral, Game exposure around 1x.
-    // With Trim anchors the Trim in force is the table's at this base white point, not the slider's (which they replace).
-    const float autoTrim = DlssNrTrim::TrimForKey(
-        situation.source == 3 ? baseWhitePoint : 0.0f, DlssNr::AutoTrimEffective(cfg),
-        DlssNrTrim::Parse(cfg.DlssNrAutoExposureTrimAnchors.value_or_default()),
-        cfg.DlssNrAutoExposureTrimPreview.value_or_default());
+    // With Trim anchors the Trim in force is the table's at this base white point, not the slider's (which they
+    // replace).
+    const float autoTrim =
+        DlssNrTrim::TrimForKey(situation.source == 3 ? baseWhitePoint : 0.0f, DlssNr::AutoTrimEffective(cfg),
+                               DlssNrTrim::Parse(cfg.DlssNrAutoExposureTrimAnchors.value_or_default()),
+                               cfg.DlssNrAutoExposureTrimPreview.value_or_default());
     const float gameTrim = DlssNrTrim::TrimForKey(
         situation.source == 1 ? situation.anchorKey : 0.0f, cfg.DlssNrWhitePointTrim.value_or_default(),
         DlssNrTrim::Parse(cfg.DlssNrGameExposureTrimAnchors.value_or_default()),
@@ -43,8 +44,9 @@ void BeginFrameNow(Backend& gpu, const ::Config& cfg, unsigned int width, unsign
     {
         std::lock_guard<std::mutex> lock(run.mutex);
         if (run.measuring)
-            LOG_INFO("DLSS-NR measure: started, {} evaluations at the current settings, measuring at white point {:.4g}",
-                     run.sweep.Config().measure, run.measureWhitePoint);
+            LOG_INFO(
+                "DLSS-NR measure: started, {} evaluations at the current settings, measuring at white point {:.4g}",
+                run.sweep.Config().measure, run.measureWhitePoint);
         else
             LOG_INFO("DLSS-NR calibrate: started at {:+.2f} EV, {} steps, measuring at white point {:.4g}",
                      Tidy(run.sweep.CurrentEv()), run.sweep.StepCount(), run.measureWhitePoint);
@@ -175,8 +177,8 @@ ExposureCalibrationStatus ExposureCalibration()
         if (steps[i].samples == 0)
             continue;
         // The step the result stands on (the current value's nearest when it keeps it), for Details.
-        if (s.finished && (s.ev.empty() || std::fabs(steps[i].ev - sweep.ResultEv()) <
-                                               std::fabs(s.resultStepEv - sweep.ResultEv())))
+        if (s.finished &&
+            (s.ev.empty() || std::fabs(steps[i].ev - sweep.ResultEv()) < std::fabs(s.resultStepEv - sweep.ResultEv())))
         {
             s.resultStepEv = steps[i].ev;
             s.resultSaturation = steps[i].Saturation();
@@ -192,7 +194,10 @@ ExposureCalibrationStatus ExposureCalibration()
     return s;
 }
 
-void StartExposureCalibration(uint32_t source) { DlssNrExposureCalibrate::RequestStart(DlssNrExposureCalibrate::TheRun(), source); }
+void StartExposureCalibration(uint32_t source)
+{
+    DlssNrExposureCalibrate::RequestStart(DlssNrExposureCalibrate::TheRun(), source);
+}
 
 void StartMeasureDetail() { DlssNrExposureCalibrate::RequestMeasure(DlssNrExposureCalibrate::TheRun()); }
 

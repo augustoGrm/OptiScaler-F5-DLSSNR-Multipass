@@ -42,7 +42,7 @@ inline FinishedPick PickFinishedInput(const FinishedInput* inputs, size_t count,
     if (!newest)
         return FinishedPick::None;
     return FinishedInputReady(newest->sameQueue, newest->completed, newest->required) ? FinishedPick::Ready
-                                                                                       : FinishedPick::NotReady;
+                                                                                      : FinishedPick::NotReady;
 }
 
 // Presents from `then` to `now`; UINT64_MAX when `then` never happened (UINT64_MAX). A `then` ahead of `now`

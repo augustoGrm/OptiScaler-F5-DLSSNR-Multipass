@@ -1,9 +1,10 @@
 #pragma once
 
-// The D3D11 adapter's frame source: the game's picture and the depth finder's copy (resource_tracking/GenericDepth_Dx11.h) are
-// shared across to the D3D12 device the producer runs on (native/SharedFrame.h), and the processed picture is shared back. Uses
-// its own D3D12 device/queue, paired with the game's D3D11 device the same way IFeature_Dx11wDx12 pairs one for a game that does
-// call an upscaler (with_dx12/with_dx12.h); no game call is needed to start it here.
+// The D3D11 adapter's frame source: the game's picture and the depth finder's copy
+// (resource_tracking/GenericDepth_Dx11.h) are shared across to the D3D12 device the producer runs on
+// (native/SharedFrame.h), and the processed picture is shared back. Uses its own D3D12 device/queue, paired with the
+// game's D3D11 device the same way IFeature_Dx11wDx12 pairs one for a game that does call an upscaler
+// (with_dx12/with_dx12.h); no game call is needed to start it here.
 
 #include "FrameContract.h"
 #include "MsaaPictureDx11.h"
@@ -47,14 +48,14 @@ class Dx11FrameSource : public IFrameSource
     ID3D11Device* _realDevice11 = nullptr; // the device behind _device11 when that is a proxy (Streamline's), else it
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> _context11;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext4> _context4;
-    ID3D12Device* _device12 = nullptr;    // owned by WithDx12, not released here
+    ID3D12Device* _device12 = nullptr; // owned by WithDx12, not released here
     ID3D12CommandQueue* _queue12 = nullptr;
 
     SharedFence _fence;
     SharedTexture _picture;
     SharedTexture _depth;
-    // A multisampled swap chain (the game's MSAA setting) cannot be copied to or from the single-sample picture: the picture
-    // is resolved in, and the result is drawn back into every sample. Unused for a single-sample back buffer.
+    // A multisampled swap chain (the game's MSAA setting) cannot be copied to or from the single-sample picture: the
+    // picture is resolved in, and the result is drawn back into every sample. Unused for a single-sample back buffer.
     MsaaPictureDx11 _msaa;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> _backBuffer; // held between Acquire and Return
 

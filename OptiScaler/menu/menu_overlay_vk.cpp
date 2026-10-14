@@ -9,8 +9,8 @@
 #include <imgui/imgui_impl_vulkan.h>
 #include <imgui/imgui_impl_win32.h>
 
-// Diagnostic: the menu submits on the game's queue from the present thread. Says which thread, once per change, to compare with
-// the thread ids in a Vulkan validation threading error.
+// Diagnostic: the menu submits on the game's queue from the present thread. Says which thread, once per change, to
+// compare with the thread ids in a Vulkan validation threading error.
 static void LogMenuSubmitThread(const char* what, VkQueue queue)
 {
     static thread_local bool logged = false;
@@ -429,7 +429,8 @@ static void CreateVulkanObjects(VkDevice device, VkPhysicalDevice pd, VkInstance
         if (ImGui::GetIO().BackendRendererUserData != nullptr && !VulkanBackendIsUp())
         {
             LOG_WARN("Vulkan menu: ImGui's renderer backend is still {}; the menu is not drawn on this swapchain",
-                     ImGui::GetIO().BackendRendererName != nullptr ? ImGui::GetIO().BackendRendererName : "another one");
+                     ImGui::GetIO().BackendRendererName != nullptr ? ImGui::GetIO().BackendRendererName
+                                                                   : "another one");
             return;
         }
 

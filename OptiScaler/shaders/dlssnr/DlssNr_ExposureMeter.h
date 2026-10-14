@@ -9,8 +9,8 @@
 // brightest and darkest tails leaves out what should not decide the exposure, so no hand-tuned knee is needed.
 //
 // It works on the meter's 64x64 grid of tile means (a tile is the plain mean of its pixels), the same input the other
-// meter has, and every tile counts the same (the tiles differ by at most one pixel row). The grid and the black-tile rule
-// are shared with the other meter; only the statistic differs. The GPU does this in dlssnr.hlsl (gMode 13, the
+// meter has, and every tile counts the same (the tiles differ by at most one pixel row). The grid and the black-tile
+// rule are shared with the other meter; only the statistic differs. The GPU does this in dlssnr.hlsl (gMode 13, the
 // percentile branch), line for line: a 64-bin histogram over -24..+24 EV with an integer count and a fixed-point sum of
 // the log per bin, then a walk over the bins that takes a bin's share of the window by its count. This is the reference
 // the host test (tests/nr_exposure_meter_smoke.cpp) holds the shader's arithmetic to.
@@ -34,7 +34,8 @@ constexpr float kDefaultLowPercent = 10.0f;  // Unreal's default
 constexpr float kDefaultHighPercent = 90.0f; // Unreal's default
 constexpr float kMinMeteredShare = 0.05f;    // under this share of the tiles left, there is no reading
 
-// The settings as used: a window that is empty or backwards falls back to the whole range, a broken value to the default.
+// The settings as used: a window that is empty or backwards falls back to the whole range, a broken value to the
+// default.
 struct Window
 {
     float low;
@@ -48,9 +49,9 @@ inline Window Clamp(float low, float high)
     return high > low ? Window { low, high } : Window { 0.0f, 100.0f };
 }
 
-// The scene luminance the meter reports for `tiles` (tile means in the frame's own units; `preExposure` is divided out),
-// or 0 when under kMinMeteredShare of `gridTiles` is left after the black tiles (<= blackLevel, in the tiles' units) are
-// dropped: 0 is "no reading", as in the shader.
+// The scene luminance the meter reports for `tiles` (tile means in the frame's own units; `preExposure` is divided
+// out), or 0 when under kMinMeteredShare of `gridTiles` is left after the black tiles (<= blackLevel, in the tiles'
+// units) are dropped: 0 is "no reading", as in the shader.
 inline float PercentileSceneLuma(const std::vector<float>& tiles, float preExposure, float blackLevel, float lowPercent,
                                  float highPercent, uint32_t gridTiles = 4096)
 {

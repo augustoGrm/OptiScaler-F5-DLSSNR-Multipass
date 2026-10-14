@@ -602,8 +602,8 @@ class ScopedSkipHeapCapture
 
 // Per thread, like ScopedCreatingD3DDevice: OptiScaler's own Vulkan work (and the dxvk device a GPU check or Anti-Lag 2
 // makes) runs on the thread that sets this, while the game's swapchains and devices are made on its own threads. One
-// process-wide flag skipped the game's hooks whenever the two overlapped, and a scope that finished out of order left it
-// set (or cleared an outer scope's) for good.
+// process-wide flag skipped the game's hooks whenever the two overlapped, and a scope that finished out of order left
+// it set (or cleared an outer scope's) for good.
 class ScopedSkipVulkanHooks
 {
   private:

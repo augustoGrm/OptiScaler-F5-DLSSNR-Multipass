@@ -1,10 +1,10 @@
 #pragma once
 
 // What the Vulkan bridge does when the game's new swapchain cannot go on the hidden surface (its capabilities query
-// fails: Batman: Arkham Knight on dxvk, after leaving exclusive full screen). A new hidden window and surface can only be
-// made while no game swapchain lives on the old one (a surface must outlive every swapchain made on it), and only once
-// per swapchain the game makes, so a surface that keeps failing ends in the bridge being retired instead of a loop.
-// Header-only and free of D3D and Vulkan: a host test includes it.
+// fails: Batman: Arkham Knight on dxvk, after leaving exclusive full screen). A new hidden window and surface can only
+// be made while no game swapchain lives on the old one (a surface must outlive every swapchain made on it), and only
+// once per swapchain the game makes, so a surface that keeps failing ends in the bridge being retired instead of a
+// loop. Header-only and free of D3D and Vulkan: a host test includes it.
 
 namespace native
 {

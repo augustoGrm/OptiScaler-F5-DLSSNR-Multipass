@@ -21,10 +21,10 @@ void fakenvapi::init(bool onlyContext)
         return;
 }
 
-// The second context XeFG's Anti-Lag 2 output runs in (fakenvapi.h companion*): one for D3D, one for Vulkan, each its own
-// LowLatency with one tech. The mutex only guards making, switching and dropping the context: a call copies the pointer
-// under it and runs outside, because Sleep and the simulation-start marker block inside Anti-Lag 2's Update and the
-// render thread's markers must not wait for the game thread's sleep.
+// The second context XeFG's Anti-Lag 2 output runs in (fakenvapi.h companion*): one for D3D, one for Vulkan, each its
+// own LowLatency with one tech. The mutex only guards making, switching and dropping the context: a call copies the
+// pointer under it and runs outside, because Sleep and the simulation-start marker block inside Anti-Lag 2's Update and
+// the render thread's markers must not wait for the game thread's sleep.
 namespace
 {
 struct Companion
@@ -130,7 +130,8 @@ NvAPI_Status fakenvapi::companionSetSleepMode(HANDLE vkDevice, NV_VULKAN_SET_SLE
 
 NvAPI_Status fakenvapi::companionSetLatencyMarker(HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* params)
 {
-    return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.SetLatencyMarker(vkDevice, params); });
+    return WithCompanion(g_companionVk, vkDevice,
+                         [&](LowLatency& ll) { return ll.SetLatencyMarker(vkDevice, params); });
 }
 
 NvAPI_Status fakenvapi::companionGetLatency(HANDLE vkDevice, NV_VULKAN_LATENCY_RESULT_PARAMS* params)

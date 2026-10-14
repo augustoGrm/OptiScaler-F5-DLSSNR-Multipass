@@ -1,30 +1,31 @@
 #pragma once
 
-// Dense optical flow on the GPU for the native input producer (DLSS-NR in a game that makes no upscaler call, so there are no
-// motion vectors to take from one). Our own implementation of the standard method: a luma pyramid, block matching from the
-// coarsest level down with a small search around the coarser level's answer, a few Lucas-Kanade gradient steps for the
-// sub-pixel part, and a 3x3 median over the result. At each level the candidates are the coarser level's answer at the
-// nearest cells, the last frame's flow at the same place, what the whole picture moved by last frame (when it moved as one)
-// and no motion; the best of them is refined by a small search. The match compares windows with their mean brightness taken
-// out (a fade or eye adaptation does not move anything), and with depth it counts only the window's samples on the pixel's
-// own surface (a nearer thing's edge does not drag its motion onto what lies beside it: adaptive support weights). The
-// result is smoothed where the matching is not sure (flat or grainy areas) without crossing the edges of moving things: each
-// neighbour counts by how much picture structure its match had, how close its motion is and how close its brightness is.
-// Nothing is taken from any shader of another project; some ideas are credited in docs/CREDITS.md.
+// Dense optical flow on the GPU for the native input producer (DLSS-NR in a game that makes no upscaler call, so there
+// are no motion vectors to take from one). Our own implementation of the standard method: a luma pyramid, block
+// matching from the coarsest level down with a small search around the coarser level's answer, a few Lucas-Kanade
+// gradient steps for the sub-pixel part, and a 3x3 median over the result. At each level the candidates are the coarser
+// level's answer at the nearest cells, the last frame's flow at the same place, what the whole picture moved by last
+// frame (when it moved as one) and no motion; the best of them is refined by a small search. The match compares windows
+// with their mean brightness taken out (a fade or eye adaptation does not move anything), and with depth it counts only
+// the window's samples on the pixel's own surface (a nearer thing's edge does not drag its motion onto what lies beside
+// it: adaptive support weights). The result is smoothed where the matching is not sure (flat or grainy areas) without
+// crossing the edges of moving things: each neighbour counts by how much picture structure its match had, how close its
+// motion is and how close its brightness is. Nothing is taken from any shader of another project; some ideas are
+// credited in docs/CREDITS.md.
 //
 // A hard cut is also found on the same frame, on the GPU, by the scene-cut detector (motion/SceneCut_Dx12.h) run on the
 // first luma level: its flag is read by the match and the trust mask in that same frame, with no wait for the CPU.
 //
-// Self-contained: it needs only D3D12 and the HLSL compiler, so tests/nr_optical_flow_gpu.cpp drives it with synthetic images
-// and known motion, with no game.
+// Self-contained: it needs only D3D12 and the HLSL compiler, so tests/nr_optical_flow_gpu.cpp drives it with synthetic
+// images and known motion, with no game.
 //
 // Convention: for each pixel of the current frame the flow is the offset, in full-resolution pixels, to where the same
-// content was in the previous frame (the usual game motion-vector direction, "from here to where it came from"). The flow
-// texture is half the colour's resolution (R16G16B16A16_FLOAT, x and y in .xy, the match's confidence 0..1 in .z); a
-// consumer samples it bilinearly.
+// content was in the previous frame (the usual game motion-vector direction, "from here to where it came from"). The
+// flow texture is half the colour's resolution (R16G16B16A16_FLOAT, x and y in .xy, the match's confidence 0..1 in .z);
+// a consumer samples it bilinearly.
 //
-// Dispatch() records onto a command list the caller owns and changes the descriptor heaps bound on it, so it belongs on a
-// list of our own (the finished-picture seam), not on a game's list.
+// Dispatch() records onto a command list the caller owns and changes the descriptor heaps bound on it, so it belongs on
+// a list of our own (the finished-picture seam), not on a game's list.
 
 #include "SceneCut_Dx12.h"
 
@@ -75,13 +76,14 @@ class OpticalFlowDx12
         _ageValid = false;
     }
 
-    // A picture of the flow for a menu: hue is the direction, brightness the speed up to maxSpeed pixels, black is still.
-    // R8G8B8A8_UNORM at the flow's size, left in the PIXEL_SHADER_RESOURCE state. Call after Dispatch() when FlowValid().
+    // A picture of the flow for a menu: hue is the direction, brightness the speed up to maxSpeed pixels, black is
+    // still. R8G8B8A8_UNORM at the flow's size, left in the PIXEL_SHADER_RESOURCE state. Call after Dispatch() when
+    // FlowValid().
     bool Visualise(ID3D12GraphicsCommandList* list, float maxSpeed);
     ID3D12Resource* Preview() const { return _preview.resource; }
 
-    // The half-resolution luma (R32_FLOAT, NON_PIXEL_SHADER_RESOURCE) of the frame last passed to Dispatch() and of the one
-    // before it; the trust mask compares them. The previous one is only meaningful when FlowValid().
+    // The half-resolution luma (R32_FLOAT, NON_PIXEL_SHADER_RESOURCE) of the frame last passed to Dispatch() and of the
+    // one before it; the trust mask compares them. The previous one is only meaningful when FlowValid().
     ID3D12Resource* LumaOfLastFrame() const { return _pyramid[1 - _current][0].resource; }
     ID3D12Resource* LumaOfFrameBefore() const { return _pyramid[_current][0].resource; }
 
@@ -99,19 +101,19 @@ class OpticalFlowDx12
     uint32_t FlowWidth() const { return _flow.width; }
     uint32_t FlowHeight() const { return _flow.height; }
 
-    // Search radius, in pixels of each level, around the coarser level's answer (coarsest level searches kCoarseRadius).
-    // Penalty added per pixel of distance from that answer, which keeps flat areas from picking noise.
+    // Search radius, in pixels of each level, around the coarser level's answer (coarsest level searches
+    // kCoarseRadius). Penalty added per pixel of distance from that answer, which keeps flat areas from picking noise.
     struct Settings
     {
         int radius = 1;
         int coarseRadius = 4;
         float lambda = 0.03f;
-        bool useHistory = true;         // last frame's flow as a candidate
-        int coarseCells = 9;            // how many of the coarser level's nearest cells are candidates (1..9: the 3x3)
-        int smoothRadius = 4;           // the edge-aware smoothing of the result, in half-resolution pixels (0 = off)
-        float confidenceKnee = 0.004f;  // how much picture structure counts as a trustworthy match
-        bool depthMatching = true;      // with depth: the block match counts the window's samples on this pixel's surface
-        bool globalCandidate = true;    // the last frame's whole-picture motion is a candidate everywhere
+        bool useHistory = true;        // last frame's flow as a candidate
+        int coarseCells = 9;           // how many of the coarser level's nearest cells are candidates (1..9: the 3x3)
+        int smoothRadius = 4;          // the edge-aware smoothing of the result, in half-resolution pixels (0 = off)
+        float confidenceKnee = 0.004f; // how much picture structure counts as a trustworthy match
+        bool depthMatching = true;   // with depth: the block match counts the window's samples on this pixel's surface
+        bool globalCandidate = true; // the last frame's whole-picture motion is a candidate everywhere
         bool inverseRefinement = false; // the sub-pixel steps use the current frame's gradients (found once, cheaper)
 
         // Find a hard cut on the frame it happens, on the GPU (see above); the divergence past which a frame is a cut
@@ -244,9 +246,9 @@ class OpticalFlowDx12
     UINT _descriptorSize = 0;
     UINT _heapCursor = 0;
 
-    Tex _pyramid[2][kLevels]; // luma, 1/2 .. 1/64 of the colour; one set is the current frame, the other the previous
+    Tex _pyramid[2][kLevels];   // luma, 1/2 .. 1/64 of the colour; one set is the current frame, the other the previous
     Tex _levelFlow[2][kLevels]; // this frame's flow at each level, and the last frame's (a candidate for this one)
-    Tex _flowMedian; // the median's result, which the smoothing reads
+    Tex _flowMedian;            // the median's result, which the smoothing reads
     Tex _globalFlow; // 1x1: the whole picture's motion in full-resolution pixels, z = 1 when there was enough to say
     Tex _flow;
     Tex _preview;

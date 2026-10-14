@@ -42,8 +42,8 @@ class fakenvapi
     static void* queryInterface(NvU32 id);
     static void reportFGPresent(IDXGISwapChain* pSwapChain, bool fg_state, bool frame_interpolated);
     static bool forceMode(IUnknown* device, LowLatencyMode mode);
-    // Counts forceMode calls: each can destroy the current low latency context and make a new one, which may land at the
-    // old one's address, so a context is told apart by this rather than by its pointer
+    // Counts forceMode calls: each can destroy the current low latency context and make a new one, which may land at
+    // the old one's address, so a context is told apart by this rather than by its pointer
     static uint32_t forcedModeGeneration();
     static bool isLowLatencyActive();
 
@@ -67,8 +67,8 @@ class fakenvapi
     static NvAPI_Status companionGetLatency(HANDLE vkDevice, NV_VULKAN_LATENCY_RESULT_PARAMS* params);
     // The device is gone: its second context lets its tech go (a new device makes it again)
     static void companionDeviceGone(const void* device);
-    // The second context's tech could not start (no AMD card, no driver support): set by the first call that finds out and
-    // kept for the session, so the Output falls back to XeLL and stays there. Any thread.
+    // The second context's tech could not start (no AMD card, no driver support): set by the first call that finds out
+    // and kept for the session, so the Output falls back to XeLL and stays there. Any thread.
     static bool companionFailed();
     // The second contexts are let go (the Output went back to XeLL): Anti-Lag 2 does not stay initialised beside it
     static void companionRelease();

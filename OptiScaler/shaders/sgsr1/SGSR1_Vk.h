@@ -19,5 +19,5 @@ class SGSR1_Vk : public Shader_Vk
     // Neutwo/Hybrid domain curve around the edge-directed math). edgeThreshold/edgeSharpness are
     // fixed constants (0.300/2.00) passed in from the caller, not user-configurable.
     bool Dispatch(VkCommandBuffer InCmdList, const VkImageInfo& InResourceView, const VkImageInfo& OutResourceView,
-                 uint32_t reversibleMode, uint32_t passthrough, float edgeThreshold, float edgeSharpness);
+                  uint32_t reversibleMode, uint32_t passthrough, float edgeThreshold, float edgeSharpness);
 };

@@ -72,8 +72,11 @@ pinned image is provided at its internal path. Packaging keeps the existing
 variant and includes notices; it no longer installs a separate proxy in the ZIP.
 
 The `integration_validation.yml` workflow builds Debug, Release and ReleaseDebug
-on Windows and runs selected host tests. It has been prepared, **not executed**
-in this Linux workspace. No compiled DLL or game/GPU validation is supplied here.
+on Windows and runs selected host tests on pushes to the integration branch and
+pull requests to `main`. A successful Release job uploads the output directory,
+including the embedded-runtime DLL and licences, as a downloadable artifact.
+Check the workflow run for the exact commit's build result. Game/GPU validation
+requires an RTX 30 machine and is separate from these compile and host checks.
 
 Local checks: 36 host tests passed, including control mapping, Vulkan depth
 selection, menu navigation, native latency rules, colour/exposure and retry rules.

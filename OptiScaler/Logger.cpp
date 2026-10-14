@@ -15,8 +15,8 @@
 #include "LogAsyncRule.h"
 
 // The logger in use and what its crash-path flush needs (LogAsyncRule.h). Left allocated at exit on purpose: destroying
-// a thread pool at process exit joins a worker that is already gone. A logger that was replaced (the menu's file/console
-// toggles) is parked in g_retiredSetups, never destroyed: see logasync::Retire.
+// a thread pool at process exit joins a worker that is already gone. A logger that was replaced (the menu's
+// file/console toggles) is parked in g_retiredSetups, never destroyed: see logasync::Retire.
 static std::atomic<logasync::Setup*> g_logSetup { nullptr };
 static std::vector<logasync::Setup*> g_retiredSetups;
 static std::mutex g_retiredMutex;
@@ -263,8 +263,8 @@ void NoteDroppedLogLinesOnPresent()
 }
 
 // Windows calls only one unhandled-exception filter, the last one set. Ours stays that one (the hook on
-// SetUnhandledExceptionFilter keeps a game's later filter in g_filterChain instead of letting it replace ours), drains the
-// log, writes the dump, then calls the game's filter and returns its answer.
+// SetUnhandledExceptionFilter keeps a game's later filter in g_filterChain instead of letting it replace ours), drains
+// the log, writes the dump, then calls the game's filter and returns its answer.
 static LONG WINAPI CrashDumpHandler(EXCEPTION_POINTERS* exceptionInfo);
 
 using FilterFn = LPTOP_LEVEL_EXCEPTION_FILTER;
@@ -272,7 +272,8 @@ using SetFilterFn = FilterFn(WINAPI*)(FilterFn);
 
 static logasync::FilterChain<FilterFn> g_filterChain(CrashDumpHandler);
 static std::atomic<bool> g_crashHandlerInstalled { false };
-// The real SetUnhandledExceptionFilter (the detour's trampoline once hooked), so our own calls are not taken for a game's
+// The real SetUnhandledExceptionFilter (the detour's trampoline once hooked), so our own calls are not taken for a
+// game's
 static std::atomic<SetFilterFn> g_realSetFilter { nullptr };
 
 static FilterFn SetFilterReal(FilterFn filter)
@@ -304,8 +305,8 @@ static LONG WINAPI CrashDumpHandler(EXCEPTION_POINTERS* exceptionInfo)
             else
                 spdlog::default_logger()->flush();
 
-            HANDLE file = CreateFileW(dumpPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                      FILE_ATTRIBUTE_NORMAL, nullptr);
+            HANDLE file =
+                CreateFileW(dumpPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 
             if (file != INVALID_HANDLE_VALUE)
             {

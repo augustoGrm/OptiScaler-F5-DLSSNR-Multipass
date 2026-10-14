@@ -25,8 +25,8 @@ DlssNrDetailReuse_Vk::DlssNrDetailReuse_Vk(std::string InName, VkDevice InDevice
     const VkDeviceSize alignment = std::max<VkDeviceSize>(props.limits.minUniformBufferOffsetAlignment, 1);
     _slotStride = ((sizeof(DlssNrDetailReuseConstants) + alignment - 1) / alignment) * alignment;
 
-    if (!CreateBufferResource(_device, _physicalDevice, &_constantBuffer, &_constantBufferMemory,
-                              _slotStride * kSlots, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+    if (!CreateBufferResource(_device, _physicalDevice, &_constantBuffer, &_constantBufferMemory, _slotStride * kSlots,
+                              VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) ||
         vkMapMemory(_device, _constantBufferMemory, 0, _slotStride * kSlots, 0, &_mappedConstantBuffer) != VK_SUCCESS)
     {
@@ -140,7 +140,8 @@ bool DlssNrDetailReuse_Vk::CreateDummy(VkCommandBuffer cmdList)
         VkMemoryAllocateInfo alloc {};
         alloc.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
         alloc.allocationSize = req.size;
-        alloc.memoryTypeIndex = FindMemoryType(_physicalDevice, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+        alloc.memoryTypeIndex =
+            FindMemoryType(_physicalDevice, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
 
         if (vkAllocateMemory(_device, &alloc, nullptr, &_dummyMemory) != VK_SUCCESS ||
             vkBindImageMemory(_device, _dummyImage, _dummyMemory, 0) != VK_SUCCESS)

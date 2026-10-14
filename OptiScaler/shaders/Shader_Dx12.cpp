@@ -207,24 +207,25 @@ void Shader_Dx12::CreateShaderResourceView(ID3D12Device* device, ID3D12Resource*
     // device too (DXGI_ERROR_INVALID_CALL on the first packed frame).
     if (!translateTypeless)
         srvDesc.Format = viewFormat;
-    else switch (viewFormat)
-    {
-    case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
-        srvDesc.Format = viewFormat;
-        break;
-    case DXGI_FORMAT_D32_FLOAT:
-        srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
-        break;
-    case DXGI_FORMAT_D24_UNORM_S8_UINT:
-        srvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
-        break;
-    case DXGI_FORMAT_D16_UNORM:
-        srvDesc.Format = DXGI_FORMAT_R16_UNORM;
-        break;
-    default:
-        srvDesc.Format = TranslateTypelessFormats(viewFormat);
-        break;
-    }
+    else
+        switch (viewFormat)
+        {
+        case DXGI_FORMAT_R32_FLOAT_X8X24_TYPELESS:
+            srvDesc.Format = viewFormat;
+            break;
+        case DXGI_FORMAT_D32_FLOAT:
+            srvDesc.Format = DXGI_FORMAT_R32_FLOAT;
+            break;
+        case DXGI_FORMAT_D24_UNORM_S8_UINT:
+            srvDesc.Format = DXGI_FORMAT_R24_UNORM_X8_TYPELESS;
+            break;
+        case DXGI_FORMAT_D16_UNORM:
+            srvDesc.Format = DXGI_FORMAT_R16_UNORM;
+            break;
+        default:
+            srvDesc.Format = TranslateTypelessFormats(viewFormat);
+            break;
+        }
     srvDesc.Shader4ComponentMapping = D3D12_DEFAULT_SHADER_4_COMPONENT_MAPPING;
 
     const UINT mipLevels = (desc.MipLevels) ? static_cast<UINT>(desc.MipLevels) : static_cast<UINT>(-1);

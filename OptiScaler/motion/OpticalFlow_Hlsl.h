@@ -56,9 +56,8 @@ RWTexture2D<float>  OutLuma : register(u0);
 RWTexture2D<float4> OutFlow : register(u0);
 RWTexture2D<uint>   OutAge : register(u1);
 
-)HLSL"
-                      F5LOW_LUMA_HLSL
-                      R"HLSL(// Luma of the colour, averaged over 2x2 into the first level.
+)HLSL" F5LOW_LUMA_HLSL
+                                       R"HLSL(// Luma of the colour, averaged over 2x2 into the first level.
 [numthreads(8, 8, 1)]
 void Luma(uint3 id : SV_DispatchThreadID)
 {
@@ -166,7 +165,7 @@ float LargestChange(int2 p, float cur[16])
     return largest;
 }
 )HLSL" // the compiler limits one string literal to 16 KB; the source goes on in a second one
-                      R"HLSL(
+                                       R"HLSL(
 // How much a sample with luma l counts beside the centre pixel's lc: about 1 where the look is alike, little across an edge
 // that changes it, and a little less with the distance from the centre (offset, in pixels of this level).
 float LookWeight(float l, float lc, float2 offset)
@@ -175,7 +174,7 @@ float LookWeight(float l, float lc, float2 offset)
     return max(exp(-dl * dl - 0.5 * dot(offset, offset) / (lookDistance * lookDistance)), 0.02);
 }
 )HLSL"
-                      R"HLSL(
+                                       R"HLSL(
 
 // Block matching at one level: look around the coarser level's answer (doubled, it is in that level's pixels) for the offset
 // into the previous frame with the smallest difference, then a few gradient steps for the part of a pixel.
@@ -463,7 +462,7 @@ void Match(uint3 id : SV_DispatchThreadID)
 }
 
 )HLSL" // ... and on in a third one
-                      R"HLSL(
+                                       R"HLSL(
 // A 3x3 median of each component, which removes the odd wrong block, scaled to full-resolution pixels.
 void Sort(inout float a, inout float b)
 {

@@ -35,16 +35,15 @@ StatusFn s_getStatus = nullptr;
 std::optional<Control::Request> s_lastRequest;
 std::optional<Control::Request> s_lastRefusedRequest;
 
-constexpr unsigned char kRuntimeSha[32] = {
-    0x74,0x89,0xa8,0x9b,0xf5,0x93,0xcd,0xa2,0x43,0xd9,0x5c,0x62,0xe6,0xd8,0xb7,0x59,
-    0x05,0xd9,0x77,0x4e,0x27,0xb7,0xb2,0xd5,0x3b,0x91,0x62,0x5a,0x79,0xc0,0x5c,0xa4
-};
+constexpr unsigned char kRuntimeSha[32] = { 0x74, 0x89, 0xa8, 0x9b, 0xf5, 0x93, 0xcd, 0xa2, 0x43, 0xd9, 0x5c,
+                                            0x62, 0xe6, 0xd8, 0xb7, 0x59, 0x05, 0xd9, 0x77, 0x4e, 0x27, 0xb7,
+                                            0xb2, 0xd5, 0x3b, 0x91, 0x62, 0x5a, 0x79, 0xc0, 0x5c, 0xa4 };
 
 bool Verified(const void* data, DWORD bytes)
 {
     unsigned char hash[32] {};
     return data != nullptr && bytes == 33231360 &&
-           BCryptHash(BCRYPT_SHA256_ALG_HANDLE, nullptr, 0, (PUCHAR)data, bytes, hash, sizeof(hash)) == 0 &&
+           BCryptHash(BCRYPT_SHA256_ALG_HANDLE, nullptr, 0, (PUCHAR) data, bytes, hash, sizeof(hash)) == 0 &&
            memcmp(hash, kRuntimeSha, sizeof(hash)) == 0;
 }
 
@@ -56,7 +55,7 @@ bool VerifiedFile(const std::filesystem::path& path)
     std::vector<char> bytes(33231360);
     file.seekg(0);
     file.read(bytes.data(), bytes.size());
-    return file && Verified(bytes.data(), (DWORD)bytes.size());
+    return file && Verified(bytes.data(), (DWORD) bytes.size());
 }
 
 bool ExtractEmbedded(const std::filesystem::path& path)
@@ -75,7 +74,7 @@ bool ExtractEmbedded(const std::filesystem::path& path)
     std::filesystem::create_directories(path.parent_path());
     const auto temp = path.wstring() + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp";
     std::ofstream file(temp, std::ios::binary | std::ios::trunc);
-    file.write((const char*)data, bytes);
+    file.write((const char*) data, bytes);
     file.close();
     if (!file)
         throw std::runtime_error("Could not extract embedded SM86 runtime");
@@ -140,8 +139,8 @@ std::string GenerateIniContent()
         std::string resolved = ResolveAutoKernelImage();
         if (resolved != "Auto")
         {
-            LOG_INFO("AmpereMfgLoader: Auto kernel image resolved to {} for GPU: {}",
-                     resolved, IdentifyGpu::getPrimaryGpu().name);
+            LOG_INFO("AmpereMfgLoader: Auto kernel image resolved to {} for GPU: {}", resolved,
+                     IdentifyGpu::getPrimaryGpu().name);
             kernelImg = resolved;
         }
     }
@@ -187,13 +186,14 @@ void TrySetup()
 
     const uint32_t archId = static_cast<uint32_t>(gpu.nvidiaArchInfo.architecture_id);
     const bool isAmpere = IsAmpereArch(archId) || (gpu.name.find("RTX 30") != std::string::npos);
-    const bool isTuring = IsTuringArch(archId) || (gpu.name.find("RTX 20") != std::string::npos || gpu.name.find("GTX 16") != std::string::npos);
+    const bool isTuring = IsTuringArch(archId) || (gpu.name.find("RTX 20") != std::string::npos ||
+                                                   gpu.name.find("GTX 16") != std::string::npos);
 
     if (!isAmpere && !isTuring)
     {
-        s_status.ErrorMessage = std::format(
-            "SM86/SM75 MFG requires an RTX 20 series (Turing) or RTX 30 series (Ampere) GPU. Detected arch 0x{:x} ({}).",
-            archId, gpu.name);
+        s_status.ErrorMessage = std::format("SM86/SM75 MFG requires an RTX 20 series (Turing) or RTX 30 series "
+                                            "(Ampere) GPU. Detected arch 0x{:x} ({}).",
+                                            archId, gpu.name);
         LOG_ERROR("AmpereMfgLoader: {}", s_status.ErrorMessage);
         return;
     }
@@ -206,7 +206,8 @@ void TrySetup()
         if (module != nullptr && module != dllModule &&
             KernelBaseProxy::GetProcAddress_()(module, "DLSSG_UniversalProxy") != nullptr)
         {
-            s_status.ErrorMessage = "A separate SM86 proxy is already loaded. Remove that proxy and restart to use built-in MFG.";
+            s_status.ErrorMessage =
+                "A separate SM86 proxy is already loaded. Remove that proxy and restart to use built-in MFG.";
             LOG_ERROR("AmpereMfgLoader: {}", s_status.ErrorMessage);
             return;
         }
@@ -269,8 +270,8 @@ void UpdateControls()
         return;
     auto* config = Config::Instance();
     const auto request = Control::MakeRequest(config->FGDLSSGAmpereMfgMultiplier.value_or_default(),
-                                               config->FGDLSSGAmpereMfgDynamic.value_or_default(),
-                                               config->FGDLSSGAmpereMfgTargetFPS.value_or_default());
+                                              config->FGDLSSGAmpereMfgDynamic.value_or_default(),
+                                              config->FGDLSSGAmpereMfgTargetFPS.value_or_default());
     Control::RuntimeStatus status;
     s_status.ControlReady = s_getStatus(&status) != FALSE;
     if (!s_status.ControlReady)
@@ -282,8 +283,8 @@ void UpdateControls()
         if (s_status.ControlAccepted)
         {
             s_lastRequest = request;
-            LOG_INFO("SM86 control: mode {}, multiplier {}, target {} FPS", (uint32_t)request.mode,
-                     request.multiplier, request.targetFps);
+            LOG_INFO("SM86 control: mode {}, multiplier {}, target {} FPS", (uint32_t) request.mode, request.multiplier,
+                     request.targetFps);
         }
         else if (!s_lastRefusedRequest || memcmp(&request, &*s_lastRefusedRequest, sizeof(request)) != 0)
         {

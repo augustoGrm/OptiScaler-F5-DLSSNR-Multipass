@@ -1091,7 +1091,7 @@ HRESULT WINAPI hkDirectInputGetDeviceData(void* device, DWORD objectDataSize, LP
             std::unique_lock lock(_state.Mutex);
 
             // Never walk past the buffer the game handed in, whatever count comes back.
-            const DWORD entries = (std::min)(*inOut, requested);
+            const DWORD entries = (std::min) (*inOut, requested);
             const DWORD time = GetTickCount();
 
             for (DWORD i = 0; i < entries; i++)

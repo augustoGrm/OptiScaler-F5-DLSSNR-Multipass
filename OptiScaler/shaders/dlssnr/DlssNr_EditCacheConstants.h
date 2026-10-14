@@ -1,7 +1,7 @@
 #pragma once
 
-// Constants of precompile/dlssnr_edit_cache.hlsl, the edit cache (dlssnr/DlssNrEditCache.h): the model runs one frame in
-// N and the frames between show its last answer, carried along the game's vectors. The design follows the edit cache
+// Constants of precompile/dlssnr_edit_cache.hlsl, the edit cache (dlssnr/DlssNrEditCache.h): the model runs one frame
+// in N and the frames between show its last answer, carried along the game's vectors. The design follows the edit cache
 // of Skynizz/optiscaler-dlss5 (its design notes, edit-cache.md); this code is written here from those notes.
 //
 // What is carried is the model's edit as a ratio of light, log2((answer + eps) / (frame + eps)) per channel, taken on
@@ -70,13 +70,13 @@ struct alignas(256) DlssNrEditCacheConstants
     uint32_t DepthInverted;
     float MvScaleX; // the game's scale: raw vectors -> pixels of the motion subrect
     float MvScaleY;
-    uint32_t Passthrough; // 1: the frame is display-encoded (sRGB), decoded to light for the ratio and encoded back
-    float Epsilon;        // the ratio's floor, in the frame's light: white point / 512
-    uint32_t RingSlice;   // Ring: the slice written; Carry / Apply / Compose: the slice of this frame
-    uint32_t TraceSteps;  // Carry / Compose: frames back to the anchor (1 = the anchor is last frame)
-    uint32_t FadeSteps;   // Apply: frames back to the fade source (0 = no crossfade on this frame)
-    float FadeWeight;     // Apply: how much of the carried (new) edit is shown, the rest the fade source (1 = none)
-    float Tolerance;      // the fingerprint's tolerance outside this frame's 3x3 range, stops
+    uint32_t Passthrough;   // 1: the frame is display-encoded (sRGB), decoded to light for the ratio and encoded back
+    float Epsilon;          // the ratio's floor, in the frame's light: white point / 512
+    uint32_t RingSlice;     // Ring: the slice written; Carry / Apply / Compose: the slice of this frame
+    uint32_t TraceSteps;    // Carry / Compose: frames back to the anchor (1 = the anchor is last frame)
+    uint32_t FadeSteps;     // Apply: frames back to the fade source (0 = no crossfade on this frame)
+    float FadeWeight;       // Apply: how much of the carried (new) edit is shown, the rest the fade source (1 = none)
+    float Tolerance;        // the fingerprint's tolerance outside this frame's 3x3 range, stops
     float ContextTolerance; // the surroundings' tolerance, stops
     uint32_t FirstCarried;  // Carry: last frame was the anchor, so there is no earlier validity to read
     uint32_t CellLevel;     // Cells / Apply: which level (Cells), 0
@@ -89,8 +89,8 @@ struct alignas(256) DlssNrEditCacheConstants
     uint32_t DebugView;    // Apply: 1 paints dropped pixels red, filled from the surface; 2 shows the edit's age
     uint32_t ComposeWidth; // Compose: the motion texture's allocation size it writes
     uint32_t ComposeHeight;
-    float Age;             // Apply's debug view 2: frames since the anchor / interval
-    uint32_t RingWidth;    // one slice of the ring (the motion texture's allocation size, grown only)
+    float Age;          // Apply's debug view 2: frames since the anchor / interval
+    uint32_t RingWidth; // one slice of the ring (the motion texture's allocation size, grown only)
     uint32_t RingHeight;
 };
 static_assert(sizeof(DlssNrEditCacheConstants) == 256);

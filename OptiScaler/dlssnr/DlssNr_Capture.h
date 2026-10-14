@@ -295,13 +295,11 @@ class FrameCapture
         buf.SampleDesc.Count = 1;
         buf.Layout = D3D12_TEXTURE_LAYOUT_ROW_MAJOR;
 
-        return SUCCEEDED(device->CreateCommittedResource(&heap, D3D12_HEAP_FLAG_NONE, &buf,
-                                                         D3D12_RESOURCE_STATE_COPY_DEST, nullptr,
-                                                         IID_PPV_ARGS(&shot.readback)));
+        return SUCCEEDED(device->CreateCommittedResource(
+            &heap, D3D12_HEAP_FLAG_NONE, &buf, D3D12_RESOURCE_STATE_COPY_DEST, nullptr, IID_PPV_ARGS(&shot.readback)));
     }
 
-    static void copy(ID3D12GraphicsCommandList* cmd, ID3D12Resource* src, D3D12_RESOURCE_STATES state,
-                     Shot& shot)
+    static void copy(ID3D12GraphicsCommandList* cmd, ID3D12Resource* src, D3D12_RESOURCE_STATES state, Shot& shot)
     {
         if (shot.readback == nullptr)
             return;
@@ -406,8 +404,9 @@ class FrameCapture
             for (unsigned int i = 0; i < captured_ && i < notes_.size(); ++i)
                 if (!notes_[i].empty())
                     std::fprintf(f, "frame %02u %s\n", i, notes_[i].c_str());
-            std::fprintf(f, "\nbefore_NN.raw is the frame as the upscaler produced it (a frame noted beforeIsProxy 1: the "
-                            "model's input picture instead).\n");
+            std::fprintf(f,
+                         "\nbefore_NN.raw is the frame as the upscaler produced it (a frame noted beforeIsProxy 1: the "
+                         "model's input picture instead).\n");
             std::fprintf(f, "after_NN.raw is the same frame once the model's edit was applied.\n");
             std::fprintf(f, "Consecutive frames, same run, so the pair is a control.\n");
             if (!about.empty())

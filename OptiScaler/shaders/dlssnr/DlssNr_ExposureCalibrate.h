@@ -11,18 +11,18 @@
 //
 // Each step holds one EV for `settle` evaluations, so the model's recurrent history catches up, then measures
 // `measure` of them. The GPU reduces every measured evaluation to a grid of tile statistics (its own D3D12 pass,
-// precompile/dlssnr_detail_stats.hlsl), which comes back through a readback ring some evaluations later, tagged with the
-// Ticket it was issued under, and ReduceGrid turns it into one Stats. Score per step:
+// precompile/dlssnr_detail_stats.hlsl), which comes back through a readback ring some evaluations later, tagged with
+// the Ticket it was issued under, and ReduceGrid turns it into one Stats. Score per step:
 //   detail / (the largest detail of any step) - flickerWeight * flicker / (that same largest detail)
 //     - damageWeight * shoulder - floorWeight * floor - colourWeight * |saturation change|
 //     - shadowWeight * shadows darkened - crushWeight * crushed
 // flicker = how much the output changed between evaluations beyond what the input did (the still-camera case of a
-// warping error); shoulder and floor = the share of the encoded model input on the shoulder or in the floor; saturation,
-// shadows darkened (only darker counts) and crushed compare the output with the game's frame (Settings has the weights).
-// A run is unsure when detail varies across the steps no more than the measurement's own noise: then the pick would
-// follow the noise, not the picture, and the current value is kept. The noise is the larger of two, both in the units
-// the detail is compared in (Finish has the rule): the input's -- every step measures the band detail of the same,
-// untouched game frame, so however much that varies across the steps is the measurement on its own -- and the
+// warping error); shoulder and floor = the share of the encoded model input on the shoulder or in the floor;
+// saturation, shadows darkened (only darker counts) and crushed compare the output with the game's frame (Settings has
+// the weights). A run is unsure when detail varies across the steps no more than the measurement's own noise: then the
+// pick would follow the noise, not the picture, and the current value is kept. The noise is the larger of two, both in
+// the units the detail is compared in (Finish has the rule): the input's -- every step measures the band detail of the
+// same, untouched game frame, so however much that varies across the steps is the measurement on its own -- and the
 // output's -- how uncertain each step's mean is from the spread of its own samples. The detail measure
 // is selectable: the output's raw Laplacian (the focus-measure classic, sensitive to single-pixel grain) or a band-pass
 // at the model's own scale, taken as the output's band energy minus the input's. Both are kept per step for the log.
@@ -60,7 +60,10 @@ namespace DlssNrExposureCalibrate
 constexpr float kNeutralTrim = 5.0f;
 constexpr float kGameExposureNeutralTrim = 1.0f;
 
-inline float TrimForEv(float ev, float neutral = kNeutralTrim) { return DlssNrTrim::ClampTrim(neutral * std::exp2(-ev)); }
+inline float TrimForEv(float ev, float neutral = kNeutralTrim)
+{
+    return DlssNrTrim::ClampTrim(neutral * std::exp2(-ev));
+}
 inline float EvForTrim(float trim, float neutral = kNeutralTrim)
 {
     return -std::log2(std::max(trim, DlssNrTrim::kMinTrim) / neutral);
@@ -90,12 +93,12 @@ enum class Abort : uint32_t
 {
     None = 0,
     Cancelled,
-    Motion,        // the input changed between measured evaluations: the camera or the scene moved
-    Resolution,    // the frame size changed
-    NrOff,         // NR was switched off, or stopped running
-    SourceChanged, // the white point source is no longer the one being calibrated
-    ExposureMoved, // the base white point (Automatic's metering, or the followed game exposure) moved
-    Unavailable,   // a run could not go on for longer than Settings::unavailableTolerance (StopBlocker says why)
+    Motion,          // the input changed between measured evaluations: the camera or the scene moved
+    Resolution,      // the frame size changed
+    NrOff,           // NR was switched off, or stopped running
+    SourceChanged,   // the white point source is no longer the one being calibrated
+    ExposureMoved,   // the base white point (Automatic's metering, or the followed game exposure) moved
+    Unavailable,     // a run could not go on for longer than Settings::unavailableTolerance (StopBlocker says why)
     NothingMeasured, // every measurement came back empty (another NR path ran, or the stats pass failed)
     TooFewMeasured,  // a measure got fewer than half its evaluations back: not a number to compare with
 };
@@ -249,21 +252,22 @@ struct Settings
     float flickerWeight = 1.0f;
     float damageWeight = 2.0f; // the shoulder share (highlights the model was shown compressed)
     // The floor share (the model was shown near black). Half the shoulder's: in The Witcher 3 and Cyberpunk 2077
-    // (2026-09-30) the steps with a floor had their shadows lifted in the output (up to 23%), and crushing grew toward the
-    // bright steps, where the floor is empty -- the output's own shadow terms below catch what this was meant to.
+    // (2026-09-30) the steps with a floor had their shadows lifted in the output (up to 23%), and crushing grew toward
+    // the bright steps, where the floor is empty -- the output's own shadow terms below catch what this was meant to.
     float floorWeight = 1.0f;
-    // A step whose output is more or less saturated than the game's input loses this times the fraction (0.5: 10% more or
-    // less chroma costs 0.05). NBA 2K27, The Witcher 3 and Cyberpunk 2077 desaturated at every step, 3-35%, least at the
-    // darker steps; Cyberpunk's colour read 14% apart between the passes at its darkest step (the scene's own lights), so
-    // the weight stays low enough that noise cannot turn a pass. A rail against a model that recolours, not a steer.
+    // A step whose output is more or less saturated than the game's input loses this times the fraction (0.5: 10% more
+    // or less chroma costs 0.05). NBA 2K27, The Witcher 3 and Cyberpunk 2077 desaturated at every step, 3-35%, least at
+    // the darker steps; Cyberpunk's colour read 14% apart between the passes at its darkest step (the scene's own
+    // lights), so the weight stays low enough that noise cannot turn a pass. A rail against a model that recolours, not
+    // a steer.
     //
-    // Tried at 1.0 and put back (2026-09-30): the picture was read as warm, but warmth is not a property of the exposure.
-    // Two Witcher 3 scenes disagreed in sign -- a dark one peaked warm (+0.0073) near 0 EV with saturation +20% at
-    // -1.5 EV, while another read cool at every step (-0.0010 to -0.0043), cooler the brighter it went. Raising this
-    // moves the result toward whichever step recolours least, which lines up with warmth differently in every scene, and
-    // at 1.0 it changed the second scene's outcome not at all (the colour term spans 0.18 of a 1.7 score range there;
-    // shoulder and crushing decide it). Warmth would need a term of its own to be steered, and this weight cannot stand
-    // in for one.
+    // Tried at 1.0 and put back (2026-09-30): the picture was read as warm, but warmth is not a property of the
+    // exposure. Two Witcher 3 scenes disagreed in sign -- a dark one peaked warm (+0.0073) near 0 EV with saturation
+    // +20% at -1.5 EV, while another read cool at every step (-0.0010 to -0.0043), cooler the brighter it went. Raising
+    // this moves the result toward whichever step recolours least, which lines up with warmth differently in every
+    // scene, and at 1.0 it changed the second scene's outcome not at all (the colour term spans 0.18 of a 1.7 score
+    // range there; shoulder and crushing decide it). Warmth would need a term of its own to be steered, and this weight
+    // cannot stand in for one.
     float colourWeight = 0.5f;
     // The output's shadows (the input below ~2% of white). Darkened loses this times the share of the picture in shadow
     // times the fraction it darkened -- lifting is free, and a frame with hardly any shadow cannot veto a step on the
@@ -293,7 +297,7 @@ struct Settings
     // them (at least noiseFloor, the stats' last printed digit): the input is the same frame at every step.
     float unsureNoise = 4.0f;
     float noiseFloor = 1e-5f;
-    float baseToleranceEv = 0.25f; // how far the live base white point may drift from the frozen one
+    float baseToleranceEv = 0.25f;    // how far the live base white point may drift from the frozen one
     float neutralTrim = kNeutralTrim; // the slider's 0 EV, and the scale detail is measured at
     // Consecutive evaluations a run may be unavailable (the game dropping its exposure texture for a frame, Automatic's
     // meter missing one) before it aborts; meanwhile it holds its step and measures nothing.
@@ -470,10 +474,10 @@ struct Note
         Restart, // the view changed and the sweep starts over
     };
     Kind kind = Kind::Retry;
-    float ev = 0.0f;       // the step
-    float value = 0.0f;    // Retry: the input change; Restart: the input band now
-    float against = 0.0f;  // Retry: the motion limit; Restart: the run's first input band
-    unsigned count = 0;    // Retry: which retry of this step; Restart: which restart
+    float ev = 0.0f;      // the step
+    float value = 0.0f;   // Retry: the input change; Restart: the input band now
+    float against = 0.0f; // Retry: the motion limit; Restart: the run's first input band
+    unsigned count = 0;   // Retry: which retry of this step; Restart: which restart
 };
 
 // What one evaluation should do.
@@ -808,9 +812,9 @@ class Sweep
     // value: the range is a limit, so the best step inside it is the best there is to offer.
     bool AtLimit() const { return atLimit_; }
 
-    // The raw measure's best, for the menu's "Apply raw instead" -- and whether the passes agree on it. BestEv reads the
-    // last pass alone, so without this the button would offer a value only one pass ever proposed while the run itself
-    // was offering another (found in review, 2026-09-30).
+    // The raw measure's best, for the menu's "Apply raw instead" -- and whether the passes agree on it. BestEv reads
+    // the last pass alone, so without this the button would offer a value only one pass ever proposed while the run
+    // itself was offering another (found in review, 2026-09-30).
     bool RawAgreed() const
     {
         if (!finished_ || unsure_ || unrepeated_ || firstSteps_.empty())
@@ -827,8 +831,8 @@ class Sweep
     bool Unrepeated() const { return unrepeated_; }
 
     // The passes: how many a run makes, which one is on (0-based), and what each concluded -- the first once it is
-    // done (its steps kept for the log; the sweep's own Steps() are the pass on now, or the last), the last once the run
-    // has finished.
+    // done (its steps kept for the log; the sweep's own Steps() are the pass on now, or the last), the last once the
+    // run has finished.
     unsigned Passes() const { return settings_.measureOnly ? 1u : std::max(settings_.passes, 1u); }
     unsigned Pass() const { return pass_; }
     const std::vector<StepResult>& FirstPassSteps() const { return firstSteps_; }
@@ -861,8 +865,8 @@ class Sweep
         const float scale = top > 1e-9f ? top : 1.0f;
         return std::max(r.DetailOf(d), 0.0f) / scale - settings_.flickerWeight * r.Flicker() / scale -
                settings_.damageWeight * r.shoulder - settings_.floorWeight * r.floor -
-               settings_.colourWeight * std::fabs(r.Saturation()) -
-               settings_.shadowWeight * r.ShadowCost() - settings_.crushWeight * r.crushed;
+               settings_.colourWeight * std::fabs(r.Saturation()) - settings_.shadowWeight * r.ShadowCost() -
+               settings_.crushWeight * r.crushed;
     }
 
     // The best step's EV under a measure, or the current value when nothing was measured.
@@ -1004,7 +1008,6 @@ class Sweep
             unsure_ = second_.unsure;
             atLimit_ = AtEndOfRange(result_);
             return;
-
         }
 
         // Every pass must say the same: unsure if either was; a change only if both land within a step of each
@@ -1032,7 +1035,7 @@ class Sweep
 
         if (close)
             result_ = std::fabs(first_.result - currentEv_) <= std::fabs(second_.result - currentEv_) ? first_.result
-                                                                                                    : second_.result;
+                                                                                                      : second_.result;
         else
             result_ = std::clamp(currentEv_, lo, hi);
         atLimit_ = AtEndOfRange(result_);
@@ -1084,8 +1087,8 @@ class Sweep
         // The step nearest the current value stands for it.
         int nearest = -1;
         for (size_t i = 0; i < steps.size(); ++i)
-            if (steps[i].samples > 0 &&
-                (nearest < 0 || std::fabs(steps[i].ev - currentEv_) < std::fabs(steps[(size_t) nearest].ev - currentEv_)))
+            if (steps[i].samples > 0 && (nearest < 0 || std::fabs(steps[i].ev - currentEv_) <
+                                                            std::fabs(steps[(size_t) nearest].ev - currentEv_)))
                 nearest = (int) i;
 
         float detailLo = std::numeric_limits<float>::infinity(), detailHi = -std::numeric_limits<float>::infinity();
@@ -1156,8 +1159,8 @@ class Sweep
     float lastInputChange_ = 0.0f;
     float lastSceneBand_ = -1.0f;
     std::vector<Note> notes_;
-    float shownEv_ = 0.0f;     // the EV the last evaluation was shown
-    bool longSettle_ = false;  // the step on screen was rewound to from more than a step away
+    float shownEv_ = 0.0f;    // the EV the last evaluation was shown
+    bool longSettle_ = false; // the step on screen was rewound to from more than a step away
     bool running_ = false;
     bool finished_ = false;
     bool unsure_ = false;

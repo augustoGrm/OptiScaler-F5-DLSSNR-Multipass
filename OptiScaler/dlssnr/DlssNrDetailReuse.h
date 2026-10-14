@@ -9,9 +9,9 @@
 // rejection (see dlssnr_detail_reuse.hlsl).
 //
 // How wrong a reused frame can be is the share of the picture with no detail to move times how much the model changes
-// the picture. Passes build on each other, so the second factor grows with the pass count and reuse suits one pass best:
-// with two or three, the same dropped areas flicker visibly in fast motion (The Witcher 3, 2026-09-30; not seen there
-// with frame generation on). MotionGuard below bounds the first factor, not the second.
+// the picture. Passes build on each other, so the second factor grows with the pass count and reuse suits one pass
+// best: with two or three, the same dropped areas flicker visibly in fast motion (The Witcher 3, 2026-09-30; not seen
+// there with frame generation on). MotionGuard below bounds the first factor, not the second.
 //
 // This header is the cadence only: which frame runs the model, which reuses, and what each has to record.
 // It has no GPU or game dependency so tests/nr_detail_reuse_smoke.cpp can check it on the host.
@@ -66,14 +66,14 @@ struct FrameFacts
 struct Decision
 {
     Kind kind = Kind::Full;
-    bool historyUsable = false;  // the saved detail is from the previous frame and may be reprojected
-    bool captureHistory = false; // save answer - input, the input colour and the depth for the next frame
-    bool composeMotion = false;  // full frame: give the model motion composed over the last two frames
-    bool saveMotion = false;     // reuse frame: keep this frame's motion for the next full frame to compose
+    bool historyUsable = false;    // the saved detail is from the previous frame and may be reprojected
+    bool captureHistory = false;   // save answer - input, the input colour and the depth for the next frame
+    bool composeMotion = false;    // full frame: give the model motion composed over the last two frames
+    bool saveMotion = false;       // reuse frame: keep this frame's motion for the next full frame to compose
     bool accumulateMotion = false; // ... added to what the reuse frame before kept (the second reused frame in a row)
-    int spreadStep = -1;         // the k-th frame of a spread (0 = the full frame), or -1: none on this frame
-    float spreadAmount = 0.0f;   // how far it pulls toward the moved detail shown before (Steady's amount)
-    bool saveShown = false;      // keep what this frame shows (its spread result) for the spread's next frame
+    int spreadStep = -1;           // the k-th frame of a spread (0 = the full frame), or -1: none on this frame
+    float spreadAmount = 0.0f;     // how far it pulls toward the moved detail shown before (Steady's amount)
+    bool saveShown = false;        // keep what this frame shows (its spread result) for the spread's next frame
 };
 
 // The k-th frame of a spread over `spread` frames shows (k + 1) / spread of the new detail. What it blends with is the
@@ -143,13 +143,13 @@ class StepTracker
     unsigned long long last = 0;
     bool hasLast = false;
 
-public:
+  public:
     void Add(unsigned long long frame)
     {
         if (hasLast && frame > last)
         {
             steps[next++ % kKept] = frame - last;
-            count = (std::min)(count + 1, kKept);
+            count = (std::min) (count + 1, kKept);
         }
         last = frame;
         hasLast = true;
@@ -172,7 +172,7 @@ public:
 // the step) still passes.
 inline unsigned long long MaxStepFor(bool withFg, unsigned long long typical)
 {
-    return withFg ? (std::max)(4ull, typical + typical / 2) : 1ull;
+    return withFg ? (std::max) (4ull, typical + typical / 2) : 1ull;
 }
 
 // Why reuse frames fell back to the model (Cadence::Fallback), for the log: the first of these that held.
@@ -189,18 +189,18 @@ struct FallbackCauses
 
 class Cadence
 {
-    bool historyValid = false; // the previous frame's detail is saved
-    bool pending = false;      // Next asked for a capture; Captured has not confirmed it yet
+    bool historyValid = false;    // the previous frame's detail is saved
+    bool pending = false;         // Next asked for a capture; Captured has not confirmed it yet
     unsigned int reusedInRow = 0; // reused frames since the last full one
     int spreadStep = -1;          // the last frame's step in a spread, -1: none
-    bool lastBlocked = false; // the history was saved on a blocked frame (a held frame saves the frozen picture)
+    bool lastBlocked = false;     // the history was saved on a blocked frame (a held frame saves the frozen picture)
     bool hasLast = false;
     unsigned long long lastFrame = 0;
     unsigned long long lastRevision = 0;
     unsigned long long full = 0, reused = 0, fallback = 0, held = 0;
     FallbackCauses causes;
 
-public:
+  public:
     Decision Next(const FrameFacts& f)
     {
         Decision d;
@@ -359,7 +359,7 @@ class FrameRateGate
     double interval = 0.0; // smoothed seconds per rendered frame; 0 = no reading yet
     bool allowed = true;
 
-public:
+  public:
     static constexpr double kResumeFactor = 1.15;
 
     // minimumFps <= 0: no minimum. Returns whether reuse may run.
@@ -404,7 +404,7 @@ class MotionGuard
     double calm = 0.0;        // seconds the readings have stayed at or under the threshold
     double sinceSample = 0.0; // seconds since the last reading
 
-public:
+  public:
     static constexpr double kResumeAfter = 0.3; // seconds of a calm picture before reuse comes back
     static constexpr double kStale = 1.0;       // no reading for this long: the measurement is not arriving
 

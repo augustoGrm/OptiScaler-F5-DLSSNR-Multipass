@@ -31,8 +31,8 @@ VkSemaphore g_presentWait = VK_NULL_HANDLE;
 // The mode with frame generation is chosen but the game's swapchain was made without the bridge.
 bool g_frameGenerationMode = false;
 
-// Why the frame source left the present's Vulkan device alone (a second device the game made), for the menu. Copied out of
-// the frame source under the run mutex; the menu thread reads it under its own.
+// Why the frame source left the present's Vulkan device alone (a second device the game made), for the menu. Copied out
+// of the frame source under the run mutex; the menu thread reads it under its own.
 std::mutex g_refusalMutex;
 std::string g_refusal;
 
@@ -50,9 +50,9 @@ void OnPresent(VkQueue queue, VkPresentInfoKHR* present, VkDevice device, VkPhys
         return;
 
     // Whenever the D3D11 bridge (with_dx12/dx11_with_dx12_sc.h, NativeMotionDx11::OnFGPresent) owns the frame, this
-    // driver stays out of its way, the invariant NativeDriverDx11.h describes ("only one of the two drivers' OnPresent is
-    // ever fed real work"). With DlssNrNativeDxvkVulkan on it is never made for a dxvk game: that game's frame generation
-    // is the Vulkan present bridge, as for a native Vulkan game (hooks/DxgiFactory_Hooks.cpp).
+    // driver stays out of its way, the invariant NativeDriverDx11.h describes ("only one of the two drivers' OnPresent
+    // is ever fed real work"). With DlssNrNativeDxvkVulkan on it is never made for a dxvk game: that game's frame
+    // generation is the Vulkan present bridge, as for a native Vulkan game (hooks/DxgiFactory_Hooks.cpp).
     if (State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12)
         return;
 
@@ -72,8 +72,8 @@ void OnPresent(VkQueue queue, VkPresentInfoKHR* present, VkDevice device, VkPhys
     if (native::VkFrameSource::SwapchainExtent(present->pSwapchains[0], &width, &height))
         GenericDepthVk::OnPresent(device, width, height);
 
-    // With the Vulkan present bridge up the game presents on a hidden window and this is the only place its picture goes on
-    // to the D3D12 swapchain: every present is handled, producer or not.
+    // With the Vulkan present bridge up the game presents on a hidden window and this is the only place its picture
+    // goes on to the D3D12 swapchain: every present is handled, producer or not.
     const bool bridged = VkPresentBridge::Active(present->pSwapchains[0]);
     g_source.SetBridged(bridged);
     const bool producing = g_driver.Enabled() && !g_driver.Failed();
@@ -117,9 +117,9 @@ void OnPresent(VkQueue queue, VkPresentInfoKHR* present, VkDevice device, VkPhys
         const uint64_t done = g_source.NextFenceValue();
         const auto producerDone = g_source.BridgedProducerDone();
 
-        bool signalled = VkPresentBridge::CopyToOutput(g_source.BridgedPicture(), g_source.BridgedFence(),
-                                                       g_source.BridgedCopied(), producerDone.fence, producerDone.value,
-                                                       done);
+        bool signalled =
+            VkPresentBridge::CopyToOutput(g_source.BridgedPicture(), g_source.BridgedFence(), g_source.BridgedCopied(),
+                                          producerDone.fence, producerDone.value, done);
 
         // The copy to the output failed and nothing was queued for `done`: the producer may still be reading the shared
         // picture, and the next copy in must wait for it all the same
@@ -139,8 +139,8 @@ void OnPresent(VkQueue queue, VkPresentInfoKHR* present, VkDevice device, VkPhys
         g_refusal = g_source.Refusal();
     }
 
-    // A refused second device has its own line (once per device, VkFrameSource::EnsureDevices): its presents alternate with
-    // the held device's, and would flip this one every frame
+    // A refused second device has its own line (once per device, VkFrameSource::EnsureDevices): its presents alternate
+    // with the held device's, and would flip this one every frame
     const bool refused = !g_source.Refusal().empty() && g_source.Error() == g_source.Refusal();
 
     if (!refused && g_source.Error() != lastError)
@@ -176,10 +176,7 @@ bool AcquireBridgeDevice(VkPhysicalDevice physical, ID3D12Device** device, ID3D1
     return true;
 }
 
-void ReleaseBridgeDevice()
-{
-    g_source.PinD3D12(false);
-}
+void ReleaseBridgeDevice() { g_source.PinD3D12(false); }
 
 ID3D12Device* ShareBridgeDevice(VkPhysicalDevice physical, std::string& why)
 {

@@ -13,7 +13,7 @@ constexpr uint32_t kPassesPerFrame = 3;     // luma, histograms, divergence
 constexpr uint32_t kFramesInFlight = 16;
 constexpr uint32_t kHeapSize = kDescriptorsPerPass * kPassesPerFrame * kFramesInFlight;
 constexpr DXGI_FORMAT kLumaFormat = DXGI_FORMAT_R32_FLOAT;
-constexpr DXGI_FORMAT kStateFormat = DXGI_FORMAT_R32_UINT;     // typed atomics on this are required of every device
+constexpr DXGI_FORMAT kStateFormat = DXGI_FORMAT_R32_UINT;    // typed atomics on this are required of every device
 constexpr DXGI_FORMAT kDistrustFormat = DXGI_FORMAT_R8_UNORM; // typed UAV stores of this are required too
 constexpr uint32_t kStateRows = 19; // nine tiles' counts, nine previous histograms, one row of scratch
 
@@ -216,8 +216,8 @@ void SceneCutDx12::Transition(ID3D12GraphicsCommandList* list, Tex& tex, D3D12_R
 void SceneCutDx12::Pass(ID3D12GraphicsCommandList* list, ID3D12PipelineState* pso, ID3D12Resource* source,
                         DXGI_FORMAT format, Tex* target, uint32_t groupsX, uint32_t groupsY, const Constants& constants)
 {
-    // The state stays a UAV for good (the passes only write it); the flag and the distrust are UAVs while the passes run
-    // and textures after.
+    // The state stays a UAV for good (the passes only write it); the flag and the distrust are UAVs while the passes
+    // run and textures after.
     Transition(list, target != nullptr ? *target : _state, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     Transition(list, _flag, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
     Transition(list, _distrust, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
@@ -308,7 +308,7 @@ bool SceneCutDx12::DetectColor(ID3D12GraphicsCommandList* list, ID3D12Resource* 
     const D3D12_RESOURCE_DESC desc = color->GetDesc();
     const uint32_t width = (uint32_t) desc.Width;
     const uint32_t height = desc.Height;
-    const uint32_t step = (std::max)(1u, (width + kColorLumaWidth - 1) / kColorLumaWidth);
+    const uint32_t step = (std::max) (1u, (width + kColorLumaWidth - 1) / kColorLumaWidth);
     const uint32_t lumaWidth = (width + step - 1) / step;
     const uint32_t lumaHeight = (height + step - 1) / step;
 
@@ -354,7 +354,7 @@ bool SceneCutDx12::DetectColor(ID3D12GraphicsCommandList* list, ID3D12Resource* 
     constants.colorX = width;
     constants.colorY = height;
     constants.step = step;
-    constants.whiteNits = (std::max)(whiteNits, 1.0f);
+    constants.whiteNits = (std::max) (whiteNits, 1.0f);
     Pass(list, _lumaPso[(int) encoding], color, colorFormat, &_luma, (lumaWidth + 7) / 8, (lumaHeight + 7) / 8,
          constants);
 

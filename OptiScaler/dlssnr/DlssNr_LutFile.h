@@ -133,7 +133,7 @@ inline bool ParseCube(const std::string& path, Lut3D* out, std::string* error)
                 return false;
             }
 
-            float(&target)[3] = keyword == "DOMAIN_MIN" ? domainMin : domainMax;
+            float (&target)[3] = keyword == "DOMAIN_MIN" ? domainMin : domainMax;
             target[0] = v[0];
             target[1] = v[1];
             target[2] = v[2];

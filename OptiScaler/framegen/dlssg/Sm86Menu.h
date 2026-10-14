@@ -71,7 +71,8 @@ template <class Help> void RenderSm86Menu(Config* config, Help help)
     int ceiling = config->FGDLSSGAmpereMfgMaxFrames.value_or_default();
     if (ImGui::SliderInt("Maximum generated frames (restart)##sm86", &ceiling, 1, 5))
         config->FGDLSSGAmpereMfgMaxFrames = ceiling;
-    help("Runtime capability ceiling: five generated frames allows up to X6. Save Settings and restart after changing it.");
+    help("Runtime capability ceiling: five generated frames allows up to X6. Save Settings and restart after changing "
+         "it.");
 
     if (changed)
         AmpereMfgLoader::UpdateControls();

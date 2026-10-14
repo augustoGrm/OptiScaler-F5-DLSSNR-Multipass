@@ -9,8 +9,8 @@
 //
 // Following the game's exposure is right only for a game that hands over its frame before applying its own exposure
 // (unexposed: RDR2's raw scene luminance, the game's exposure of ~0.006-0.013 comes later); for the usual pre-exposed
-// frame (NBA 2K27, Cyberpunk 2077, The Witcher 3) it would apply the game's exposure a second time. Which kind a game is
-// cannot be read off the frame: a dark unexposed scene has the numbers of a pre-exposed one (RDR2 read 12-116 in dim
+// frame (NBA 2K27, Cyberpunk 2077, The Witcher 3) it would apply the game's exposure a second time. Which kind a game
+// is cannot be read off the frame: a dark unexposed scene has the numbers of a pre-exposed one (RDR2 read 12-116 in dim
 // scenes on 2026-09-26, 900-1700 in daylight), and the DLSS inputs are the same (NBA passes an exposure texture,
 // PreExposure 1 and the flag like RDR2). So the games measured to be unexposed are listed by exe and follow by default;
 // the user's Follow checkbox overrides it both ways.

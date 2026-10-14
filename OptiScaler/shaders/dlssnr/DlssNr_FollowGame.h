@@ -6,9 +6,10 @@
 // the game's own adaptation, frame by frame: it cannot be fooled by letterboxing, menus, fades or a flash, and it moves
 // exactly when the picture on screen moves. Automatic's meter is not the game's, though -- it maps the scene's
 // log-average to middle grey (0.18) and RDR2 maps it to about 1.7, a steady 3.2 EV apart in gameplay (measured
-// 2026-09-25, -3.14..-3.27 over 70 s). So the game's exposure is not used as it is: the offset between the two is learned
-// here, once per session, and the base white point Automatic uses becomes the game's times that offset. The brightness
-// slider keeps its meaning (the same EV is the same picture), and only the frame-to-frame movement is the game's.
+// 2026-09-25, -3.14..-3.27 over 70 s). So the game's exposure is not used as it is: the offset between the two is
+// learned here, once per session, and the base white point Automatic uses becomes the game's times that offset. The
+// brightness slider keeps its meaning (the same EV is the same picture), and only the frame-to-frame movement is the
+// game's.
 //
 // The offset is the median of log2(Automatic base white point / the game's) over kWindow readings, taken only while the
 // frame reads unexposed (DlssNr_AutoTrimDefault.h), and locked from then on. The meter ignores black tiles, so a
@@ -26,9 +27,9 @@
 // menus, loading screens and fades from dragging the offset, and a menu freezes the game's exposure too, so "steady
 // for a moment" would not tell them apart: once the game's exposure has changed kGameMovesChanges separate times
 // (each a step of kGameStepEv from where it last settled), Track() stops easing for good (until the offset is learned
-// again). One change is not adapting: NBA 2K27 reports 1 while it loads and 1.3195 from then on. A gap in the readings (a pause, alt-tab,
-// frames without the game's exposure) starts the wait and the smoothing over, so it cannot count as a disagreement
-// that lasted.
+// again). One change is not adapting: NBA 2K27 reports 1 while it loads and 1.3195 from then on. A gap in the readings
+// (a pause, alt-tab, frames without the game's exposure) starts the wait and the smoothing over, so it cannot count as
+// a disagreement that lasted.
 //
 // Header-only and free of D3D types so it can be exercised on the host (tests/nr_follow_game_smoke.cpp).
 
@@ -56,13 +57,13 @@ constexpr unsigned long long kTrackGapMs = 250; // no reading for longer than th
 // What a Track() call did, for the log.
 struct TrackEvent
 {
-    bool started = false;     // the offset began to ease
-    bool settled = false;     // ... and has arrived
-    bool stopped = false;     // ... or was stopped on the way (`why`)
-    bool gameMoves = false;   // the game's own exposure moved: easing is off from now on
-    const char* why = "";     // stopped: "a Tune is measuring", "the readings stopped", "the game's exposure moves"
-    float fromEv = 0.0f;      // the offset when it began (started) or began this ease (settled, stopped)
-    float toEv = 0.0f;        // the smoothed reading it eases toward (started), the offset now (settled, stopped)
+    bool started = false;   // the offset began to ease
+    bool settled = false;   // ... and has arrived
+    bool stopped = false;   // ... or was stopped on the way (`why`)
+    bool gameMoves = false; // the game's own exposure moved: easing is off from now on
+    const char* why = "";   // stopped: "a Tune is measuring", "the readings stopped", "the game's exposure moves"
+    float fromEv = 0.0f;    // the offset when it began (started) or began this ease (settled, stopped)
+    float toEv = 0.0f;      // the smoothed reading it eases toward (started), the offset now (settled, stopped)
 };
 
 class Calibration
@@ -118,7 +119,8 @@ class Calibration
             return event;
 
         // Stops an ease on the way, for the log.
-        const auto stop = [this, &event](const char* why) {
+        const auto stop = [this, &event](const char* why)
+        {
             if (easing_)
             {
                 event.stopped = true;

@@ -1,8 +1,9 @@
 #pragma once
 
-// The D3D12 adapter's frame source: zero-copy. The picture is the swap chain's back buffer (it rests in PRESENT) and the depth
-// is the finder's slot copies (resource_tracking/GenericDepth_Dx12.cpp is the depth observer of the same adapter). Return() has
-// nothing to copy back: the producer processed the back buffer in place on the swap chain's own queue.
+// The D3D12 adapter's frame source: zero-copy. The picture is the swap chain's back buffer (it rests in PRESENT) and
+// the depth is the finder's slot copies (resource_tracking/GenericDepth_Dx12.cpp is the depth observer of the same
+// adapter). Return() has nothing to copy back: the producer processed the back buffer in place on the swap chain's own
+// queue.
 
 #include "FrameContract.h"
 

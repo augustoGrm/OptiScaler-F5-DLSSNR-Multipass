@@ -301,7 +301,8 @@ HANDLE WINAPI KernelHooks::hk_K32_CreateFileW(LPCWSTR lpFileName, DWORD dwDesire
 }
 
 VALIDATE_HOOK(hk_K32_SetUnhandledExceptionFilter, Kernel32Proxy::PFN_SetUnhandledExceptionFilter)
-LPTOP_LEVEL_EXCEPTION_FILTER WINAPI KernelHooks::hk_K32_SetUnhandledExceptionFilter(LPTOP_LEVEL_EXCEPTION_FILTER lpFilter)
+LPTOP_LEVEL_EXCEPTION_FILTER WINAPI
+KernelHooks::hk_K32_SetUnhandledExceptionFilter(LPTOP_LEVEL_EXCEPTION_FILTER lpFilter)
 {
     // Logger.cpp keeps its own filter on top and calls the game's after it (the real API is only reached from there)
     return CrashFilterFromGame(lpFilter, o_K32_SetUnhandledExceptionFilter);
@@ -310,8 +311,8 @@ LPTOP_LEVEL_EXCEPTION_FILTER WINAPI KernelHooks::hk_K32_SetUnhandledExceptionFil
 VALIDATE_HOOK(hk_K32_ExitProcess, Kernel32Proxy::PFN_ExitProcess)
 VOID WINAPI KernelHooks::hk_K32_ExitProcess(UINT uExitCode)
 {
-    // Other threads (the log's writer) are stopped by ExitProcess and the loader's detach is skipped for it: this is the
-    // last chance for the queued log lines to reach the disk. Bounded.
+    // Other threads (the log's writer) are stopped by ExitProcess and the loader's detach is skipped for it: this is
+    // the last chance for the queued log lines to reach the disk. Bounded.
     DrainLogForExit();
     o_K32_ExitProcess(uExitCode);
 }

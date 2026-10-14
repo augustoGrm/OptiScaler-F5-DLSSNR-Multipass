@@ -49,16 +49,11 @@ void EvaluateAfterUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Paramete
 // Runs the same pass over Color immediately before SR or RR+SR consumes it. The call is a no-op
 // unless RunBeforeSR is enabled. Color is returned in its original readable state.
 void EvaluateBeforeUpscale(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* params,
-                           ID3D12CommandQueue* timingQueue = nullptr,
-                           unsigned long long submissionEpoch = 0, bool rayReconstruction = false);
-
-
+                           ID3D12CommandQueue* timingQueue = nullptr, unsigned long long submissionEpoch = 0,
+                           bool rayReconstruction = false);
 
 // Frame generation titles tag their UI layer through Streamline; a copy of it makes the HUD mask
 // exact at the finished frame. Called at tag time.
-
-
-
 
 // The settings panel, drawn inside OptiScaler's menu.
 void RenderMenu(::Config* config, float menuResScale, MenuPages::Page page);
@@ -93,22 +88,23 @@ void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue
 // then.
 bool NativeInputBlockedBySwapChainInterop();
 
-// The native input producer's entry: runs DLSS-NR on the picture `color` (a back buffer in the PRESENT state, or any resource) with a depth and a motion
-// texture of the picture's size made from the depth finder and the optical flow (both NON_PIXEL_SHADER_RESOURCE, motion in
-// full-resolution pixels towards the previous frame). Records onto `cmd`, a list of the caller's own, and leaves `color` in
-// PRESENT. False when it did not run (the reason is in FinishedPictureStatus()).
-// `colorSpace` is what the picture's values mean (NativeInputColourSpace() reads it off a swap chain); `pictureState` is the
-// state `color` is in on entry and is left in. `historyDistrust` (optional) is the producer's trust mask
-// (DlssNrFrameInfo::HistoryDistrust). `epoch` numbers the frame: one present count of the API the picture came from, so it
-// moves by exactly 1 per presented frame and keeps moving on frames NR skips (native::PresentEpoch).
+// The native input producer's entry: runs DLSS-NR on the picture `color` (a back buffer in the PRESENT state, or any
+// resource) with a depth and a motion texture of the picture's size made from the depth finder and the optical flow
+// (both NON_PIXEL_SHADER_RESOURCE, motion in full-resolution pixels towards the previous frame). Records onto `cmd`, a
+// list of the caller's own, and leaves `color` in PRESENT. False when it did not run (the reason is in
+// FinishedPictureStatus()). `colorSpace` is what the picture's values mean (NativeInputColourSpace() reads it off a
+// swap chain); `pictureState` is the state `color` is in on entry and is left in. `historyDistrust` (optional) is the
+// producer's trust mask (DlssNrFrameInfo::HistoryDistrust). `epoch` numbers the frame: one present count of the API the
+// picture came from, so it moves by exactly 1 per presented frame and keeps moving on frames NR skips
+// (native::PresentEpoch).
 bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
                       ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
-                      bool depthReversed, bool reset,
-                      DXGI_COLOR_SPACE_TYPE colorSpace, D3D12_RESOURCE_STATES pictureState, unsigned long long epoch);
-// The colour space of a swap chain's picture, from what the game set (SDR when it set nothing), for a native-input frame.
+                      bool depthReversed, bool reset, DXGI_COLOR_SPACE_TYPE colorSpace,
+                      D3D12_RESOURCE_STATES pictureState, unsigned long long epoch);
+// The colour space of a swap chain's picture, from what the game set (SDR when it set nothing), for a native-input
+// frame.
 DXGI_COLOR_SPACE_TYPE NativeInputColourSpace(IDXGISwapChain* swapchain, DXGI_FORMAT format);
 void FinishedPictureColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE colorSpace);
-
 
 // Asks the model whether it will work on Direct3D 11 at all, once, and logs the answer.
 //
@@ -154,17 +150,18 @@ std::string DeferredDlssStatus();
 // Why it is not, if it is not. Empty while it is running or has not been tried yet.
 const char* FailureReason();
 
-// Which model backend the loaded nvngx.dll_dlssnr.dll is: "NVIDIA NGX" or "vendor-neutral port". Empty until it has been loaded.
+// Which model backend the loaded nvngx.dll_dlssnr.dll is: "NVIDIA NGX" or "vendor-neutral port". Empty until it has
+// been loaded.
 const char* BackendName();
 
 // What the game offers by way of exposure. Observed every frame whether or not the setting is on, so
 // the menu can say whether turning it on would do anything here.
 struct ExposureStatus
 {
-    unsigned long long seenFrames = 0;   // evaluates observed; 0 means nothing has run yet
-    bool offeredNow = false;             // a texture on the most recent frame
-    bool everOffered = false;            // a texture on any frame so far
-    float exposure = 0.0f;               // last value read back, 0 if none
+    unsigned long long seenFrames = 0; // evaluates observed; 0 means nothing has run yet
+    bool offeredNow = false;           // a texture on the most recent frame
+    bool everOffered = false;          // a texture on any frame so far
+    float exposure = 0.0f;             // last value read back, 0 if none
     float preExposure = 1.0f;
 };
 
@@ -200,17 +197,17 @@ struct ExposureCalibrationStatus
     bool running = false;
     bool finished = false;
     float progress = 0.0f;
-    float stepEv = 0.0f;      // the step on screen while running
-    unsigned stepIndex = 0;   // 0-based
+    float stepEv = 0.0f;    // the step on screen while running
+    unsigned stepIndex = 0; // 0-based
     unsigned stepCount = 0;
-    unsigned pass = 0;        // 0-based, of `passes` over the same steps
+    unsigned pass = 0; // 0-based, of `passes` over the same steps
     unsigned passes = 1;
     std::string aborted; // why the last run stopped early, empty if it did not
     float currentEv = 0.0f;
     float baseWhitePoint = 0.0f; // the base the run was tuned at (what the Trim multiplies)
     float anchorKey = 0.0f; // the scene's brightness the run was tuned at: the key of a point Tune's result is saved as
-    bool changed = false; // the chosen value differs from the current one (a flat curve keeps the current)
-    bool unsure = false;  // detail varied no more than the measurement's own noise: the current value is kept
+    bool changed = false;   // the chosen value differs from the current one (a flat curve keeps the current)
+    bool unsure = false;    // detail varied no more than the measurement's own noise: the current value is kept
     bool unrepeated = false; // the passes disagreed (firstPassEv, lastPassEv): the current is kept
     float firstPassEv = 0.0f, lastPassEv = 0.0f;
     float resultEv = 0.0f;
@@ -240,7 +237,8 @@ struct ExposureCalibrationStatus
     Measurement latest, previous;
     bool hasPrevious = false;
     bool comparable = false; // latest and previous were measured at the same scale (source and white point)
-    // The latest in words (DlssNrExposureCalibrate::DetailWords and the rest), and against the previous when comparable.
+    // The latest in words (DlssNrExposureCalibrate::DetailWords and the rest), and against the previous when
+    // comparable.
     std::string detailWords, flickerWords, colourWords, shadowWords, compareWords;
 };
 
@@ -256,8 +254,8 @@ void DismissExposureCalibration();
 // live value instead of the stale manual one while Auto is overriding it.
 int CurrentModelResolutionPercent();
 
-// Compress screen edges (shaders/dlssnr/DlssNr_Spatial.h), as of the last frame NR ran on Direct3D 12: a status code, the
-// size the model works on and the one it would have without it, and the boxes to draw on screen (fractions of the
+// Compress screen edges (shaders/dlssnr/DlssNr_Spatial.h), as of the last frame NR ran on Direct3D 12: a status code,
+// the size the model works on and the one it would have without it, and the boxes to draw on screen (fractions of the
 // frame). Status::Off until a frame has run since the setting changed. The menu owns every word for it.
 Spatial::Published EdgeCompressionStatus();
 
@@ -269,13 +267,13 @@ void CurrentModelSize(unsigned int& width, unsigned int& height);
 // The white point the exposure meter has settled on, or 0 if it has not taken a reading yet. For the
 // overlay, so the number in use is visible rather than inferred.
 
-// Reuse detail between frames (DlssNrDetailReuse.h): frames that ran the model, frames that reused the last one's detail, and frames
-// that would have reused but had to run the model (reset, settings change, gap). `why` is empty while it is available
-// on this route, else the reason it is not. lightMs / heavyMs: the cheapest and dearest NR GPU time over the last 16
-// measured frames (0 before any), which shows how unevenly full and reused frames cost -- what frame pacing sees.
-// averageMs: their mean, the real per-frame cost while full and reused frames alternate (a single reading is one or
-// the other). active: reuse ran on the last NR frame (and the bottleneck reuse was then off). baseFps: the rendered
-// frame rate the minimum is checked against (0 before a reading).
+// Reuse detail between frames (DlssNrDetailReuse.h): frames that ran the model, frames that reused the last one's
+// detail, and frames that would have reused but had to run the model (reset, settings change, gap). `why` is empty
+// while it is available on this route, else the reason it is not. lightMs / heavyMs: the cheapest and dearest NR GPU
+// time over the last 16 measured frames (0 before any), which shows how unevenly full and reused frames cost -- what
+// frame pacing sees. averageMs: their mean, the real per-frame cost while full and reused frames alternate (a single
+// reading is one or the other). active: reuse ran on the last NR frame (and the bottleneck reuse was then off).
+// baseFps: the rendered frame rate the minimum is checked against (0 before a reading).
 struct DetailReuseInfo
 {
     unsigned long long full = 0, reused = 0, fallback = 0;
@@ -284,8 +282,8 @@ struct DetailReuseInfo
     double lightMs = 0.0, heavyMs = 0.0, averageMs = 0.0;
     double baseFps = 0.0;
     bool active = false;
-    bool holding = false;   // reuse is paused right now: the picture is moving too fast
-    float dropped = -1.0f;  // share of the last measured frame that had no detail to move, or negative if unmeasured
+    bool holding = false;  // reuse is paused right now: the picture is moving too fast
+    float dropped = -1.0f; // share of the last measured frame that had no detail to move, or negative if unmeasured
 };
 DetailReuseInfo DetailReuseStatus();
 
@@ -316,7 +314,6 @@ SceneCutInfo SceneCutStatus();
 std::optional<double> LastGpuTime();
 
 // What the white point meter last settled on, or 0 when it is not running. For the menu.
-
 
 // Writes a run of consecutive frames, each as the upscaler produced it and again after the model's edit.
 // The pair is a control: same frames, same run, one variable.

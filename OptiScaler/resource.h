@@ -32,7 +32,7 @@
 #define NR_RELEASE_MAJOR_VERSION 0
 #define NR_RELEASE_MINOR_VERSION 1
 #define NR_RELEASE_HOTFIX_VERSION 30
-#define NR_RELEASE_VERSION_STR                                                                                        \
+#define NR_RELEASE_VERSION_STR                                                                                         \
     STRINGIZE(NR_RELEASE_MAJOR_VERSION) "." STRINGIZE(NR_RELEASE_MINOR_VERSION) "." STRINGIZE(NR_RELEASE_HOTFIX_VERSION)
 
 // #define VER_DEV_RELEASE
@@ -49,8 +49,7 @@
 // both stay frozen at the upstream-sync marker (0.7.7) forever, since this fork stopped syncing
 // upstream, and every release since has looked identical there regardless of what actually shipped.
 #define VER_FILE_VERSION NR_RELEASE_MAJOR_VERSION, NR_RELEASE_MINOR_VERSION, NR_RELEASE_HOTFIX_VERSION, VER_BUILD_NUMBER
-#define VER_FILE_VERSION_STR                                                                                           \
-    NR_RELEASE_VERSION_STR "." STRINGIZE(VER_BUILD_NUMBER)
+#define VER_FILE_VERSION_STR NR_RELEASE_VERSION_STR "." STRINGIZE(VER_BUILD_NUMBER)
 
 #define VER_PRODUCT_VERSION VER_FILE_VERSION
 

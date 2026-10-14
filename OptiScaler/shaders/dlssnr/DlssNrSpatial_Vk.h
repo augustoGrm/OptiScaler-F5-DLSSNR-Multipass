@@ -55,7 +55,8 @@ class DlssNrSpatial_Vk : public Shader_Vk
     // t0-t2. By mode (InConstants.mode):
     //   100  InReads[0] the encoded colour                                -> InOut0 the packed colour (RGBA16F)
     //   101  InReads[1] depth, InReads[2] motion                          -> InOut0 R32F depth, InOut1 RGBA32F motion
-    //   102  InReads[0] the packed model input, InReads[1] the answer     -> InOut0 the unpacked input, InOut1 the answer
+    //   102  InReads[0] the packed model input, InReads[1] the answer     -> InOut0 the unpacked input, InOut1 the
+    //   answer
     // Width x Height threads come from the constants (8x8 groups). The written images are in GENERAL.
     bool Dispatch(VkCommandBuffer InCmdList, const DlssNr::Spatial::Constants& InConstants, const Read (&InReads)[3],
                   VkImageView InOut0, VkImageView InOut1);

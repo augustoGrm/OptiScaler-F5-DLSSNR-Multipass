@@ -166,18 +166,19 @@ AcquireStatus Dx11FrameSource::Acquire(FrameInput& input)
     }
     else
     {
-        // A copy between a multisampled and a single-sample texture is dropped by D3D11 without a word: NR would cost GPU time
-        // and show nothing. Resolve the samples into the picture instead (Return draws the result back into every sample).
-        // Under frame generation's swap chain (Dx11wDx12SC) the back buffer is the hidden real one; the bridge copies the
-        // same buffer out on its own (resolving it too) before this runs and takes NR's result from the D3D12 side, so
-        // nothing here depends on the order of the two.
+        // A copy between a multisampled and a single-sample texture is dropped by D3D11 without a word: NR would cost
+        // GPU time and show nothing. Resolve the samples into the picture instead (Return draws the result back into
+        // every sample). Under frame generation's swap chain (Dx11wDx12SC) the back buffer is the hidden real one; the
+        // bridge copies the same buffer out on its own (resolving it too) before this runs and takes NR's result from
+        // the D3D12 side, so nothing here depends on the order of the two.
         static bool loggedMultisampled = false;
 
         if (!loggedMultisampled)
         {
             loggedMultisampled = true;
-            LOG_INFO("Native motion (D3D11): the game's swap chain is multisampled ({} samples): resolved in, drawn back",
-                     desc.SampleDesc.Count);
+            LOG_INFO(
+                "Native motion (D3D11): the game's swap chain is multisampled ({} samples): resolved in, drawn back",
+                desc.SampleDesc.Count);
         }
 
         if (const char* why = _msaa.ResolveIn(_context11.Get(), _backBuffer.Get(), _picture.Tex11()))
@@ -198,8 +199,8 @@ AcquireStatus Dx11FrameSource::Acquire(FrameInput& input)
     const auto depthSnap = GenericDepthDx11::BestSnapshot();
     bool depthReady = false;
 
-    // The finder follows the device the game presents with, a frame or more after a new one appears: until then its copy can be
-    // of the old device, which this device's context cannot copy from (the runtime drops the copy).
+    // The finder follows the device the game presents with, a frame or more after a new one appears: until then its
+    // copy can be of the old device, which this device's context cannot copy from (the runtime drops the copy).
     Microsoft::WRL::ComPtr<ID3D11Device> snapDevice;
 
     if (depthSnap.valid)
@@ -212,7 +213,8 @@ AcquireStatus Dx11FrameSource::Acquire(FrameInput& input)
         if (!loggedOtherDevice)
         {
             loggedOtherDevice = true;
-            LOG_WARN("Native motion (D3D11): the depth copy is of another device than the picture's; no depth this frame");
+            LOG_WARN(
+                "Native motion (D3D11): the depth copy is of another device than the picture's; no depth this frame");
         }
     }
     else if (depthSnap.valid)
@@ -245,9 +247,10 @@ AcquireStatus Dx11FrameSource::Acquire(FrameInput& input)
         static uint64_t noDepthSnapStreak = 0;
 
         if (++noDepthSnapStreak % 300 == 0)
-            LOG_WARN("Native motion (D3D11): the depth finder has no snapshot for this frame ({} frames running without "
-                     "one)",
-                     noDepthSnapStreak);
+            LOG_WARN(
+                "Native motion (D3D11): the depth finder has no snapshot for this frame ({} frames running without "
+                "one)",
+                noDepthSnapStreak);
     }
 
     const uint64_t signalValue = _fence.Next();
@@ -295,12 +298,12 @@ void Dx11FrameSource::Return(const FrameInput& input, const FrameOutput& output)
         return;
     }
 
-    // output.done names NativeProducer's own internal fence (shared with no one -- it only tells the D3D12 adapter, which
-    // reads nothing back across an API boundary, that a frame was submitted). Waiting on it directly here was a bug: it
-    // checked output.done.fence for non-null but then waited on OUR shared fence for OUR value, two unrelated counters
-    // that happened to track closely enough to let the wait return immediately without ever actually waiting for the
-    // producer's GPU work -- so the D3D11 copy-back could run before DLSS-NR's write ever landed, and did.
-    // A fresh signal on the private queue, right after the producer's ExecuteCommandLists (already submitted when Run()
+    // output.done names NativeProducer's own internal fence (shared with no one -- it only tells the D3D12 adapter,
+    // which reads nothing back across an API boundary, that a frame was submitted). Waiting on it directly here was a
+    // bug: it checked output.done.fence for non-null but then waited on OUR shared fence for OUR value, two unrelated
+    // counters that happened to track closely enough to let the wait return immediately without ever actually waiting
+    // for the producer's GPU work -- so the D3D11 copy-back could run before DLSS-NR's write ever landed, and did. A
+    // fresh signal on the private queue, right after the producer's ExecuteCommandLists (already submitted when Run()
     // returned, so this Signal is ordered after it on the GPU regardless of CPU timing), gives the D3D11 context
     // something real to wait on.
     if (output.done.fence != nullptr && _queue12 != nullptr)

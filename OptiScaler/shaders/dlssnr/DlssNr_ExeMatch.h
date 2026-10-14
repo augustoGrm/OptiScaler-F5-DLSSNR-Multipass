@@ -23,8 +23,7 @@ inline std::string BaseNameLower(const std::string& exe)
 }
 
 // Whether the game's exe (name or full path, any case) is on a known-games list.
-template <size_t N>
-inline bool IsKnownGame(const std::string& exe, const char* const (&list)[N])
+template <size_t N> inline bool IsKnownGame(const std::string& exe, const char* const (&list)[N])
 {
     const std::string name = BaseNameLower(exe);
     for (const char* known : list)

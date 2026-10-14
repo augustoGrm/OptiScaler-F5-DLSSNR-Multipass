@@ -9,20 +9,21 @@
 
 namespace native
 {
-// One plain R32_FLOAT copy of a game's depth buffer, taken on a D3D11 immediate context in the middle of the game's frame: the
-// D3D11 depth finder's copy (resource_tracking/GenericDepth_Dx11.cpp), moved here so it can be checked on its own.
+// One plain R32_FLOAT copy of a game's depth buffer, taken on a D3D11 immediate context in the middle of the game's
+// frame: the D3D11 depth finder's copy (resource_tracking/GenericDepth_Dx11.cpp), moved here so it can be checked on
+// its own.
 //
-// The buffer is most often still bound for depth writes when it is copied, and D3D11 binds no read view of a resource bound for
-// writing (the view is quietly made null), so a pass reading it directly reads nothing. It is copied as it is first (a copy may
-// read a bound depth buffer) into a texture of its own format family that can be read, then a small pass converts that into the
-// R32_FLOAT copy. An R32 depth buffer is already the copy's format family and is copied straight into it. Only the first
-// subresource (top mip, first slice) is copied.
+// The buffer is most often still bound for depth writes when it is copied, and D3D11 binds no read view of a resource
+// bound for writing (the view is quietly made null), so a pass reading it directly reads nothing. It is copied as it is
+// first (a copy may read a bound depth buffer) into a texture of its own format family that can be read, then a small
+// pass converts that into the R32_FLOAT copy. An R32 depth buffer is already the copy's format family and is copied
+// straight into it. Only the first subresource (top mip, first slice) is copied.
 //
-// A multisampled buffer is copied as it is into a read copy with the same samples, and the pass resolves it: each pixel gets
-// the nearest of its samples (native/DepthResolve_Hlsl.h), so edges follow the surface in front.
+// A multisampled buffer is copied as it is into a read copy with the same samples, and the pass resolves it: each pixel
+// gets the nearest of its samples (native/DepthResolve_Hlsl.h), so edges follow the surface in front.
 //
-// The game's compute shader (with its class instances), CS read view 0 and CS write view 0 are put back after the pass; nothing
-// else of the game's state is touched. Not thread-safe: the caller guards it.
+// The game's compute shader (with its class instances), CS read view 0 and CS write view 0 are put back after the pass;
+// nothing else of the game's state is touched. Not thread-safe: the caller guards it.
 class DepthCopyDx11
 {
   public:
@@ -30,11 +31,12 @@ class DepthCopyDx11
     DepthCopyDx11(const DepthCopyDx11&) = delete;
     DepthCopyDx11& operator=(const DepthCopyDx11&) = delete;
 
-    // Copies `source` (a depth buffer made on the device `context` belongs to) into the copy. `reversed` says which way its
-    // depth runs (near is 1), which decides the nearest sample of a multisampled buffer. Returns nullptr when the copy was
-    // taken, otherwise why not (a fixed string: the same reason gives the same pointer, so a caller can log each one once); a
-    // copy not taken is not offered (Taken() is false) until a later Take succeeds. What is kept between copies is made again
-    // when the size, format or device changes; a texture that could not be made is not tried again until one of those changes.
+    // Copies `source` (a depth buffer made on the device `context` belongs to) into the copy. `reversed` says which way
+    // its depth runs (near is 1), which decides the nearest sample of a multisampled buffer. Returns nullptr when the
+    // copy was taken, otherwise why not (a fixed string: the same reason gives the same pointer, so a caller can log
+    // each one once); a copy not taken is not offered (Taken() is false) until a later Take succeeds. What is kept
+    // between copies is made again when the size, format or device changes; a texture that could not be made is not
+    // tried again until one of those changes.
     const char* Take(ID3D11DeviceContext* context, ID3D11Resource* source, bool reversed);
 
     // Lets go of everything made on the device, and of the device.
@@ -54,7 +56,8 @@ class DepthCopyDx11
 
   private:
     const char* MakeCopy(uint32_t width, uint32_t height);
-    const char* MakeStage(uint32_t width, uint32_t height, DXGI_FORMAT typeless, DXGI_FORMAT view, DXGI_SAMPLE_DESC samples);
+    const char* MakeStage(uint32_t width, uint32_t height, DXGI_FORMAT typeless, DXGI_FORMAT view,
+                          DXGI_SAMPLE_DESC samples);
     ID3D11ComputeShader* Shader();
     ID3D11ComputeShader* ResolveShader(bool reversed);
 

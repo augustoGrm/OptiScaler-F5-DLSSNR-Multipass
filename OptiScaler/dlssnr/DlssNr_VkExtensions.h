@@ -115,8 +115,8 @@ inline bool IsWritable(const void* p)
 }
 
 // Devices created with shaderStorageImageWriteWithoutFormat switched on (the create hook, Vulkan_Hooks.cpp), which
-// detail reuse's shader needs. Forgotten when the device is destroyed, so a new device with the same handle value is not
-// mistaken for it.
+// detail reuse's shader needs. Forgotten when the device is destroyed, so a new device with the same handle value is
+// not mistaken for it.
 inline std::mutex g_writeWithoutFormatMutex;
 inline std::vector<VkDevice> g_writeWithoutFormatDevices;
 

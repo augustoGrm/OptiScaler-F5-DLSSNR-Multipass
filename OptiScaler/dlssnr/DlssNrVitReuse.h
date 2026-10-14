@@ -9,21 +9,22 @@
 // out on some frames leaves the previous frame's result in its output buffer, which the next kernel reads (on the plain
 // set: in its 1-D result, see below).
 //
-// Why dropping the run is safe (checked on a real capture, fp8 kernels): the run's sync counters are referenced by no kernel outside
-// it, so nothing that is kept can wait on something that was dropped; and its output buffer is written only by its last kernel.
-// Anything that does not look like that turns the feature off for the session instead of guessing.
-// The caller records a UAV barrier where a skipped run ends (before its kept last kernel on the plain set, see below), so the kernels
-// on either side of the gap cannot overlap on the GPU.
+// Why dropping the run is safe (checked on a real capture, fp8 kernels): the run's sync counters are referenced by no
+// kernel outside it, so nothing that is kept can wait on something that was dropped; and its output buffer is written
+// only by its last kernel. Anything that does not look like that turns the feature off for the session instead of
+// guessing. The caller records a UAV barrier where a skipped run ends (before its kept last kernel on the plain set,
+// see below), so the kernels on either side of the gap cannot overlap on the GPU.
 //
-// The plain fp16 kernels (used by some modified DLSS-NR DLLs) lay the network's memory out differently: the run's 2-D output, which the
-// decoder reads, shares memory with an early full-size activation that is rewritten every evaluation. Only the run's 1-D result, the
-// input of its last kernel (repack_1d_to_2d), keeps its own memory. So on that set a skipped run keeps its last kernel, which rebuilds
-// the 2-D output from the kept 1-D result. That kernel takes only its source, its destination and two sizes (checked on a plain
-// capture): it waits on no sync counter, so it can run without the rest of the run. The fp8 set drops it: there the 2-D output keeps its
-// own memory, and nothing says the 1-D result does.
+// The plain fp16 kernels (used by some modified DLSS-NR DLLs) lay the network's memory out differently: the run's 2-D
+// output, which the decoder reads, shares memory with an early full-size activation that is rewritten every evaluation.
+// Only the run's 1-D result, the input of its last kernel (repack_1d_to_2d), keeps its own memory. So on that set a
+// skipped run keeps its last kernel, which rebuilds the 2-D output from the kept 1-D result. That kernel takes only its
+// source, its destination and two sizes (checked on a plain capture): it waits on no sync counter, so it can run
+// without the rest of the run. The fp8 set drops it: there the 2-D output keeps its own memory, and nothing says the
+// 1-D result does.
 //
-// This header is only the decision: which launch of an evaluation is dropped. It knows nothing about NvAPI, so tests/nr_vit_reuse_smoke.cpp
-// exercises it on the host.
+// This header is only the decision: which launch of an evaluation is dropped. It knows nothing about NvAPI, so
+// tests/nr_vit_reuse_smoke.cpp exercises it on the host.
 
 #include <atomic>
 #include <cstddef>
@@ -66,8 +67,8 @@ inline Role RoleOf(const char* name)
     return Role::Inner;
 }
 
-// Which kernel set a kernel belongs to: the fp8 ones carry the _fp8 suffix, the plain fp16 ones (used by some modified DLSS-NR DLLs) do not.
-// Each set has its own Reuse setting.
+// Which kernel set a kernel belongs to: the fp8 ones carry the _fp8 suffix, the plain fp16 ones (used by some modified
+// DLSS-NR DLLs) do not. Each set has its own Reuse setting.
 enum class KernelSet : uint8_t
 {
     Unknown = 0, // no ViT run seen yet
@@ -132,14 +133,15 @@ template <class Handle> class Kernels
 class Filter
 {
   public:
-    // Start of one model evaluation of `feature`. `every` is how often the run is computed (1 = always) for the fp8 kernel set,
-    // `everyPlain` for the plain fp16 one (0 = the same as `every`); the run's first launch tells which set it is. `reset` forces it.
-    // `slot` (the frame number; negative = none) anchors the cycle to the frame: a pass computes when slot % every == 0.
-    // Every pass of a frame gets the same slot, so all passes compute on the same frame and all reuse on the next. Offsetting
-    // each pass by its index (v0.1.19 pre-release) flickered on camera motion at 3 passes: a pass then built its bottleneck
-    // on a pass that was reusing, so the picture used data two frames old, like every = 3.
-    // The cycle is anchored to the frame, so a pass that had to start over (reset, lost cache) falls back into its own
-    // phase on the next due frame. A pass never goes longer than every - 1 reused evaluations, anchored or not.
+    // Start of one model evaluation of `feature`. `every` is how often the run is computed (1 = always) for the fp8
+    // kernel set, `everyPlain` for the plain fp16 one (0 = the same as `every`); the run's first launch tells which set
+    // it is. `reset` forces it. `slot` (the frame number; negative = none) anchors the cycle to the frame: a pass
+    // computes when slot % every == 0. Every pass of a frame gets the same slot, so all passes compute on the same
+    // frame and all reuse on the next. Offsetting each pass by its index (v0.1.19 pre-release) flickered on camera
+    // motion at 3 passes: a pass then built its bottleneck on a pass that was reusing, so the picture used data two
+    // frames old, like every = 3. The cycle is anchored to the frame, so a pass that had to start over (reset, lost
+    // cache) falls back into its own phase on the next due frame. A pass never goes longer than every - 1 reused
+    // evaluations, anchored or not.
     void Begin(const void* feature, bool reset, unsigned every, long long slot = -1, unsigned everyPlain = 0)
     {
         Ctx& c = ctx();
@@ -154,8 +156,8 @@ class Filter
 
     bool Evaluating() const { return ctx().active; }
 
-    // True when this launch is to be dropped. Must be called for every launch of the evaluation, in order. `set` is the launch's
-    // kernel set; only the run's first launch uses it.
+    // True when this launch is to be dropped. Must be called for every launch of the evaluation, in order. `set` is the
+    // launch's kernel set; only the run's first launch uses it.
     bool Drop(Role role, KernelSet set = KernelSet::Fp8)
     {
         Ctx& c = ctx();
@@ -222,8 +224,8 @@ class Filter
             return false;
         }
         default:
-            // Another kernel in the middle of a skipped run. It is kept (it is not ours to remove), the rest of the run is
-            // still dropped so nothing waits on a half-dropped chain, and the feature goes off afterwards.
+            // Another kernel in the middle of a skipped run. It is kept (it is not ours to remove), the rest of the run
+            // is still dropped so nothing waits on a half-dropped chain, and the feature goes off afterwards.
             if (c.skipping)
                 c.anomaly = true;
 
@@ -231,8 +233,8 @@ class Filter
         }
     }
 
-    // True once, right after the Drop call for the last launch of a skipped run, whether that launch was dropped or kept: the
-    // caller's barrier goes where that launch is (before it when it is kept).
+    // True once, right after the Drop call for the last launch of a skipped run, whether that launch was dropped or
+    // kept: the caller's barrier goes where that launch is (before it when it is kept).
     bool TakeGap()
     {
         Ctx& c = ctx();
@@ -241,10 +243,10 @@ class Filter
         return gap;
     }
 
-    // One launch call of the evaluation: `kept` gets the launches that go out, in order. `gap` is where in `kept` the barrier goes
-    // (the last launch of a skipped run was there, or is there when it is kept), or -1 when that launch was not in this call.
-    // True when the call needs that treatment (something dropped, or a barrier to record); false = launch the call unchanged.
-    // `roleOf(launch)` gives a launch's std::pair<Role, KernelSet>.
+    // One launch call of the evaluation: `kept` gets the launches that go out, in order. `gap` is where in `kept` the
+    // barrier goes (the last launch of a skipped run was there, or is there when it is kept), or -1 when that launch
+    // was not in this call. True when the call needs that treatment (something dropped, or a barrier to record); false
+    // = launch the call unchanged. `roleOf(launch)` gives a launch's std::pair<Role, KernelSet>.
     template <class T, class RoleOfLaunch>
     bool Split(const T* launches, size_t count, RoleOfLaunch roleOf, std::vector<T>& kept, std::ptrdiff_t& gap)
     {
@@ -338,8 +340,8 @@ class Filter
   private:
     struct Entry
     {
-        bool valid = false;  // the output buffer holds a complete result
-        unsigned skips = 0;  // consecutive evaluations that reused it
+        bool valid = false; // the output buffer holds a complete result
+        unsigned skips = 0; // consecutive evaluations that reused it
     };
 
     struct Ctx

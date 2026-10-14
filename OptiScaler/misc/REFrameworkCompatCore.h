@@ -14,8 +14,8 @@ namespace REFrameworkCompatCore
 {
 
 // The function a REFramework build that follows XeFG exports (the onehoon fork, Release 13 and later). Called before
-// XeFG's swapchain is torn down so REFramework lets go of it first. Arguments: XeFG's public swapchain (the one the game
-// presents to), XeFG's swapchain context, the window.
+// XeFG's swapchain is torn down so REFramework lets go of it first. Arguments: XeFG's public swapchain (the one the
+// game presents to), XeFG's swapchain context, the window.
 inline constexpr char kPreRetireExport[] = "REFramework_XeFG_PreRetireSwapchainV1";
 using PreRetireFn = uint32_t(WINAPI*)(IUnknown* publicProxy, void* xefgContext, HWND hwnd);
 
@@ -112,8 +112,8 @@ inline bool ImageExports(const uint8_t* data, size_t size, const char* exportNam
     if (exportDir->VirtualAddress == 0 || exportDir->Size == 0)
         return false;
 
-    const size_t sectionsAt = (size_t) dos->e_lfanew + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER) +
-                              nt->FileHeader.SizeOfOptionalHeader;
+    const size_t sectionsAt =
+        (size_t) dos->e_lfanew + sizeof(DWORD) + sizeof(IMAGE_FILE_HEADER) + nt->FileHeader.SizeOfOptionalHeader;
     const unsigned sectionCount = nt->FileHeader.NumberOfSections;
 
     if (sectionsAt + (size_t) sectionCount * sizeof(IMAGE_SECTION_HEADER) > size)
@@ -130,8 +130,7 @@ inline bool ImageExports(const uint8_t* data, size_t size, const char* exportNam
     const auto dir = (const IMAGE_EXPORT_DIRECTORY*) (data + dirAt);
     size_t namesAt = 0;
 
-    if (dir->NumberOfNames == 0 ||
-        !detail::RvaToOffset(sections, sectionCount, dir->AddressOfNames, size, &namesAt) ||
+    if (dir->NumberOfNames == 0 || !detail::RvaToOffset(sections, sectionCount, dir->AddressOfNames, size, &namesAt) ||
         namesAt + (size_t) dir->NumberOfNames * sizeof(uint32_t) > size)
         return false;
 
