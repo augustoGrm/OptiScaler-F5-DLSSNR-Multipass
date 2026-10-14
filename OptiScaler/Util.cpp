@@ -1,6 +1,7 @@
 #include "pch.h"
 
 #include "Util.h"
+#include "misc/PathUnder.h"
 #include "Config.h"
 
 #include <proxies/Ntdll_Proxy.h>
@@ -508,16 +509,18 @@ bool Util::GetFileVersion(std::wstring dllPath, version_t* fileVersionOut, versi
 
 bool Util::IsSubpath(const std::filesystem::path& path, const std::filesystem::path& base)
 {
-    auto rel = std::filesystem::relative(path, base);
+    // By spelling, without case as Windows compares paths: a game's "Streamline" folder against our "streamline"
+    // (upstream 880402ba) was "not inside" through relative(), which keeps the case
+    if (pathrule::IsUnder(path, base))
+        return true;
 
-    // relative() returns an empty path when the two inputs share no common root -- different drive
-    // letters being the ordinary case, not an edge case, on a multi-drive install. Every caller
-    // until this one happened to compare paths already known to share a root (the exe's own tree),
-    // so an empty result was never actually reached; a caller comparing an externally-supplied path
-    // against it (a plugin directory list, say) can reach it easily. begin() on an empty path is
-    // end(), and dereferencing that is undefined behaviour. No shared root means `path` is
-    // definitionally not under `base`.
-    if (rel.empty())
+    // Another spelling of the same place (a junction, an 8.3 name): the file system's view. The error_code form, the
+    // other one throws on a path it can't resolve. relative() is empty when the two share no root (another drive):
+    // not inside.
+    std::error_code error;
+    auto rel = std::filesystem::relative(path, base, error);
+
+    if (error || rel.empty())
         return false;
 
     auto first = *rel.begin();

@@ -1214,8 +1214,6 @@ class Config
     CustomOptional<bool> FN_ForceLatencyFlex { false };
     CustomOptional<LFXMode> FN_LatencyFlexMode { LFXMode::Conservative };
     CustomOptional<ForceReflex> FN_ForceReflex { ForceReflex::InGame };
-    CustomOptional<LowLatencyInput> LowLatencyInput { LowLatencyInput::Auto }; // TODO: no reading/saving to config
-    CustomOptional<LowLatencyMode> LowLatencyOutput { LowLatencyMode::Auto };
 
     // Inputs
     CustomOptional<bool> EnableDlssInputs { true };
@@ -1241,6 +1239,10 @@ class Config
     // off: no low latency, the game's Reflex is sent with it off. The old [DlssNr] NativeLowLatency is read when this
     // key is missing (auto, true = optiscaler, false = game) and still written beside it.
     CustomOptional<native::lowlatency::Input> FramerateLowLatencyInput { native::lowlatency::Input::Auto };
+    // [Framerate] FrameCapOnly, the Framerate page's Output "Frame cap only" (ll_fps_limiter.h): no latency reduction,
+    // FramerateLimit waits at the game's Sleep (or simulation start) instead of at present. Not with XeFG or on NVIDIA
+    // Reflex (low_latency/input/OutputRule.h PlanOutput).
+    CustomOptional<bool> FramerateFrameCapOnly { false };
 
     // HDR
     CustomOptional<bool> ForceHDR { false };

@@ -384,6 +384,8 @@ const char* PathText(Api api)
         return "Anti-Lag Vk";
     case LowLatencyMode::Reflex:
         return "NVIDIA Reflex";
+    case LowLatencyMode::FpsLimiter:
+        return "Frame cap only";
     default:
         return fakenvapi::isUsingAsMainNvapi() ? "no method active yet" : "NVIDIA Reflex";
     }
@@ -1004,6 +1006,7 @@ OutputInputs CurrentOutputInputs()
     in.xefgOutput = State::Instance().activeFgOutput == FGOutput::XeFG;
     in.amdGpu = vendor == VendorId::AMD;
     in.nvidiaGpu = vendor == VendorId::Nvidia;
+    in.driverReflex = (in.nvidiaGpu && !in.fakenvapiMain) || InputCommon::active_output() == LowLatencyMode::Reflex;
     in.antiLag2Failed = InputCommon::antilag2_could_not_start();
     in.reflexFailed = InputCommon::reflex_could_not_start();
     in.xefgLatency = Config::Instance()->FGXeFGLowLatencyOutput.value_or_default();

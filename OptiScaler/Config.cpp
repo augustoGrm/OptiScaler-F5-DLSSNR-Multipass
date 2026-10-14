@@ -320,6 +320,8 @@ bool Config::Reload(std::filesystem::path iniPath)
                     inputPresent, inputPresent ? inputText.c_str() : nullptr,
                     legacy.has_value() ? legacy->c_str() : nullptr));
             }
+
+            FramerateFrameCapOnly.set_from_config(readBool("Framerate", "FrameCapOnly"));
         }
 
         // FSR Common
@@ -1451,6 +1453,8 @@ bool Config::SaveIni()
 
         ini.SetValue("Framerate", "LowLatencyInput", native::lowlatency::InputIniText(input));
         ini.SetValue("DlssNr", "NativeLowLatency", native::lowlatency::LegacySettingText(input));
+        ini.SetValue("Framerate", "FrameCapOnly",
+                     GetBoolValue(Instance()->FramerateFrameCapOnly.value_for_config()).c_str());
     }
 
     // Output Scaling

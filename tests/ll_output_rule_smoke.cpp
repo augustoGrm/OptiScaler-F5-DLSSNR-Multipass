@@ -60,6 +60,33 @@ int main()
         CHECK(PlanOutput(in).first() == Tech::LatencyFlex);
         in.multiFrame = false;
 
+        // Frame cap only: ahead of Force LatencyFlex and multi frame (it counts the game's frames), alone, no XeFG XeLL
+        in.frameCapOnly = true;
+        p = PlanOutput(in);
+        CHECK(p.first() == Tech::FrameCap && p.tries[1] == Tech::None && !p.xefgOwnXell);
+        in.forceLatencyFlex = true;
+        in.multiFrame = true;
+        CHECK(PlanOutput(in).first() == Tech::FrameCap);
+        in.forceLatencyFlex = false;
+        in.multiFrame = false;
+
+        // ... also on a Vulkan device and for an input that can't feed XeLL (Anti-Lag Vk / LatencyFlex otherwise)
+        in.vulkan = true;
+        CHECK(PlanOutput(in).first() == Tech::FrameCap);
+        in.vulkan = false;
+        in.inputFeedsXell = false;
+        CHECK(PlanOutput(in).first() == Tech::FrameCap);
+        in.inputFeedsXell = true;
+
+        // ... never on the driver's Reflex, never with XeFG (it needs XeLL)
+        in.realNvapi = true;
+        CHECK(PlanOutput(in).first() == Tech::Reflex);
+        in.realNvapi = false;
+        in.xefgOutput = true;
+        CHECK(PlanOutput(in).first() == Tech::XeLL);
+        in.xefgOutput = false;
+        in.frameCapOnly = false;
+
         // XeFG: XeLL is the output, XeFG paces with its context
         in.xefgOutput = true;
         p = PlanOutput(in);
@@ -388,6 +415,53 @@ int main()
         CHECK(Same(SleepModeFor(ownMode, Role::XefgXell, own), Mode(false, false, 0)));
         own.modeForOtherSide = false;
         CHECK(Same(SleepModeFor(ownMode, Role::Output, own), ownMode));
+    }
+
+    // ---- CapForGame: Frame cap only ----
+    {
+        GameCapInputs in;
+        in.capFps = 60.0f;
+        in.markersRecently = true;
+        in.outputIsFrameCap = true;
+
+        // It keeps the cap with the game's markers alone (no sleep mode set), at the game's frame rate
+        auto c = CapForGame(in);
+        CHECK(c.outputHoldsCap && c.fps == 60.0f && !c.showWarning);
+
+        // No cap set: it holds "none" (interval 0), as Reflex does; the limiter has nothing to keep either
+        GameCapInputs none = in;
+        none.capFps = 0.0f;
+        c = CapForGame(none);
+        CHECK(c.outputHoldsCap && c.fps == 0.0f && IntervalUs(c.fps) == 0u);
+
+        // FSR FG generating halves it, the game's DLSS FG (fakenvapi) divides by its frames
+        in.fsrFgOutput = true;
+        in.fgActive = true;
+        CHECK(CapForGame(in).fps == 30.0f);
+        in.fsrFgOutput = false;
+        in.fgActive = false;
+        in.dlssgFramesToGenerate = 3;
+        CHECK(CapForGame(in).fps == 15.0f);
+        in.dlssgFramesToGenerate = 0;
+
+        // Force Disable stops its waits, Input Off and no output running: the limiter (one owner, never none)
+        GameCapInputs off = in;
+        off.forceDisabled = true;
+        CHECK(!CapForGame(off).outputHoldsCap);
+        off = in;
+        off.blocked = true;
+        CHECK(!CapForGame(off).outputHoldsCap);
+        off = in;
+        off.outputRunning = false;
+        CHECK(!CapForGame(off).outputHoldsCap);
+
+        // No marker lately, another frame generation's Reflex: the limiter
+        off = in;
+        off.markersRecently = false;
+        CHECK(!CapForGame(off).outputHoldsCap);
+        off = in;
+        off.externalFrameGeneration = true;
+        CHECK(!CapForGame(off).outputHoldsCap);
     }
 
     // ---- CapForGame ----
