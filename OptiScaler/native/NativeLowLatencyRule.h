@@ -292,6 +292,10 @@ struct OutputInputs
     bool xefgOutput = false;    // XeFG is the frame generation output
     bool amdGpu = false;        // an AMD card is the primary GPU (Anti-Lag 2 and Anti-Lag Vk are AMD's)
     bool nvidiaGpu = false;     // an NVIDIA card is the primary GPU (Reflex is NVIDIA's)
+    // The driver's Reflex is (or will be) the output without XeFG: an NVIDIA card on its own nvapi, or InputCommon runs
+    // Reflex anyway (a Vulkan device with VK_NV_low_latency2 under fakenvapi; OutputRule.h PlanOutput's realNvapi).
+    // Nothing forced replaces it there.
+    bool driverReflex = false;
     bool antiLag2Failed = false; // the Anti-Lag 2 output next to XeFG's XeLL could not start (XeFG falls back to XeLL)
     bool reflexFailed = false; // the Reflex output next to XeFG's XeLL could not start (a Vulkan device without either
                                // VK_NV_low_latency2 or NVIDIA's NvAPI Vulkan Reflex): XeFG falls back to XeLL
@@ -358,18 +362,19 @@ inline OutputChoice OutputAvailability(Output output, const OutputInputs& in)
     if (output == Output::Reflex || output == Output::AntiLag2)
         return { false, "Only with XeFG as the frame generation output" };
 
+    // The driver's Reflex waits at the same point and lowers latency too (OutputRule.h PlanOutput keeps it)
+    if ((output == Output::LatencyFlex || output == Output::FrameCapOnly) && in.driverReflex)
+        return { false, "NVIDIA Reflex runs here: it lowers latency and keeps the cap itself" };
+
     if (output == Output::LatencyFlex && !in.fakenvapiMain)
         return { false, "Needs fakenvapi as the game's nvapi" };
-
-    // The driver's Reflex waits at the same point and lowers latency too (OutputRule.h PlanOutput keeps it)
-    if (output == Output::FrameCapOnly && !in.fakenvapiMain && in.nvidiaGpu)
-        return { false, "NVIDIA Reflex already waits there, and lowers latency too" };
 
     return { true, "" };
 }
 
-// What the combo shows: with XeFG its choice if the setup has it, else from the two fakenvapi flags it writes (XeLL wins
-// when both are set, as it takes the slot)
+// What the combo shows: with XeFG its choice if the setup has it, else from the flags it writes (Force XeLL and Force
+// LatencyFlex in [fakenvapi], [Framerate] FrameCapOnly): XeLL wins, as it takes the slot, then Frame cap only, as in
+// PlanOutput, and nothing forced where the driver's Reflex runs
 inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLatencyFlex, bool frameCapOnly = false)
 {
     if (in.xefgOutput)
@@ -391,7 +396,8 @@ inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLate
         return OutputAvailability(Output::FrameCapOnly, in).available ? Output::FrameCapOnly : Output::Auto;
 
     // Forced in the ini on a setup that does not offer it (real nvapi): Auto shows, not a greyed entry
-    return forceLatencyFlex && in.fakenvapiMain ? Output::LatencyFlex : Output::Auto;
+    return forceLatencyFlex && OutputAvailability(Output::LatencyFlex, in).available ? Output::LatencyFlex
+                                                                                     : Output::Auto;
 }
 
 // Boost is NVIDIA Reflex's, and OptiScaler's calls carry it: real Reflex on an NVIDIA card as the output (no fakenvapi,

@@ -890,6 +890,7 @@ int main()
     {
         OutputInputs real; // NVIDIA, real nvapi, no XeFG
         real.nvidiaGpu = true;
+        real.driverReflex = true; // as CurrentOutputInputs sets it
         CHECK(OutputAvailability(Output::Auto, real).available);
         CHECK(OutputAvailability(Output::XeLL, real).available);
         CHECK(!OutputAvailability(Output::LatencyFlex, real).available);
@@ -932,6 +933,19 @@ int main()
         CHECK(OutputShown(fake, true, false, true) == Output::XeLL);         // Force XeLL takes the slot
         CHECK(OutputShown(real, false, false, true) == Output::Auto);        // set in the ini on NVIDIA Reflex
         CHECK(OutputShown(xefg, false, false, true) == Output::XeLL);
+
+        // NVIDIA with fakenvapi as the nvapi: offered; but where InputCommon runs the driver's Reflex anyway (a Vulkan
+        // device with VK_NV_low_latency2) neither forced entry is, and Auto shows what runs
+        OutputInputs nvFake;
+        nvFake.nvidiaGpu = true;
+        nvFake.fakenvapiMain = true;
+        CHECK(OutputAvailability(Output::FrameCapOnly, nvFake).available);
+        CHECK(OutputAvailability(Output::LatencyFlex, nvFake).available);
+        nvFake.driverReflex = true;
+        CHECK(!OutputAvailability(Output::FrameCapOnly, nvFake).available);
+        CHECK(!OutputAvailability(Output::LatencyFlex, nvFake).available);
+        CHECK(OutputShown(nvFake, false, false, true) == Output::Auto);
+        CHECK(OutputShown(nvFake, false, true, false) == Output::Auto);
 
         // Boost: only with real Reflex as the output, and only while OptiScaler makes the calls
         CHECK(BoostAvailable(Input::Auto, real, false));

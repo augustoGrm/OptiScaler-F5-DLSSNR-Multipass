@@ -5832,10 +5832,10 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
                 { Output::LatencyFlex, "LatencyFlex",
                     "Force LatencyFlex instead of Anti-Lag 2 or XeLL." },
                 { Output::FrameCapOnly, "Frame cap only",
-                    "No latency reduction of its own: the FPS Limit waits where the game is about to read input,\n"
-                    "not at present, so input shows up to a frame sooner while the cap holds.\n"
-                    "For setups that would get LatencyFlex. Anti-Lag 2 and XeLL wait there too and lower latency.\n"
-                    "Needs an FPS Limit." },
+                    "Only moves the FPS Limit's wait to just before the game reads input. While the cap is reached\n"
+                    "that shows input up to a frame sooner; it does nothing else.\n"
+                    "Replaces Anti-Lag 2, XeLL or LatencyFlex, which lower latency more: use it when they misbehave\n"
+                    "in a game. Does nothing without an FPS Limit." },
             };
         }
         // clang-format on
@@ -5873,8 +5873,8 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         {
             ShowHelpMarker(
                 "What lowers latency. Auto uses what the setup has. XeLL and LatencyFlex force that method "
-                "(fakenvapi's Force XeLL and Force LatencyFlex). Frame cap only lowers nothing, it moves where "
-                "the FPS Limit waits.\n"
+                "(fakenvapi's Force XeLL and Force LatencyFlex). Frame cap only just moves the FPS Limit's wait "
+                "to before the game reads input.\n"
                 "Entries that do not fit this setup say why when hovered.");
         }
 
@@ -5934,8 +5934,10 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
     if (state.rtssReflexInjection)
         output += " (RTSS)";
 
+    // Frame cap only waits whatever the game's low latency setting says
     if ((fakenvapi::isUsingAsMainNvapi() || InputCommon::current_mode() == LowLatencyMode::XeLL) &&
-        !InputCommon::low_latency_active() && state.reflexLimitsFps)
+        InputCommon::current_mode() != LowLatencyMode::FpsLimiter && !InputCommon::low_latency_active() &&
+        state.reflexLimitsFps)
         output += " (inactive)";
 
     const char* who = ActiveInputText(status.decision, ReflexHooks::gameCalledReflex(), XellHooks::canLimit(),
@@ -5997,15 +5999,20 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
     if (const float cap = config->FramerateLimit.value_or_default(); cap > 0.0f)
     {
         std::string keeper = "OptiScaler's limiter";
+        bool outputKeeps = false; // the low latency output keeps it (not the limiter or the game's XeLL)
 
         if (status.decision == Decision::Run && status.path[0] != '\0')
         {
             if (status.capOwner != CapOwner::Limiter)
+            {
                 keeper = status.path;
+                outputKeeps = true;
+            }
         }
         else if (state.reflexLimitsFps)
         {
             keeper = status.output;
+            outputKeeps = true;
         }
         else if (XellHooks::canLimit())
         {
@@ -6013,10 +6020,14 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         }
 
         // Frame cap only is nothing but the cap: say where it waits
-        if (keeper != "OptiScaler's limiter" && InputCommon::current_mode() == LowLatencyMode::FpsLimiter)
+        if (outputKeeps && InputCommon::current_mode() == LowLatencyMode::FpsLimiter)
             keeper = "Frame cap only, before the game reads input";
 
         ImGui::TextDisabled("Frame cap %.0f fps: kept by %s", cap, keeper.c_str());
+    }
+    else if (InputCommon::current_mode() == LowLatencyMode::FpsLimiter)
+    {
+        ImGui::TextDisabled("Frame cap only does nothing until an FPS Limit is set.");
     }
 
     ImGui::Spacing();

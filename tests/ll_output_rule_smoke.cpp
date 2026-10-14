@@ -70,6 +70,14 @@ int main()
         in.forceLatencyFlex = false;
         in.multiFrame = false;
 
+        // ... also on a Vulkan device and for an input that can't feed XeLL (Anti-Lag Vk / LatencyFlex otherwise)
+        in.vulkan = true;
+        CHECK(PlanOutput(in).first() == Tech::FrameCap);
+        in.vulkan = false;
+        in.inputFeedsXell = false;
+        CHECK(PlanOutput(in).first() == Tech::FrameCap);
+        in.inputFeedsXell = true;
+
         // ... never on the driver's Reflex, never with XeFG (it needs XeLL)
         in.realNvapi = true;
         CHECK(PlanOutput(in).first() == Tech::Reflex);
@@ -419,6 +427,12 @@ int main()
         // It keeps the cap with the game's markers alone (no sleep mode set), at the game's frame rate
         auto c = CapForGame(in);
         CHECK(c.outputHoldsCap && c.fps == 60.0f && !c.showWarning);
+
+        // No cap set: it holds "none" (interval 0), as Reflex does; the limiter has nothing to keep either
+        GameCapInputs none = in;
+        none.capFps = 0.0f;
+        c = CapForGame(none);
+        CHECK(c.outputHoldsCap && c.fps == 0.0f && IntervalUs(c.fps) == 0u);
 
         // FSR FG generating halves it, the game's DLSS FG (fakenvapi) divides by its frames
         in.fsrFgOutput = true;

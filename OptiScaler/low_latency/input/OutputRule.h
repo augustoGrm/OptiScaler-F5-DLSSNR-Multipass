@@ -15,8 +15,8 @@ namespace lloutput
 using native::lowlatency::XefgLatency;
 using native::xefgreflex::SleepMode;
 
-// The low latency methods InputCommon can run (LowLatencyMode's, without the FPS limiter). On a Vulkan device Reflex is
-// the driver's Vulkan Reflex (ReflexVkSurface) and Anti-Lag 2 is Anti-Lag Vk.
+// The low latency methods InputCommon can run (LowLatencyMode's). On a Vulkan device Reflex is the driver's Vulkan
+// Reflex (ReflexVkSurface) and Anti-Lag 2 is Anti-Lag Vk.
 enum class Tech : uint8_t
 {
     None,
@@ -74,8 +74,8 @@ constexpr OutputPlan PlanOutput(const OutputInputs& in)
     if (in.realNvapi)
         return { { Tech::Reflex, Tech::None, Tech::None }, false };
 
-    // Waits where Reflex, Anti-Lag 2 and XeLL do, without their latency work: chosen over them, it replaces
-    // LatencyFlex. It counts the game's frames, more than one generated frame is fine.
+    // The player's choice over Anti-Lag 2, XeLL and LatencyFlex: it waits where they do, without their latency work
+    // (the menu says so). It counts the game's frames, more than one generated frame is fine.
     if (in.frameCapOnly)
         return { { Tech::FrameCap, Tech::None, Tech::None }, false };
 

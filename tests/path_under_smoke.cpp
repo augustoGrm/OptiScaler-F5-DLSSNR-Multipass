@@ -42,6 +42,18 @@ int main()
     CHECK(!IsUnder(L"C:\\Games\\X\\streamline\\..\\other\\a.dll", L"C:\\Games\\X\\streamline"));
     CHECK(!IsUnder(L"C:\\a.dll", L""));
 
+    // A root-only base, UNC shares, \\?\ long paths on either side, relative spellings
+    CHECK(IsUnder(L"C:\\Games\\a.dll", L"C:\\"));
+    CHECK(!IsUnder(L"D:\\Games\\a.dll", L"C:\\"));
+    CHECK(IsUnder(L"\\\\server\\share\\games\\a.dll", L"\\\\SERVER\\Share"));
+    CHECK(!IsUnder(L"\\\\server\\other\\a.dll", L"\\\\server\\share"));
+    CHECK(IsUnder(L"\\\\?\\C:\\Games\\X\\streamline\\a.dll", L"c:\\games\\x\\Streamline"));
+    CHECK(IsUnder(L"C:\\Games\\X\\streamline\\a.dll", L"\\\\?\\C:\\Games\\X\\streamline"));
+    CHECK(IsUnder(L"\\\\?\\UNC\\server\\share\\a.dll", L"\\\\server\\share"));
+    CHECK(!IsUnder(L"\\\\?\\D:\\Games\\X\\a.dll", L"C:\\Games\\X"));
+    CHECK(IsUnder(L"Games\\X\\a.dll", L"games\\x"));
+    CHECK(!IsUnder(L"C:Games\\a.dll", L"C:\\Games")); // drive-relative is not the rooted folder
+
     // The driver store: a DLL there and one beside it
     const wchar_t* store = L"C:\\Windows\\System32\\DriverStore\\FileRepository\\nv_dispi.inf_amd64_abc";
     CHECK(
