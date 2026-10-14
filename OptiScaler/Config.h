@@ -1114,7 +1114,8 @@ class Config
     CustomOptional<int> LateAsiPluginsDelay { 30 };
 
     // Frame Generation
-    CustomOptional<FGInput> FGInput { FGInput::NoFG };
+    // Preserve an explicit NoFG choice, distinct from automatic SM86 routing.
+    CustomOptional<FGInput, SoftDefault> FGInput { FGInput::NoFG };
     CustomOptional<bool> ExternalFrameGeneration { false };
     CustomOptional<bool> FGDLSSGAdaMfgUnlock { false };
     CustomOptional<bool, NoDefault> FGDLSSGAdaBlackwellKernels;
@@ -1129,7 +1130,7 @@ class Config
 
     CustomOptional<std::string, NoDefault> FGDLSSGAmpereMfgKernelImage; // Auto / PTX / Cubin
     CustomOptional<bool> FGDLSSGAmpereMfgHardwareBilinear { false };    // Optional approximate sampling (SM86 only)
-    CustomOptional<FGOutput> FGOutput { FGOutput::NoFG };
+    CustomOptional<FGOutput, SoftDefault> FGOutput { FGOutput::NoFG };
     // Keeps Streamline from picking up the driver's OTA/downloaded plugins; only files in
     // OptiScaler/streamline are used for sl.* plugins and nvngx_dlssg.dll
     CustomOptional<bool> FGStreamlineIgnoreOTA { false };

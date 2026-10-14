@@ -12,8 +12,12 @@ SM86 is selected automatically on eligible NVIDIA Turing/Ampere hardware. There
 is no RTX 20/30 unlocker toggle, companion panel or separate unlocker installation.
 RTX 20 support remains experimental. Other GPUs do not load this backend.
 
-Enabling the backend does not force Frame Generation on. Select the normal
-**FG Input**, **FG Output: DLSSG** and **Frame Gen** mode in OptiScaler. Its usual
+Enabling the backend does not force Frame Generation on. When both input and
+output are `auto`, a compatible SM86 D3D12 Streamline game requesting DLSSG
+automatically selects OptiScaler's DLSSG input and output before its feature
+queries. An explicit `NoFG`, another provider or external FG is preserved.
+You can also select the normal **FG Input**, **FG Output: DLSSG** and **Frame Gen**
+mode in OptiScaler. Its usual
 Off, fixed multiplier, follow-game and dynamic controls remain authoritative.
 Follow-game is available when the selected input can report the game's setting;
 dynamic controls appear when the active plugin reports support. **Save Settings**
@@ -44,8 +48,9 @@ then binds that stack's DLSSG plugin. Architecture checks are scoped to the loca
 plugin; the game's DLSS/DLSSD architecture identity is preserved.
 
 The backend's internal ceiling is five generated frames, allowing up to **X6**.
-The menu exposes the active plugin's reported capabilities; the ceiling alone
-does not establish that a particular multiplier works in a game. Temporary
+Before a swapchain exists, the game's menu receives the verified backend's
+capability ceiling; once initialized, the active plugin's reported limits take
+priority. This does not establish that a particular multiplier works in a game. Temporary
 capability limits do not overwrite the saved multiplier. The obsolete
 `AmpereMfgMultiplier`, `AmpereMfgDynamic` and companion INI controls are not used.
 The old automatic `External=true` handoff is migrated, while an explicit external

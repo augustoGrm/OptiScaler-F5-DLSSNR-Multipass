@@ -281,6 +281,14 @@ class StreamlineHooks
     inline static sl1::pfunLogMessageCallback* o_logCallback_sl1 = nullptr;
 
     static sl::Result hkslInit(const sl::Preferences& pref, uint64_t sdkVersion);
+    static void attachInputHooks(); // Called inside a Detours transaction.
+    enum class InputHooks
+    {
+        None,
+        Tags,
+        Dlssg
+    };
+    inline static InputHooks attachedInput = InputHooks::None;
     static sl::Result hkslIsFeatureSupported(sl::Feature feature, const sl::AdapterInfo& adapterInfo);
     static sl::Result hkslIsFeatureLoaded(sl::Feature feature, bool& loaded);
     static sl::Result hkslGetFeatureRequirements(sl::Feature feature, sl::FeatureRequirements& requirements);

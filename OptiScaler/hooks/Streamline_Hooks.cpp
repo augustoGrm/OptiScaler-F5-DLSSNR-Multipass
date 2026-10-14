@@ -226,6 +226,41 @@ sl::Result StreamlineHooks::hkslInit(const sl::Preferences& pref, uint64_t sdkVe
 {
     LOG_FUNC();
 
+    auto& state = State::Instance();
+    auto* config = Config::Instance();
+    const bool requestsDlssg = pref.featuresToLoad != nullptr && pref.numFeaturesToLoad != 0 &&
+                               std::find(pref.featuresToLoad, pref.featuresToLoad + pref.numFeaturesToLoad,
+                                         sl::kFeatureDLSS_G) != pref.featuresToLoad + pref.numFeaturesToLoad;
+    if (pref.renderAPI == sl::RenderAPI::eD3D12 && requestsDlssg && !state.externalFrameGeneration &&
+        state.activeFgInput == FGInput::NoFG && state.activeFgOutput == FGOutput::NoFG &&
+        !config->FGInput.has_value() && !config->FGOutput.has_value() &&
+        config->FGNvngxReplacement.value_or_default() == FGNvngxReplacement::None && AmpereMfgLoader::EnsureSetup())
+    {
+        // Hardware discovery and backend setup happen outside DllMain. Install
+        // the input hooks before the game queries feature support or caches its
+        // GetState/SetOptions pointers during slInit.
+        state.activeFgInput = FGInput::DLSSG;
+        state.activeFgOutput = FGOutput::DLSSG;
+        std::lock_guard<std::mutex> detoursLock(g_detoursTransactionMutex);
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        attachInputHooks();
+        const auto result = DetourTransactionCommit();
+        if (result == NO_ERROR)
+        {
+            config->FGInput.set_volatile_value(FGInput::DLSSG);
+            config->FGOutput.set_volatile_value(FGOutput::DLSSG);
+            LOG_INFO("Automatically selected native DLSSG input/output for this SM86 Streamline game");
+        }
+        else
+        {
+            state.activeFgInput = FGInput::NoFG;
+            state.activeFgOutput = FGOutput::NoFG;
+            attachedInput = InputHooks::None;
+            LOG_ERROR("Could not attach automatic DLSSG input hooks: {:X}", result);
+        }
+    }
+
     // The game's own Streamline, not one OptiScaler started for its DLSS frame generation (ReflexHooks::isGameCall)
     if (Util::GetCallerModule(_ReturnAddress()) != Util::GetCallerModule((void*) &StreamlineHooks::hkslInit))
         State::Instance().gameCalledSlInit = true;
@@ -489,7 +524,19 @@ sl::Result StreamlineHooks::hkslIsFeatureLoaded(sl::Feature feature, bool& loade
 sl::Result StreamlineHooks::hkslGetFeatureRequirements(sl::Feature feature, sl::FeatureRequirements& requirements)
 {
     if (feature == sl::kFeatureDLSS_G)
+    {
+        static constexpr sl::BufferType tags[] = { sl::kBufferTypeDepth, sl::kBufferTypeMotionVectors,
+                                                   sl::kBufferTypeHUDLessColor };
+        // Returning success with empty API flags makes hosts hide FG even
+        // though IsFeatureSupported succeeded. Describe the input we consume.
+        requirements.flags = sl::FeatureRequirementFlags::eD3D12Supported;
+        if (State::Instance().activeFgOutput != FGOutput::DLSSG)
+            requirements.flags |= sl::FeatureRequirementFlags::eVulkanSupported;
+        requirements.maxNumViewports = 1;
+        requirements.numRequiredTags = static_cast<uint32_t>(std::size(tags));
+        requirements.requiredTags = tags;
         return sl::Result::eOk;
+    }
 
     return o_slGetFeatureRequirements(feature, requirements);
 }
@@ -515,6 +562,19 @@ static int OutputMaxInterpolationCount()
 
     if (auto fg = state.CurrentFG(); fg != nullptr && fg->GetMaxInterpolationCount() > 1)
         return fg->GetMaxInterpolationCount();
+
+    if (state.activeFgOutput == FGOutput::DLSSG)
+    {
+        if (state.dlssgMfgMax.has_value() && state.dlssgMfgMax.value() > 0)
+            return static_cast<int>(state.dlssgMfgMax.value());
+
+        // Games build their MFG menu before creating a swapchain. The pinned
+        // backend's verified capability contract is available at that point;
+        // returning 1 here makes games permanently hide the other multipliers.
+        const auto backend = AmpereMfgLoader::LastStatus();
+        if (backend.BackendReady && backend.MaxGeneratedFrames > 0)
+            return static_cast<int>(backend.MaxGeneratedFrames);
+    }
 
     if (state.activeFgOutput == FGOutput::XeFG)
     {
@@ -547,6 +607,9 @@ static void FillDlssgInputState(sl::DLSSGState& state)
 
     if (state.structVersion >= sl::kStructVersion2)
         state.numFramesToGenerateMax = OutputMaxInterpolationCount();
+
+    if (state.structVersion >= sl::kStructVersion4)
+        state.bIsDynamicMFGSupported = fg != nullptr && fg->GetDMFGSupport() ? sl::Boolean::eTrue : sl::Boolean::eFalse;
 }
 
 static sl::Result dummy_slDLSSGGetState(const sl::ViewportHandle& viewport, sl::DLSSGState& state,
@@ -2220,14 +2283,34 @@ void StreamlineHooks::unhookInterposer()
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
 
-    if (o_slSetTag)
+    if (attachedInput != InputHooks::None && o_slSetTag)
         DetourDetach(&(PVOID&) o_slSetTag, hkslSetTag);
 
-    if (o_slSetTagForFrame)
+    if (attachedInput != InputHooks::None && o_slSetTagForFrame)
         DetourDetach(&(PVOID&) o_slSetTagForFrame, hkslSetTagForFrame);
 
-    if (o_slSetConstants)
+    if (attachedInput != InputHooks::None && o_slSetConstants)
         DetourDetach(&(PVOID&) o_slSetConstants, hkslSetConstants);
+
+    if (attachedInput == InputHooks::Dlssg)
+    {
+        if (o_slIsFeatureSupported)
+            DetourDetach(&(PVOID&) o_slIsFeatureSupported, hkslIsFeatureSupported);
+        if (o_slIsFeatureLoaded)
+            DetourDetach(&(PVOID&) o_slIsFeatureLoaded, hkslIsFeatureLoaded);
+        if (o_slGetFeatureRequirements)
+            DetourDetach(&(PVOID&) o_slGetFeatureRequirements, hkslGetFeatureRequirements);
+        if (o_slGetFeatureVersion)
+            DetourDetach(&(PVOID&) o_slGetFeatureVersion, hkslGetFeatureVersion);
+        if (o_slGetFeatureFunction)
+            DetourDetach(&(PVOID&) o_slGetFeatureFunction, hkslGetFeatureFunction);
+        if (o_slSetFeatureLoaded)
+            DetourDetach(&(PVOID&) o_slSetFeatureLoaded, hkslSetFeatureLoaded);
+        if (o_slAllocateResources)
+            DetourDetach(&(PVOID&) o_slAllocateResources, hkslAllocateResources);
+        if (o_slFreeResources)
+            DetourDetach(&(PVOID&) o_slFreeResources, hkslFreeResources);
+    }
 
     if (o_slEvaluateFeature)
         DetourDetach(&(PVOID&) o_slEvaluateFeature, hkslEvaluateFeature);
@@ -2270,11 +2353,55 @@ void StreamlineHooks::unhookInterposer()
         o_slEvaluateFeature_sl1 = nullptr;
         o_logCallback = nullptr;
         o_logCallback_sl1 = nullptr;
+        attachedInput = InputHooks::None;
+        o_slIsFeatureSupported = nullptr;
+        o_slIsFeatureLoaded = nullptr;
+        o_slGetFeatureRequirements = nullptr;
+        o_slGetFeatureVersion = nullptr;
+        o_slGetFeatureFunction = nullptr;
+        o_slSetFeatureLoaded = nullptr;
+        o_slAllocateResources = nullptr;
+        o_slFreeResources = nullptr;
         hookedInterposerModule = nullptr;
     }
 }
 
 // Call it just after sl.interposer's load or if sl.interposer is already loaded
+void StreamlineHooks::attachInputHooks()
+{
+    attachedInput = InputHooks::None;
+    if (State::Instance().activeFgInput == FGInput::NvngxFG || State::Instance().activeFgInput == FGInput::DLSSG)
+    {
+        attachedInput = State::Instance().activeFgInput == FGInput::DLSSG ? InputHooks::Dlssg : InputHooks::Tags;
+        if (o_slSetTag != nullptr)
+            DetourAttach(&(PVOID&) o_slSetTag, hkslSetTag);
+        if (o_slSetTagForFrame != nullptr)
+            DetourAttach(&(PVOID&) o_slSetTagForFrame, hkslSetTagForFrame);
+        if (o_slSetConstants != nullptr)
+            DetourAttach(&(PVOID&) o_slSetConstants, hkslSetConstants);
+    }
+
+    if (State::Instance().activeFgInput == FGInput::DLSSG)
+    {
+        if (o_slIsFeatureSupported != nullptr)
+            DetourAttach(&(PVOID&) o_slIsFeatureSupported, hkslIsFeatureSupported);
+        if (o_slIsFeatureLoaded != nullptr)
+            DetourAttach(&(PVOID&) o_slIsFeatureLoaded, hkslIsFeatureLoaded);
+        if (o_slGetFeatureRequirements != nullptr)
+            DetourAttach(&(PVOID&) o_slGetFeatureRequirements, hkslGetFeatureRequirements);
+        if (o_slGetFeatureVersion != nullptr)
+            DetourAttach(&(PVOID&) o_slGetFeatureVersion, hkslGetFeatureVersion);
+        if (o_slGetFeatureFunction != nullptr)
+            DetourAttach(&(PVOID&) o_slGetFeatureFunction, hkslGetFeatureFunction);
+        if (o_slSetFeatureLoaded != nullptr)
+            DetourAttach(&(PVOID&) o_slSetFeatureLoaded, hkslSetFeatureLoaded);
+        if (o_slAllocateResources != nullptr)
+            DetourAttach(&(PVOID&) o_slAllocateResources, hkslAllocateResources);
+        if (o_slFreeResources != nullptr)
+            DetourAttach(&(PVOID&) o_slFreeResources, hkslFreeResources);
+    }
+}
+
 void StreamlineHooks::hookInterposer(HMODULE slInterposer)
 {
     if (State::Instance().externalFrameGeneration)
@@ -2342,6 +2469,8 @@ void StreamlineHooks::hookInterposer(HMODULE slInterposer)
                 KernelBaseProxy::GetProcAddress_()(slInterposer, "slIsFeatureSupported"));
             o_slIsFeatureLoaded = reinterpret_cast<decltype(&slIsFeatureLoaded)>(
                 KernelBaseProxy::GetProcAddress_()(slInterposer, "slIsFeatureLoaded"));
+            o_slSetFeatureLoaded = reinterpret_cast<decltype(&slSetFeatureLoaded)>(
+                KernelBaseProxy::GetProcAddress_()(slInterposer, "slSetFeatureLoaded"));
             o_slGetFeatureRequirements = reinterpret_cast<decltype(&slGetFeatureRequirements)>(
                 KernelBaseProxy::GetProcAddress_()(slInterposer, "slGetFeatureRequirements"));
             o_slGetFeatureVersion = reinterpret_cast<decltype(&slGetFeatureVersion)>(
@@ -2365,45 +2494,7 @@ void StreamlineHooks::hookInterposer(HMODULE slInterposer)
                 if (o_slEvaluateFeature != nullptr)
                     DetourAttach(&(PVOID&) o_slEvaluateFeature, hkslEvaluateFeature);
 
-                if (State::Instance().activeFgInput == FGInput::NvngxFG ||
-                    State::Instance().activeFgInput == FGInput::DLSSG)
-                {
-                    if (o_slSetTag != nullptr)
-                        DetourAttach(&(PVOID&) o_slSetTag, hkslSetTag);
-
-                    if (o_slSetTagForFrame != nullptr)
-                        DetourAttach(&(PVOID&) o_slSetTagForFrame, hkslSetTagForFrame);
-
-                    if (o_slSetConstants != nullptr)
-                        DetourAttach(&(PVOID&) o_slSetConstants, hkslSetConstants);
-                }
-
-                if (State::Instance().activeFgInput == FGInput::DLSSG)
-                {
-                    if (o_slIsFeatureSupported != nullptr)
-                        DetourAttach(&(PVOID&) o_slIsFeatureSupported, hkslIsFeatureSupported);
-
-                    if (o_slIsFeatureLoaded != nullptr)
-                        DetourAttach(&(PVOID&) o_slIsFeatureLoaded, hkslIsFeatureLoaded);
-
-                    if (o_slGetFeatureRequirements != nullptr)
-                        DetourAttach(&(PVOID&) o_slGetFeatureRequirements, hkslGetFeatureRequirements);
-
-                    if (o_slGetFeatureVersion != nullptr)
-                        DetourAttach(&(PVOID&) o_slGetFeatureVersion, hkslGetFeatureVersion);
-
-                    if (o_slGetFeatureFunction != nullptr)
-                        DetourAttach(&(PVOID&) o_slGetFeatureFunction, hkslGetFeatureFunction);
-
-                    if (o_slSetFeatureLoaded != nullptr)
-                        DetourAttach(&(PVOID&) o_slSetFeatureLoaded, hkslSetFeatureLoaded);
-
-                    if (o_slAllocateResources != nullptr)
-                        DetourAttach(&(PVOID&) o_slAllocateResources, hkslAllocateResources);
-
-                    if (o_slFreeResources != nullptr)
-                        DetourAttach(&(PVOID&) o_slFreeResources, hkslFreeResources);
-                }
+                attachInputHooks();
 
                 // if (o_slGetNativeInterface != nullptr)
                 //     DetourAttach(&(PVOID&) o_slGetNativeInterface, hkslGetNativeInterface);
@@ -2415,6 +2506,7 @@ void StreamlineHooks::hookInterposer(HMODULE slInterposer)
                 if (detourResult != NO_ERROR)
                 {
                     LOG_ERROR("Failed to hook sl.interposer v2: {:X}", detourResult);
+                    attachedInput = InputHooks::None;
                     o_slSetTag = nullptr;
                     o_slSetTagForFrame = nullptr;
                     o_slInit = nullptr;
@@ -2428,6 +2520,8 @@ void StreamlineHooks::hookInterposer(HMODULE slInterposer)
                     o_slGetFeatureRequirements = nullptr;
                     o_slGetFeatureVersion = nullptr;
                     o_slGetFeatureFunction = nullptr;
+                    o_slSetFeatureLoaded = nullptr;
+                    o_slFreeResources = nullptr;
                 }
             }
         }

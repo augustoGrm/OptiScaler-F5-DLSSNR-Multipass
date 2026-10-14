@@ -45,7 +45,9 @@ jobs:
       - name: Check SM86 controls and NR host rules
         shell: pwsh
         run: |
-          $tests = @('sm86_backend_abi_smoke', 'menu_pages_smoke', 'nr_native_low_latency_smoke', 'nr_vk_copy_rule_smoke', 'nr_vk_hidden_surface_rule_smoke', 'nr_retry_request_smoke')
+          python tests/dlssg_input_state_smoke.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tests = @('sm86_backend_abi_smoke', 'dlssg_swapchain_lifetime_smoke', 'menu_pages_smoke', 'nr_native_low_latency_smoke', 'nr_vk_copy_rule_smoke', 'nr_vk_hidden_surface_rule_smoke', 'nr_retry_request_smoke')
           foreach ($test in $tests) {
             cl /nologo /std:c++20 /EHsc /W4 /Iexternal\vulkan\include "tests\$test.cpp" "/Fe:$env:RUNNER_TEMP\$test.exe"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

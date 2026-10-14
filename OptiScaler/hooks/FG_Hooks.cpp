@@ -6,6 +6,7 @@
 #include <framegen/ffx/FSRFG_Dx12.h>
 #include <framegen/xefg/XeFG_Dx12.h>
 #include <framegen/dlssg/DLSSG_Dx12.h>
+#include <framegen/dlssg/SwapchainLifetime.h>
 #include <framegen/reprojection/Reprojection_Dx12.h>
 
 #include <inputs/FG/FSR3_Dx12_FG.h>
@@ -1597,10 +1598,38 @@ ULONG FGHooks::hkFGRelease(IUnknown* This)
     }
 #endif // (XEFG_RESOURCE_REF_LIMIT == 0)
 
-    static bool skipReleaseChecks = false;
+    static thread_local bool skipReleaseChecks = false;
 
     if (skipReleaseChecks || State::Instance().currentFGSwapchain != This || State::Instance().isShuttingDown)
         return o_FGRelease(This);
+
+    if (State::Instance().activeFgOutput == FGOutput::DLSSG)
+    {
+        // DLSSG owns the references to its inner swapchain and fake buffers.
+        // Releasing those here destroys objects still held by Streamline, while
+        // skipping the final outer Release leaves its HWND permanently in use.
+        skipReleaseChecks = true;
+        const auto remaining = DlssgLifetime::ReleaseReference(
+            This, o_FGRelease,
+            [&]
+            {
+                auto& state = State::Instance();
+                auto* queue =
+                    state.currentFG != nullptr ? state.currentFG->GameCommandQueue() : state.currentCommandQueue;
+                if (!WaitForQueueIdle(queue, resizeFence, resizeFenceEvent, resizeFenceValue))
+                    LOG_WARN("DLSSG queue did not become idle before swapchain release");
+                if (state.currentFG != nullptr)
+                {
+                    state.currentFG->Deactivate();
+                    state.currentFG->ReleaseSwapchain(_hwnd);
+                }
+                if (state.currentSwapchain == state.currentFGSwapchain)
+                    state.currentSwapchain = nullptr;
+                state.currentFGSwapchain = nullptr;
+            });
+        skipReleaseChecks = false;
+        return remaining;
+    }
 
     This->AddRef();
 
