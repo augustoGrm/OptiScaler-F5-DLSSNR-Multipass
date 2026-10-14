@@ -1484,9 +1484,9 @@ void InputCommon::update(bool fgActive)
         in.side = side;
         in.splitLimiterKeepsCap =
             native::lowlatency::SplitLimiterKeepsCap(side, state.swapchainInteropApi == SwapchainInteropApi::Dx11wDx12);
-        in.xellHoldsCap =
-            native::xefgreflex::XellHoldsCap(forceDisabled || blocked || side != lloutput::XefgLatency::XeLL, intelGpu,
-                                             native::lowlatency::XefgGenerating());
+        in.xellHoldsCap = native::xefgreflex::XellHoldsCap(
+            forceDisabled || blocked || side != lloutput::XefgLatency::XeLL, intelGpu,
+            native::lowlatency::XefgGenerating(), state.fgPresentVsync.load(std::memory_order_relaxed));
         in.fsrFgOutput = state.activeFgOutput == FGOutput::FSRFG;
         in.fgActive = fgActive;
         in.blocked = blocked;

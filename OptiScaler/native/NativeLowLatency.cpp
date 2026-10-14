@@ -414,6 +414,7 @@ CapInputs FrameCapInputs(Api api)
     in.fsrFgActive = state.activeFgOutput == FGOutput::FSRFG && fgGenerating;
     in.xefgGenerating = XefgGenerating();
     in.shownPerRendered = XefgShownPerRendered();
+    in.xefgVsync = state.fgPresentVsync.load(std::memory_order_relaxed);
     in.fakenvapiXell = in.method == Method::Fakenvapi && fakenvapi::getCurrentMode() == LowLatencyMode::XeLL;
 
     // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs

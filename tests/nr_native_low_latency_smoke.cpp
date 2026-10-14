@@ -462,6 +462,19 @@ int main()
         CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
         CHECK(PlanCap(cap).minimumIntervalUs == 8333);
 
+        // ... with V-Sync XeLL goes by the refresh rate: the limiter keeps the cap, XeLL still lowers latency
+        cap.xefgVsync = true;
+        CHECK(!XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::Limiter);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // ... V-Sync is XeLL's alone: Reflex in the split keeps its cap
+        cap.method = Method::RealReflexWithXefg;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+        cap.method = Method::XellWithXefg;
+        cap.xefgVsync = false;
+
         // ... on Intel XeLL works without XeFG generating
         cap.xefgGenerating = false;
         cap.intelGpu = true;
@@ -759,13 +772,15 @@ int main()
         CHECK(out.lowLatency && out.boost); // Force Disable is fakenvapi's own business without XeFG
 
         // Who keeps the cap the game's Reflex hands XeLL: XeLL while it can, OptiScaler's limiter otherwise
-        CHECK(XellHoldsCap(false, false, true));   // NVIDIA/AMD, XeFG generating
-        CHECK(!XellHoldsCap(false, false, false)); // NVIDIA/AMD, XeFG paused or off: XeLL idle
-        CHECK(XellHoldsCap(false, true, false));   // Intel: XeLL works on its own
-        CHECK(XellHoldsCap(false, true, true));
-        CHECK(!XellHoldsCap(true, true, true));    // Force Disable
-        CHECK(!XellHoldsCap(true, false, true));   // Force Disable on NVIDIA/AMD while XeFG generates
-        CHECK(!XellHoldsCap(true, true, false));
+        CHECK(XellHoldsCap(false, false, true, false));   // NVIDIA/AMD, XeFG generating
+        CHECK(!XellHoldsCap(false, false, false, false)); // NVIDIA/AMD, XeFG paused or off: XeLL idle
+        CHECK(XellHoldsCap(false, true, false, false));   // Intel: XeLL works on its own
+        CHECK(XellHoldsCap(false, true, true, false));
+        CHECK(!XellHoldsCap(true, true, true, false));  // Force Disable
+        CHECK(!XellHoldsCap(true, false, true, false)); // Force Disable on NVIDIA/AMD while XeFG generates
+        CHECK(!XellHoldsCap(true, true, false, false));
+        CHECK(!XellHoldsCap(false, false, true, true)); // V-Sync: XeLL goes by the refresh rate
+        CHECK(!XellHoldsCap(false, true, true, true));
 
         // Reflex off in the game's menu: XeLL still runs (its sleeps carry the cap) and gets the cap
         SleepMode off;

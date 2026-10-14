@@ -777,6 +777,7 @@ struct CapInputs
     bool xefgGenerating = false;     // XeFG is generating frames (not paused, not off, not in exclusive full screen)
     bool fakenvapiXell = false;      // Method::Fakenvapi has picked XeLL (Anti-Lag 2 missing: fakenvapi falls back)
     uint32_t shownPerRendered = 1;   // frames XeFG shows per frame the game renders (1 + generated); 1 when it generates none
+    bool xefgVsync = false;          // frame generation presents with V-Sync (State::fgPresentVsync)
 };
 
 // Frames shown per frame the game renders: 1 + the generated ones, but only while frame generation generates. Stood
@@ -815,6 +816,11 @@ inline bool SplitLimiterKeepsCap(XefgLatency side, bool d3d11Bridge)
 {
     return side == XefgLatency::Reflex && d3d11Bridge;
 }
+
+// Whether XeFG's XeLL can keep the frame cap: not with V-Sync. XeLL then lines its frames up with the refresh rate
+// instead (Arkham Knight, NVIDIA: cap 90 with XeFG 2x gave 60 rendered on a 120 Hz screen, 56 gave about 33); with
+// V-Sync off it held the cap. OptiScaler's limiter keeps it then, XeLL gets no interval and still lowers latency.
+inline bool XellKeepsCap(bool xefgVsync) { return !xefgVsync; }
 
 struct CapPlan
 {
@@ -862,6 +868,10 @@ inline CapPlan PlanCap(const CapInputs& in)
 
     // XeLL that does nothing on this GPU (XeFG paused or off, or fakenvapi's XeLL with no XeFG): the limiter keeps it
     if (XellIdle(in))
+        return { CapOwner::Limiter, 0 };
+
+    // XeFG's XeLL with V-Sync goes by the refresh rate, not the cap
+    if (in.method == Method::XellWithXefg && !XellKeepsCap(in.xefgVsync))
         return { CapOwner::Limiter, 0 };
 
     if (in.capFps <= 0.0f)

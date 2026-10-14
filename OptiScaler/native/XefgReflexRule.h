@@ -159,15 +159,15 @@ inline SleepMode DriverSleepModeInSplit(const SleepMode& game, uint32_t capInter
 }
 
 // Whether XeFG's XeLL keeps the frame cap the game's Reflex hands it: while it is not idle (NativeLowLatencyRule.h
-// XellIdle: on NVIDIA and AMD it does nothing while XeFG generates no frames) and not turned off with fakenvapi's
-// Force Disable. OptiScaler's limiter keeps it otherwise.
-inline bool XellHoldsCap(bool forceDisabled, bool intelGpu, bool xefgGenerating)
+// XellIdle: on NVIDIA and AMD it does nothing while XeFG generates no frames), not turned off with fakenvapi's
+// Force Disable and frame generation presents without V-Sync (XellKeepsCap). OptiScaler's limiter keeps it otherwise.
+inline bool XellHoldsCap(bool forceDisabled, bool intelGpu, bool xefgGenerating, bool xefgVsync)
 {
     lowlatency::CapInputs in;
     in.method = lowlatency::Method::XellWithXefg;
     in.intelGpu = intelGpu;
     in.xefgGenerating = xefgGenerating;
-    return !forceDisabled && !lowlatency::XellIdle(in);
+    return !forceDisabled && !lowlatency::XellIdle(in) && lowlatency::XellKeepsCap(xefgVsync);
 }
 
 } // namespace native::xefgreflex

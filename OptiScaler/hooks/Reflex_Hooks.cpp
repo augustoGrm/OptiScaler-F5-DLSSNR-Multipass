@@ -144,7 +144,8 @@ bool XellHoldsCap()
 {
     static const bool intelGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::Intel;
     return native::xefgreflex::XellHoldsCap(ForceDisabled() || Blocked() || Split(), intelGpu,
-                                            native::lowlatency::XefgGenerating());
+                                            native::lowlatency::XefgGenerating(),
+                                            State::Instance().fgPresentVsync.load(std::memory_order_relaxed));
 }
 
 // A D3D game's sleep mode as XeLL (or the plain Reflex output without XeFG) gets it: XefgReflexRule.h SleepModeForOutput

@@ -1407,7 +1407,10 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
 
     // Used at wrapped_swapchain LocalPresent to determine is frame is interpolated or not
     if (willPresent)
+    {
         state.fgPresentIsCalled = true;
+        state.fgPresentVsync.store(SyncInterval > 0, std::memory_order_relaxed);
+    }
 
     // Optical F5Low's low latency (native/NativeLowLatency.h): this is the game's present; the wrapped swap chain's
     // presents behind it are frame generation's own. (A D3D11 game's is Dx11wDx12SC::Present.)
