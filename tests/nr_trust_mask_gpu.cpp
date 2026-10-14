@@ -184,7 +184,18 @@ struct Gpu
     }
 
     // The mask (R8) as bytes, tightly packed.
-    std::vector<uint8_t> ReadMask(ID3D12Resource* tex)
+    std::vector<uint8_t> ReadMask(ID3D12Resource* tex) { return Read(tex, 1); }
+
+    std::vector<float> ReadFloat(ID3D12Resource* tex)
+    {
+        const auto bytes = Read(tex, 4);
+        std::vector<float> out(bytes.size() / 4);
+        memcpy(out.data(), bytes.data(), out.size() * 4);
+        return out;
+    }
+
+    // A texture in NON_PIXEL_SHADER_RESOURCE, `bytesPerPixel` a pixel, rows packed
+    std::vector<uint8_t> Read(ID3D12Resource* tex, uint32_t bytesPerPixel)
     {
         const auto desc = tex->GetDesc();
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp {};
@@ -212,11 +223,12 @@ struct Gpu
         list->ResourceBarrier(1, &b);
         Submit();
 
-        std::vector<uint8_t> out((size_t) desc.Width * desc.Height);
+        const size_t row = (size_t) desc.Width * bytesPerPixel;
+        std::vector<uint8_t> out(row * desc.Height);
         uint8_t* data = nullptr;
         readback->Map(0, nullptr, (void**) &data);
         for (uint32_t y = 0; y < desc.Height; ++y)
-            memcpy(&out[(size_t) y * desc.Width], data + (size_t) y * fp.Footprint.RowPitch, desc.Width);
+            memcpy(&out[(size_t) y * row], data + (size_t) y * fp.Footprint.RowPitch, row);
         readback->Unmap(0, nullptr);
         return out;
     }
@@ -262,7 +274,8 @@ ComPtr<ID3D12Resource> Colour(Gpu& gpu, const Scene& s)
                       });
 }
 
-ComPtr<ID3D12Resource> Depth(Gpu& gpu, const Scene& s, int mode = 0)
+// normal: the same depth in the other convention (near is 0, 1 - d)
+ComPtr<ID3D12Resource> Depth(Gpu& gpu, const Scene& s, int mode = 0, bool normal = false)
 {
     return gpu.Upload(DXGI_FORMAT_R32_FLOAT, 4,
                       [&](uint32_t x, uint32_t y, uint8_t* px)
@@ -273,6 +286,9 @@ ComPtr<ID3D12Resource> Depth(Gpu& gpu, const Scene& s, int mode = 0)
                           // A copy holding only part of the scene has nothing (far, 0 when reversed) elsewhere.
                           if ((mode == 1 && !square) || (mode == 2 && square))
                               d = 0.0f;
+
+                          if (normal)
+                              d = 1.0f - d;
 
                           memcpy(px, &d, 4);
                       });
@@ -599,6 +615,56 @@ int main()
         else
             printf("  %-58s %6.3f   (reported: %s)\n", "share fully distrusted a few frames later",
                    run.trust.DistrustedShare(), run.trust.SceneCutSeen() ? "seen" : "not seen");
+    }
+
+    // 9. the guide depth is reversed-Z (near is 1) whatever the game's convention: the consumers (the virtual upscaler
+    // and frame generation) never see the direction flip when the depth finder's pick changes buffers
+    {
+        printf("guide depth convention\n");
+        Runner run(gpu);
+        if (!run.ok)
+            return 1;
+
+        const Scene scene { 7, 300, 20.0f, 5.0f };
+        run.Frame(scene);
+        run.Frame(scene);
+
+        for (const bool normal : { false, true })
+        {
+            auto colour = Colour(gpu, scene);
+            auto depth = Depth(gpu, scene, 0, normal);
+            run.flow.Dispatch(gpu.list.Get(), colour.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
+
+            TrustMaskDx12::Inputs in;
+            in.flow = run.flow.Flow();
+            in.flowWidth = run.flow.FlowWidth();
+            in.flowHeight = run.flow.FlowHeight();
+            in.fullPerFlow = 2.0f;
+            in.lumaNow = run.flow.LumaOfLastFrame();
+            in.lumaBefore = run.flow.LumaOfFrameBefore();
+            in.depths[0] = depth.Get();
+            in.depthCount = 1;
+            in.depthFormat = DXGI_FORMAT_R32_FLOAT;
+            in.depthWidth = kWidth;
+            in.depthHeight = kHeight;
+            in.depthReversed = !normal;
+            run.trust.Dispatch(gpu.list.Get(), in);
+            const bool built = run.trust.BuildGuides(gpu.list.Get(), in, kWidth, kHeight);
+            gpu.Submit();
+
+            if (!built || run.trust.GuideDepth() == nullptr)
+            {
+                ok &= Check("guide depth built", 0.0, false);
+                continue;
+            }
+
+            const auto guide = gpu.ReadFloat(run.trust.GuideDepth());
+            const float square = guide[(size_t) 360 * kWidth + 400]; // inside the square
+            const float background = guide[(size_t) 100 * kWidth + 100];
+            const char* what = normal ? "normal-Z input: guide is reversed (square 0.02, background 0.005)"
+                                      : "reversed-Z input: guide unchanged (square 0.02, background 0.005)";
+            ok &= Check(what, square, std::fabs(square - 0.02f) < 1e-5f && std::fabs(background - 0.005f) < 1e-5f);
+        }
     }
 
     printf(ok ? "all passed\n" : "FAILED\n");
