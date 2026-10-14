@@ -62,14 +62,6 @@ enum class UiTargetMode
     HLG
 };
 
-enum class UiTargetMode
-{
-    SDR,
-    LinearHDR,
-    ScRGB,
-    PQ,
-    HLG
-};
 
 #define MARK_ALL_BACKENDS_CHANGED()                                                                                    \
     for (auto& singleChangeBackend : State::Instance().changeBackend)                                                  \
