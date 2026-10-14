@@ -103,10 +103,15 @@ inline double SizeGap(const Candidate& c, uint32_t pictureWidth, uint32_t pictur
     return std::fabs(std::log(area / pictureArea));
 }
 
-// As ReShade does: the challenger's own draws pick the count, and both buffers are compared on it.
+// The count two buffers are compared on: draw calls when either is mostly indirect (an indirect draw adds no vertices,
+// so that one's vertex count is not known), vertices otherwise. ReShade lets the challenger's own draws pick it, which
+// depends on the order: RE2's GPU-driven scene (7106 draws, 7043 indirect, 106k vertices counted) lost the pick to a
+// 46-draw pass that counted 192k vertices, and won it back on other frames.
+inline bool CompareOnDrawcalls(const Candidate& a, const Candidate& b) { return IndirectHeavy(a) || IndirectHeavy(b); }
+
 inline bool Outranks(const Candidate& a, const Candidate& b, uint32_t pictureWidth, uint32_t pictureHeight)
 {
-    const bool drawcalls = IndirectHeavy(a);
+    const bool drawcalls = CompareOnDrawcalls(a, b);
     const uint64_t countA = CountOf(a, drawcalls), countB = CountOf(b, drawcalls);
     return countA > countB ||
            (countA == countB && SizeGap(a, pictureWidth, pictureHeight) < SizeGap(b, pictureWidth, pictureHeight));
@@ -166,7 +171,7 @@ class Selector
 
         if (previous != nullptr && best != nullptr)
         {
-            const bool drawcalls = IndirectHeavy(*best);
+            const bool drawcalls = CompareOnDrawcalls(*previous, *best);
 
             if ((float) CountOf(*previous, drawcalls) >= _rules.keepFraction * (float) CountOf(*best, drawcalls))
                 chosen = previous;

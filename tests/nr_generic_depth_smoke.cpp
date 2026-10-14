@@ -113,6 +113,34 @@ int main()
         CHECK(Settle(s, { overlay, scene, shadow }, W, H).id == 1);
     }
 
+    // RE2 (log of 2026-10-14): a GPU-driven scene (7106 draws, 7043 indirect, 106457 vertices counted) against a
+    // 46-draw pass of the same size that counted more vertices (192312) on some frames. The pair is compared on draw
+    // calls when either is mostly indirect (its vertex count is not known), so the scene keeps the pick whichever
+    // order the buffers come in, and wins it from nothing too.
+    {
+        const Candidate scene = Make(1, 1920, 1080, 106457, 7106, 7043);
+        const Candidate pass = Make(2, 1920, 1080, 192312, 46, 0);
+        const Candidate small = Make(3, 960, 540, 1137, 5, 0);
+        const Candidate tiny = Make(4, 128, 64, 201060, 79, 4);
+        const Candidate shadow = Make(5, 2048, 2048, 15, 1012, 1007);
+
+        Selector s;
+        CHECK(Settle(s, { pass, scene, small, tiny, shadow }, 1920, 1080).id == 1);
+        s.Reset();
+        CHECK(Settle(s, { scene, pass, small, tiny, shadow }, 1920, 1080).id == 1);
+        s.Reset();
+        CHECK(Settle(s, { small, tiny, shadow, pass, scene }, 1920, 1080).id == 1);
+
+        // Held: the scene picked, then a frame where the pass counts many more vertices
+        s.Reset();
+        Settle(s, { scene, pass }, 1920, 1080);
+        CHECK(s.Update({ Make(2, 1920, 1080, 900000, 46, 0), scene }, 1920, 1080).id == 1);
+
+        // Two buffers with ordinary draws still rank by vertices
+        CHECK(!CompareOnDrawcalls(pass, small));
+        CHECK(CompareOnDrawcalls(pass, scene) && CompareOnDrawcalls(scene, pass));
+    }
+
     // Depth at the render resolution, below the picture, still qualifies. The range is the picture's size divided by the
     // buffer's from 0.5 to 4 (ReShade stops at 1.85): a buffer from a quarter of the picture up to 2x of it.
     {
