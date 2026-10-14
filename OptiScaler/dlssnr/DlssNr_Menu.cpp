@@ -40,6 +40,7 @@
 #include "DlssNr_ColourEncodingStatus.h"
 #include "DlssNr_GameDefaults.h"
 #include "DlssNr_NativeMode.h"
+#include "DlssNr_TierPlacement.h"
 #include "DlssNr_LutStatus.h"
 #include "DlssNrDetailReuseHost.h"
 
@@ -776,12 +777,19 @@ static constexpr ResolutionTier ResolutionTiers[] = {
 static void ApplyResolutionTier(Config* config, int& pendingScale, const ResolutionTier& tier,
                                 bool beforeSuperResolution)
 {
+    // With Finished Picture on (NR Only mode) the placement stays: the tier is about the model's size, and clearing it
+    // would switch NR Only off (DlssNr_TierPlacement.h).
+    const auto placement = DlssNrTierPlacement::AfterTier(
+        { config->DlssNrFinishedPicture.value_or_default(), config->DlssNrRunBeforeSr.value_or_default(),
+          config->DlssNrDeferredDlss.value_or_default() },
+        beforeSuperResolution);
+
     // Same rule as the "NR Pass at:" combo: leaving Finished Picture clears a session failure.
-    if (config->DlssNrFinishedPicture.value_or_default())
+    if (config->DlssNrFinishedPicture.value_or_default() && !placement.finishedPicture)
         RetryNr();
-    config->DlssNrFinishedPicture = false;
-    config->DlssNrRunBeforeSr = beforeSuperResolution;
-    config->DlssNrDeferredDlss = false;
+    config->DlssNrFinishedPicture = placement.finishedPicture;
+    config->DlssNrRunBeforeSr = placement.runBeforeSr;
+    config->DlssNrDeferredDlss = placement.deferred;
 
     config->DlssNrTransfer = 2u; // Upscale Mode: NVIDIA residual
     config->DlssNrReducedUpscaleMethod = tier.upscaleMethod;
@@ -798,8 +806,10 @@ static void ApplyResolutionTier(Config* config, int& pendingScale, const Resolut
 // placement.
 static bool ResolutionTierActive(Config* config, const ResolutionTier& tier, bool beforeSuperResolution)
 {
-    return !config->DlssNrFinishedPicture.value_or_default() &&
-           config->DlssNrRunBeforeSr.value_or_default() == beforeSuperResolution &&
+    return DlssNrTierPlacement::RowMatchesPlacement(
+               { config->DlssNrFinishedPicture.value_or_default(), config->DlssNrRunBeforeSr.value_or_default(),
+                 config->DlssNrDeferredDlss.value_or_default() },
+               beforeSuperResolution) &&
            config->DlssNrTransfer.value_or_default() == 2u &&
            config->DlssNrReducedUpscaleMethod.value_or_default() == tier.upscaleMethod &&
            !config->DlssNrModelResolutionAuto.value_or_default() &&
