@@ -370,6 +370,18 @@ std::filesystem::path Util::ExePath()
     return exe;
 }
 
+// ReShade checks for "d3d12" in its own name so also accept d3d12-ReShade64.dll
+std::filesystem::path Util::ReShadePath()
+{
+    auto dir = ExePath().parent_path();
+    auto rsFile = dir / L"ReShade64.dll";
+
+    if (!std::filesystem::exists(rsFile) && std::filesystem::exists(dir / L"d3d12-ReShade64.dll"))
+        rsFile = dir / L"d3d12-ReShade64.dll";
+
+    return rsFile;
+}
+
 static BOOL CALLBACK EnumWindowsCallback(HWND handle, LPARAM lParam)
 {
     const auto isMainWindow = [handle]()
@@ -486,15 +498,12 @@ bool Util::GetFileVersion(std::wstring dllPath, version_t* fileVersionOut, versi
 
 bool Util::IsSubpath(const std::filesystem::path& path, const std::filesystem::path& base)
 {
-    auto rel = std::filesystem::relative(path, base);
+    auto lowerPath = path.lexically_normal().wstring();
+    auto lowerBase = base.lexically_normal().wstring();
+    to_lower_in_place(lowerPath);
+    to_lower_in_place(lowerBase);
 
-    // relative() returns an empty path when the two inputs share no common root -- different drive
-    // letters being the ordinary case, not an edge case, on a multi-drive install. Every caller
-    // until this one happened to compare paths already known to share a root (the exe's own tree),
-    // so an empty result was never actually reached; a caller comparing an externally-supplied path
-    // against it (a plugin directory list, say) can reach it easily. begin() on an empty path is
-    // end(), and dereferencing that is undefined behaviour. No shared root means `path` is
-    // definitionally not under `base`.
+    auto rel = std::filesystem::path(lowerPath).lexically_relative(lowerBase);
     if (rel.empty())
         return false;
 
@@ -577,7 +586,30 @@ std::optional<std::filesystem::path> Util::FindFilePath(const std::filesystem::p
             // Move up two more levels from 'parent' to reach UE project root but one level for KCD2
             std::filesystem::path gameRoot;
             if (cnt < 2)
-                gameRoot = parent.parent_path().parent_path();
+            {
+                do
+                {
+                    // Check one below Win64, old UE games have binaries here
+                    gameRoot = parent.parent_path();
+
+                    if (std::filesystem::exists(gameRoot / "Binaries") &&
+                        std::filesystem::is_directory(gameRoot / "Binaries"))
+                    {
+                        gameRoot = gameRoot.parent_path();
+                        break;
+                    }
+
+                    // Check two below Win64, newer UE games have binaries here
+                    gameRoot = gameRoot.parent_path();
+
+                    if (std::filesystem::exists(gameRoot / "Binaries") &&
+                        std::filesystem::is_directory(gameRoot / "Binaries"))
+                    {
+                        gameRoot = gameRoot.parent_path();
+                        break;
+                    }
+                } while (false);
+            }
             else
                 gameRoot = parent.parent_path();
 
@@ -924,4 +956,14 @@ std::map<Util::Luid, std::filesystem::path> Util::GetDriverStore()
         NtdllProxy::FreeLibrary_Ldr(hGdi32);
 
     return result;
+}
+
+uint64_t Util::GetTimestamp()
+{
+    FILETIME fileTime;
+    GetSystemTimePreciseAsFileTime(&fileTime);
+
+    uint64_t time = (static_cast<uint64_t>(fileTime.dwHighDateTime) << 32) | fileTime.dwLowDateTime;
+
+    return time * 100;
 }

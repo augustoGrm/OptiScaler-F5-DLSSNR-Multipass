@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <sstream>
 #include <string>
+#include <optional>
+#include "Sm86Control.h"
 
 namespace AmpereMfgLoader
 {
@@ -12,6 +14,10 @@ struct Status
     bool DllFound = false;    // dlssg_sm86.dll found in OptiScaler/dlssg_sm86/
     bool IniWritten = false;  // dlssg_sm86.ini generated and written
     bool DllLoaded = false;   // LoadLibrary succeeded
+    bool Embedded = false;
+    bool ControlReady = false;
+    bool ControlAccepted = false;
+    std::optional<Control::RuntimeStatus> Runtime;
     std::string ErrorMessage; // Human-readable error if anything failed
 };
 
@@ -19,6 +25,10 @@ Status LastStatus();
 
 /// Called after DLL initialization, once GPU/environment information is available.
 void TrySetup();
+
+// Applies the menu's request through the pinned runtime API. Retry until its
+// asynchronous initialization finishes; accepted requests are not resent.
+void UpdateControls();
 
 /// Formats dlssg_sm86.ini content with Native 0.2.3 specification and strict clamping.
 inline std::string FormatIniContent(int maxFrames, const std::string& kernelImg, int hwBilinear = 0, const std::string& router = "SM86", int logLevel = 1)

@@ -1,0 +1,6 @@
+// Populated by PrepareBundledSm86 before resource compilation. The payload's
+// provenance, exact digest and licences live in redist/sm86/manifest.json.
+#include <winres.h>
+#include "Sm86RuntimePath.h"
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+31010 RCDATA SM86_RUNTIME_FILE

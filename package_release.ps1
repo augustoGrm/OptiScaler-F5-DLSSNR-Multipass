@@ -15,11 +15,11 @@
 
 param(
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9._-]*$')]
-    [string]$Version = "v0.7.7",
+    [string]$Version = "v0.1.30-master-sm86",
     [switch]$SkipBuild,
     [switch]$IncludeDlssFrameGeneration,
     [switch]$AcceptNvidiaLicenses,
-    [switch]$IncludeAmpereMfg,
+    [switch]$IncludeAmpereMfg = $true,
     [switch]$AcceptAmpereMfgLicenses,
     [string]$HybridAssetsDirectory,
     [string]$StreamlineArchive,
@@ -47,7 +47,7 @@ if ($PSBoundParameters.ContainsKey('Version') -and $Version -match '(\d+\.\d+\.\
 # silently packages the other one's build output while reporting success.
 $root = Split-Path -Parent $PSCommandPath
 $flavour = if ($IncludeDlssFrameGeneration) { '-with-dlss-fg' } else { '' }
-if ($IncludeAmpereMfg) { $flavour += '-with-sm86-mfg' }
+if ($IncludeAmpereMfg) { $flavour += '-builtin-sm86-mfg' }
 $stage = "$root\release\$Version$flavour"
 $zip = "$root\release\OptiScaler-DLSSNR-F5-$Version$flavour.zip"
 if ((Test-Path -LiteralPath $stage) -or (Test-Path -LiteralPath $zip)) {
@@ -63,7 +63,8 @@ if ($IncludeAmpereMfg -and -not $AcceptAmpereMfgLicenses) {
     throw 'Bundling Ampere SM86 MFG binaries requires -AcceptAmpereMfgLicenses.'
 }
 if ($IncludeAmpereMfg) {
-    Write-Warning 'Ampere SM86 MFG proxy DLL will be bundled from dlssg_for_sm86.'
+    & "$PSScriptRoot\get_sm86_runtime.ps1"
+    Write-Host 'Pinned SM86 MFG is embedded in OptiScaler.dll; its licences will be included.'
 }
 
 if (-not $SkipBuild) {
@@ -81,7 +82,7 @@ if (-not $SkipBuild) {
     }
 
     foreach ($proj in @("$root\OptiScaler\dlssnr\forwarder\dlssnr_forwarder.vcxproj", "$root\OptiScaler.sln")) {
-        $out = & $msb $proj /p:Configuration=Release /p:Platform=x64 /v:minimal /m 2>&1
+        $out = & $msb $proj /p:Configuration=Release /p:Platform=x64 "/p:BundleSm86Runtime=$($IncludeAmpereMfg.IsPresent.ToString().ToLowerInvariant())" /v:minimal /m 2>&1
         $err = $out | Select-String "error "
         if ($err) { Write-Host "FAILED: $proj"; $err | Select-Object -First 6; exit 1 }
     }
@@ -275,23 +276,21 @@ if ($HybridAssetsDirectory) {
 }
 
 if ($IncludeAmpereMfg) {
-    $sm86Src = "$root\dlssg_for_sm86"
-    $sm86Dll = "$sm86Src\version.dll"
-    if (-not (Test-Path -LiteralPath $sm86Dll)) {
-        throw "Ampere/Turing SM86/SM75 binary not found at $sm86Dll"
+    $sm86Src = "$root\redist\sm86"
+    $sm86Licenses = "$stage\Licenses\sm86"
+    New-Item -ItemType Directory -Force -Path $sm86Licenses | Out-Null
+    $manifest = Get-Content -LiteralPath "$sm86Src\manifest.json" -Raw | ConvertFrom-Json
+    foreach ($entry in $manifest.files) {
+        $source = Join-Path $sm86Src $entry.path
+        if ((Get-FileHash -LiteralPath $source -Algorithm SHA256).Hash -ne $entry.sha256) {
+            throw "SM86 package input checksum mismatch: $($entry.path)"
+        }
+        if ($entry.path -ne 'version.dll') {
+            Copy-Item -LiteralPath $source -Destination (Join-Path $sm86Licenses $entry.path)
+        }
     }
-    $sm86DestDir = "$stage\OptiScaler\dlssg_sm86"
-    New-Item -ItemType Directory -Force -Path $sm86DestDir | Out-Null
-    Copy-Item -LiteralPath $sm86Dll -Destination "$sm86DestDir\dlssg_sm86.dll"
-    $sm86Ini = "$sm86Src\dlssg_sm86.ini"
-    if (Test-Path -LiteralPath $sm86Ini) {
-        Copy-Item -LiteralPath $sm86Ini -Destination "$sm86DestDir\dlssg_sm86.ini"
-    }
-    $notices = "$sm86Src\THIRD_PARTY_NOTICES.txt"
-    if (Test-Path -LiteralPath $notices) {
-        Copy-Item -LiteralPath $notices -Destination "$sm86DestDir\THIRD_PARTY_NOTICES.txt"
-    }
-    Write-Host "RTX 20/30 (SM75/SM86) MFG: dlssg_sm86.dll, dlssg_sm86.ini, and notices staged"
+    Copy-Item -LiteralPath "$sm86Src\manifest.json" -Destination "$sm86Licenses\manifest.json"
+    Write-Host 'SM86 0.3.5-5: embedded runtime, attribution and licences staged'
 }
 
 if ($PortBackendDll) {
@@ -381,9 +380,36 @@ foreach ($flag in @{ 'HIGH_ENTROPY_VA' = 0x0020; 'DYNAMICBASE' = 0x0040; 'NX_COM
     }
 }
 
-# A PDB path names a private build directory and marks the binary as a debug build.
-if ([System.Text.Encoding]::ASCII.GetString($peBytes).IndexOf('.pdb', [StringComparison]::OrdinalIgnoreCase) -ge 0) {
-    throw 'REFUSING: staged OptiScaler.dll carries an embedded PDB path. Release sets GenerateDebugInformation=false.'
+# Check the outer image's CodeView directory, rather than searching every byte.
+# The immutable embedded NVIDIA runtime has its own vendor PDB record in RCDATA;
+# that is not an OptiScaler build path and must not require altering its hash.
+$optionalHeader = $peHeader + 24
+$optionalSize = [BitConverter]::ToUInt16($peBytes, $peHeader + 20)
+$sectionCount = [BitConverter]::ToUInt16($peBytes, $peHeader + 6)
+$magic = [BitConverter]::ToUInt16($peBytes, $optionalHeader)
+$dataDirectories = $optionalHeader + $(if ($magic -eq 0x20b) { 112 } else { 96 })
+$debugRva = [BitConverter]::ToUInt32($peBytes, $dataDirectories + 6 * 8)
+$debugSize = [BitConverter]::ToUInt32($peBytes, $dataDirectories + 6 * 8 + 4)
+if ($debugRva -ne 0 -and $debugSize -ne 0) {
+    $debugOffset = $null
+    for ($i = 0; $i -lt $sectionCount; $i++) {
+        $section = $optionalHeader + $optionalSize + 40 * $i
+        $virtualSize = [BitConverter]::ToUInt32($peBytes, $section + 8)
+        $virtualAddress = [BitConverter]::ToUInt32($peBytes, $section + 12)
+        $rawSize = [BitConverter]::ToUInt32($peBytes, $section + 16)
+        $rawAddress = [BitConverter]::ToUInt32($peBytes, $section + 20)
+        if ($debugRva -ge $virtualAddress -and $debugRva -lt ($virtualAddress + [Math]::Max($virtualSize, $rawSize))) {
+            $debugOffset = $rawAddress + $debugRva - $virtualAddress
+            break
+        }
+    }
+    if ($null -eq $debugOffset) { throw 'Invalid PE debug directory' }
+    for ($i = 0; $i + 28 -le $debugSize; $i += 28) {
+        $entry = $debugOffset + $i
+        if ([BitConverter]::ToUInt32($peBytes, $entry + 12) -eq 2) {
+            throw 'REFUSING: staged OptiScaler.dll has a CodeView/PDB record. Release sets GenerateDebugInformation=false.'
+        }
+    }
 }
 
 # Empty version-resource fields are themselves a signal, and this is what setup_windows.bat reads to

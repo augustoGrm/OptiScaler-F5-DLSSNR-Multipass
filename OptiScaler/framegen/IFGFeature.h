@@ -29,6 +29,7 @@ enum FG_ResourceType : uint32_t
     HudlessColor,
     UIColor,
     Distortion,
+    Color, // Hudless + UI
 
     ResourceTypeCOUNT
 };
@@ -106,6 +107,7 @@ class IFGFeature
     virtual bool Shutdown() = 0;
     virtual bool HasResource(FG_ResourceType type, int index = -1) = 0;
     virtual bool SetInterpolatedFrameCount(UINT interpolatedFrameCount) = 0;
+    virtual std::optional<double> ReadGpuTime(void* commandQueue) { return std::nullopt; }
 
     int GetIndex();
     int GetIndexWillBeDispatched();

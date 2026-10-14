@@ -11,6 +11,8 @@
 
 #include <wrapped/wrapped_swapchain.h>
 
+#include <resource_tracking/ResTrack_dx11.h>
+
 #include <detours/detours.h>
 
 #include <d3d11_4.h>
@@ -275,6 +277,7 @@ static HRESULT hkD3D11CreateDevice(IDXGIAdapter* pAdapter, D3D_DRIVER_TYPE Drive
     HRESULT result;
     {
         ScopedSkipParentWrapping skipParentWrapping {};
+        ScopedCreatingD3DDevice creatingD3DDevice {};
         result = o_D3D11CreateDevice(pAdapter, DriverType, Software, Flags, pFeatureLevels, FeatureLevels, SDKVersion,
                                      ppDevice, pFeatureLevel, ppImmediateContext);
     }
@@ -581,6 +584,8 @@ void D3D11Hooks::Hook(HMODULE dx11Module)
 
 void D3D11Hooks::Unhook()
 {
+    ResTrack_Dx11::ReleaseHooks();
+
     DetourTransactionBegin();
     DetourUpdateThread(GetCurrentThread());
 

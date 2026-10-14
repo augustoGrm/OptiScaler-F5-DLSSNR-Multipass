@@ -9,8 +9,12 @@
 #include <native/NativeDriverDx11.h>
 #include <native/NativeLowLatency.h>
 
+#include <hudfix/Hudfix_Dx11.h>
+#include <resource_tracking/ResTrack_dx11.h>
+
 #include <Util.h>
 #include <Config.h>
+#include <misc/IdentifyGpu.h>
 
 #include <d3d11.h>
 #include <d3d11_4.h>
@@ -222,6 +226,12 @@ Dx11wDx12SC::Dx11wDx12SC(IDXGISwapChain* real, IDXGISwapChain4* fgSC, ID3D11Devi
         }
     }
 
+    if (_dx11Device != nullptr && State::Instance().activeFgInput == FGInput::Upscaler &&
+        !Config::Instance()->FGDisableHUDFix.value_or_default())
+    {
+        ResTrack_Dx11::HookDevice(_dx11Device);
+    }
+
     if (WithDx12::PrepareD3D12ForD3D11(_dx11Device, D3D_FEATURE_LEVEL_11_0))
     {
         _dx12Device = WithDx12::GetD3D12Device();
@@ -367,6 +377,8 @@ ULONG STDMETHODCALLTYPE Dx11wDx12SC::Release()
 
         // Intel: XeFG's context is destroyed after every reference to its swapchain is gone (else
         // xefgSwapChainDestroy fails with POINTER_STILL_IN_USE). The destructor releases ours.
+        ResTrack_Dx11::OnDeviceReleased(_dx11Device);
+
         delete this;
 
         if (releaseFg)
@@ -431,6 +443,15 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
         IUnknown* _device;
     } lowLatencyScope(State::Instance().currentD3D11Device);
 
+    const bool dx11HudfixPresent = Config::Instance()->FGHUDFix.value_or_default() &&
+                                   State::Instance().activeFgInput == FGInput::Upscaler &&
+                                   State::Instance().swapchainInteropApi == SwapchainInteropApi::Dx11wDx12;
+    if (dx11HudfixPresent)
+    {
+        ResTrack_Dx11::ClearPossibleHudless();
+        Hudfix_Dx11::PresentStart();
+    }
+
     if (!_InitInteropObjects())
         return DXGI_ERROR_DEVICE_REMOVED;
 
@@ -473,7 +494,8 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
               dx11Index, _real3 != nullptr ? _real3->GetCurrentBackBufferIndex() : 0xFFFFFFFF, _currentFakeIndex,
               _bufferCount);
 
-    if (_real != nullptr)
+    // Some memes with Vk swapchains on Lunyx and overlays
+    if (_real != nullptr && !State::Instance().isRunningOnLinux)
     {
         UINT realFlags = Flags;
 
@@ -485,6 +507,9 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::Present(UINT SyncInterval, UINT Flags)
     }
 
     auto result = _fgSwapChain->Present(SyncInterval, Flags);
+
+    if (dx11HudfixPresent)
+        Hudfix_Dx11::PresentEnd();
 
     if (SUCCEEDED(result))
         _AdvanceFakeBackBufferIndex();
@@ -641,7 +666,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers(UINT BufferCount, UINT Widt
     {
         _RefreshCachedSwapchainDesc();
 
-        if (Config::Instance()->FGEnabled.value_or_default())
+        if (Config::Instance()->IsFGEnabled())
         {
             State::Instance().fgResetCapturedResources = true;
             State::Instance().fgOnlyUseCapturedResources = false;
@@ -892,7 +917,7 @@ HRESULT STDMETHODCALLTYPE Dx11wDx12SC::ResizeBuffers1(UINT BufferCount, UINT Wid
     {
         _RefreshCachedSwapchainDesc();
 
-        if (Config::Instance()->FGEnabled.value_or_default())
+        if (Config::Instance()->IsFGEnabled())
         {
             State::Instance().fgResetCapturedResources = true;
             State::Instance().fgOnlyUseCapturedResources = false;
@@ -1542,16 +1567,12 @@ bool Dx11wDx12SC::_WaitForInteropCopyOnPresentQueue()
     if (_lastInteropCopyFenceValue == 0)
         return true;
 
-    // The interop copies are submitted on _dx12CommandQueue. Only an FG backend presenting from a different queue
-    // needs a cross-queue wait; with no backend queue (no FG feature, or the backend's own swapchain creation failed
-    // and DxgiFactoryHooks fell back to a plain DX12 swapchain on _dx12CommandQueue -- seen with XeFG in Prey, where
-    // GetCommandQueue() then stays null for the whole session) the present is already ordered after the copy on
-    // the same queue. Failing here instead turned every Present into DXGI_ERROR_DEVICE_REMOVED for the game.
-    auto* queue = _fg != nullptr ? _fg->GetCommandQueue() : nullptr;
-    if (queue == nullptr || queue == _dx12CommandQueue)
+    auto presentQueue = _fg != nullptr ? _fg->GetCommandQueue() : nullptr;
+
+    if (presentQueue == nullptr || presentQueue == _dx12CommandQueue)
         return true;
 
-    auto result = queue->Wait(_copyFence, _lastInteropCopyFenceValue);
+    auto result = presentQueue->Wait(_copyFence, _lastInteropCopyFenceValue);
     if (FAILED(result))
     {
         LOG_ERROR("present queue Wait on interop copy fence failed: {:X}", (UINT) result);

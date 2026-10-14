@@ -2,14 +2,6 @@
 // Microsoft Visual C++ generated include file.
 // Used by OptiScaler.rc
 //
-#ifdef _DEBUG
-#define VER_BUILD_DATE "Debug Build"
-#define VER_BUILD_COMMIT "Debug"
-#else
-#include "resource_build_date.h"
-#include "resource_build_commit.h"
-#endif // !_DEBUG
-
 #define VS_VERSION_INFO 1
 
 // Next default values for new objects
@@ -62,6 +54,15 @@
 
 #define VER_PRODUCT_VERSION VER_FILE_VERSION
 
+#ifdef OPTISCALER_BUILD_METADATA
+#ifdef _DEBUG
+#define VER_BUILD_DATE "Debug Build"
+#define VER_BUILD_COMMIT "Debug"
+#else
+#include "resource_build_date.h"
+#include "resource_build_commit.h"
+#endif // !_DEBUG
+
 #ifdef VER_DEV_RELEASE
 #define VER_PRODUCT_VERSION_STR NR_RELEASE_VERSION_STR "-dev (" VER_BUILD_COMMIT ") (" VER_BUILD_DATE ")"
 #elif VER_PRE_RELEASE
@@ -72,3 +73,4 @@
 #endif // VER_PRE_RELEASE
 
 #define VER_PRODUCT_NAME "OptiScaler v" VER_PRODUCT_VERSION_STR
+#endif // OPTISCALER_BUILD_METADATA

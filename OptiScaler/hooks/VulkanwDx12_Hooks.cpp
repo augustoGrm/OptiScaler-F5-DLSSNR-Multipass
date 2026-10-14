@@ -6826,11 +6826,17 @@ VkResult Vulkan_wDx12::hk_vkResetCommandPool(VkDevice device, VkCommandPool comm
 
 PFN_vkVoidFunction Vulkan_wDx12::GetDeviceProcAddr(const PFN_vkVoidFunction original, const char* pName)
 {
+    if (State::Instance().creatingD3DDevice)
+        return nullptr;
+
     return GetAddress(original, pName);
 }
 
 PFN_vkVoidFunction Vulkan_wDx12::GetInstanceProcAddr(const PFN_vkVoidFunction original, const char* pName)
 {
+    if (State::Instance().creatingD3DDevice)
+        return nullptr;
+
     return GetAddress(original, pName);
 }
 
@@ -9399,6 +9405,9 @@ void Vulkan_wDx12::InitializeStateTrackerFunctionTable()
 void Vulkan_wDx12::Hook(HMODULE vulkanModule)
 {
     if (o_vkQueueSubmit != nullptr)
+        return;
+
+    if (State::Instance().creatingD3DDevice)
         return;
 
     o_vkQueueSubmit = (PFN_vkQueueSubmit) GetProcAddress(vulkanModule, "vkQueueSubmit");

@@ -1,0 +1,46 @@
+name: Validate master and built-in SM86 integration
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        configuration: [Debug, Release, ReleaseDebug]
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+      - uses: microsoft/setup-msbuild@v3
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Verify embedded runtime input
+        shell: pwsh
+        run: |
+          ./get_sm86_runtime.ps1
+          python tests/sm86_runtime_contract.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Build x64 solution with embedded SM86
+        shell: pwsh
+        run: |
+          msbuild OptiScaler.sln /m /p:Platform=x64 /p:Configuration=${{ matrix.configuration }} /p:BundleSm86Runtime=true /verbosity:minimal
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check SM86 controls and NR host rules
+        shell: pwsh
+        run: |
+          $tests = @('sm86_control_smoke', 'menu_pages_smoke', 'nr_native_low_latency_smoke', 'nr_vk_copy_rule_smoke', 'nr_vk_hidden_surface_rule_smoke', 'nr_retry_request_smoke')
+          foreach ($test in $tests) {
+            cl /nologo /std:c++20 /EHsc /W4 /Iexternal\vulkan\include "tests\$test.cpp" "/Fe:$env:RUNNER_TEMP\$test.exe"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            & "$env:RUNNER_TEMP\$test.exe"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

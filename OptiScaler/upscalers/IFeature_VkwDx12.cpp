@@ -1628,6 +1628,8 @@ bool IFeature_VkwDx12::CopyBackOutput(VkCommandBuffer InCmdBuffer)
         vkOut.VkSourceImageAccess = copyBarriers[1].dstAccessMask;
     }
 
+    UpscalerTime->End(b.VulkanCopyCommandBuffer[frame]);
+
     vkResult = vkEndCommandBuffer(b.VulkanCopyCommandBuffer[frame]);
     if (vkResult != VK_SUCCESS)
     {
@@ -2088,6 +2090,8 @@ bool IFeature_VkwDx12::Init(VkInstance InInstance, VkPhysicalDevice InPD, VkDevi
         return false;
     }
 
+    UpscalerTime = std::make_unique<GpuTime_Vk>(InDevice, InPD);
+
     SetInitParameters(InParameters);
 
     // The list has to be recording, and what is recorded on it has to run.
@@ -2161,6 +2165,7 @@ bool IFeature_VkwDx12::Init(VkInstance InInstance, VkPhysicalDevice InPD, VkDevi
 bool IFeature_VkwDx12::Evaluate(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Parameter* InParameters)
 {
     LOG_FUNC();
+    std::scoped_lock evaluateLock(EvaluateMutex);
 
     // Optical F5Low stands aside while the game calls an upscaler of its own.
     GenericDepthVk::NoteUpscalerCall();
@@ -2171,6 +2176,9 @@ bool IFeature_VkwDx12::Evaluate(VkCommandBuffer InCmdBuffer, NVSDK_NGX_Parameter
 
     auto frame = _frameCount % VKDX12_BUFFER_COUNT;
     auto cmdList = Dx12CommandList[frame];
+
+    // Ends in the copy back command buffer, covers the whole interop with D3D12 upscaling in between
+    UpscalerTime->Start(InCmdBuffer);
 
     void* originalColor = nullptr;
     void* originalMotionVectors = nullptr;

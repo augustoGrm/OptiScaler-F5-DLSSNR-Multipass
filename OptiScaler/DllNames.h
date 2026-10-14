@@ -70,7 +70,7 @@ DEFINE_NAME_VECTORS(blockOverlay, "eosovh-win32-shipping",
                                   "overlay64"
 );
 
-inline std::vector<std::wstring> blockedDllNamesW = { L"windhawk.dll", L"mactype.dll", L"mactype64.dll" };
+inline std::vector<std::wstring> blockedDllNamesW = { L"windhawk.dll", L"mactype.dll", L"mactype64.dll", L"overlayenginex64.dll", L"overlayreleasex64.dll" };
 
 DEFINE_NAME_VECTORS(skipDxgiWrapping, "eosovh-win32-shipping",
                                       "eosovh-win64-shipping",
@@ -134,6 +134,7 @@ DEFINE_NAME_VECTORS(slCommon, "sl.common");
 
 DEFINE_NAME_VECTORS(xess, "libxess");
 DEFINE_NAME_VECTORS(xessDx11, "libxess_dx11");
+DEFINE_NAME_VECTORS(xefg, "libxess_fg");
 
 DEFINE_NAME_VECTORS(fsr2, "ffx_fsr2_api_x64");
 DEFINE_NAME_VECTORS(fsr2BE, "ffx_fsr2_api_dx12_x64");

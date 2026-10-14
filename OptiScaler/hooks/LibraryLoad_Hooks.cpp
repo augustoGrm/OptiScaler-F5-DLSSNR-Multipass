@@ -13,6 +13,7 @@
 #include <proxies/XeSS_Proxy.h>
 #include <proxies/XeFG_Proxy.h>
 #include <proxies/XeLL_Proxy.h>
+#include <inputs/FG/XeFG_Inputs_Dx12.h>
 #include <proxies/NVNGX_Proxy.h>
 #include <proxies/FfxApi_Proxy.h>
 
@@ -189,6 +190,8 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
     if (shouldHookSl && (CheckDllNameW(&libName, &slDlssNamesW) ||
                          (normalizedPath.contains(L"\\versions\\") && normalizedPath.contains(L"\\sl_dlss_0"))))
     {
+        std::scoped_lock lock(StreamlineHooks::mutexHookDlss);
+
         auto dlssModule = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
 
         if (dlssModule != nullptr)
@@ -207,6 +210,9 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
     if ((CheckDllNameW(&libName, &slDlssgNamesW) ||
          (normalizedPath.contains(L"\\versions\\") && normalizedPath.contains(L"\\sl_dlss_g_"))))
     {
+        std::scoped_lock lock1(StreamlineHooks::mutexHookDlssg);
+        std::scoped_lock lock2(StreamlineHooks::mutexHookLocalDlssg);
+
         auto dlssgModule = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
 
         if (dlssgModule != nullptr)
@@ -230,6 +236,8 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
     if (shouldHookSl && (CheckDllNameW(&libName, &slReflexNamesW) ||
                          (normalizedPath.contains(L"\\versions\\") && normalizedPath.contains(L"\\sl_reflex_"))))
     {
+        std::scoped_lock lock(StreamlineHooks::mutexHookReflex);
+
         auto reflexModule = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
 
         if (reflexModule != nullptr && reflexModule != State::Instance().optiSlReflex)
@@ -248,6 +256,8 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
     if (shouldHookSl && (CheckDllNameW(&libName, &slPclNamesW) ||
                          (normalizedPath.contains(L"\\versions\\") && normalizedPath.contains(L"\\sl_pcl_"))))
     {
+        std::scoped_lock lock(StreamlineHooks::mutexHookPcl);
+
         auto pclModule = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
 
         if (pclModule != nullptr && pclModule != State::Instance().optiSlPCL)
@@ -266,6 +276,8 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
     if (shouldHookSl && (CheckDllNameW(&libName, &slCommonNamesW) ||
                          (normalizedPath.contains(L"\\versions\\") && normalizedPath.contains(L"\\sl_common_"))))
     {
+        std::scoped_lock lock(StreamlineHooks::mutexHookCommon);
+
         auto commonModule = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
 
         if (commonModule != nullptr && commonModule != State::Instance().optiSlCommon)
@@ -486,6 +498,14 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
         return module;
     }
 
+    // Also the game's own XeFG, for its XeLL context
+    if (CheckDllNameW(&libName, &xefgNamesW))
+    {
+        auto module = NtdllProxy::LoadLibraryExW_Ldr(lpLibFullPath, NULL, 0);
+        XeFGInputs::Hook(module);
+        return module;
+    }
+
     if (CheckDllNameW(&libName, &xessDx11NamesW))
     {
         if (XeSSProxy::ModuleDx11() != nullptr)
@@ -616,16 +636,24 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
 
         auto module = NtdllProxy::LoadLibraryExW_Ldr(libName.c_str(), NULL, NULL);
 
-        auto setTickStartCallback =
-            (PFN_setTickCallback) KernelBaseProxy::GetProcAddress_()(module, "setTickStartCallback");
-        auto setTickEndCallback =
-            (PFN_setTickCallback) KernelBaseProxy::GetProcAddress_()(module, "setTickEndCallback");
+        if (module)
+        {
+            auto setTickStartCallback =
+                (PFN_setTickCallback) KernelBaseProxy::GetProcAddress_()(module, "setTickStartCallback");
+            auto setTickEndCallback =
+                (PFN_setTickCallback) KernelBaseProxy::GetProcAddress_()(module, "setTickEndCallback");
+            auto setCameraUpdateCallback =
+                (PFN_setCameraUpdateExternal) KernelBaseProxy::GetProcAddress_()(module, "setCameraUpdateCallback");
 
-        if (setTickStartCallback)
-            setTickStartCallback(InputUeLowLatency::tickStart);
+            if (setTickStartCallback)
+                setTickStartCallback(InputUeLowLatency::tickStart);
 
-        if (setTickEndCallback)
-            setTickEndCallback(InputUeLowLatency::tickEnd);
+            if (setTickEndCallback)
+                setTickEndCallback(InputUeLowLatency::tickEnd);
+
+            if (setCameraUpdateCallback)
+                setCameraUpdateCallback(InputUeLowLatency::cameraUpdate);
+        }
 
         return module;
     }
@@ -728,6 +756,37 @@ std::optional<NTSTATUS> LibraryLoadHooks::FreeLibrary(PVOID lpLibrary)
         result = TRUE;
     }
     return result;
+}
+
+void LibraryLoadHooks::AfterFreeLibrary(PVOID lpLibrary)
+{
+    if (lpLibrary == nullptr || State::Instance().isShuttingDown)
+        return;
+
+    // Streamline may unload a plugin copy it rejected (e.g. denylisted OTA plugin) while it keeps using
+    // another copy of the same plugin. Hooks of copies that are really gone get dropped here.
+    StreamlineHooks::onModuleFreed(lpLibrary);
+}
+
+void LibraryLoadHooks::AfterLoadLibrary(HMODULE library)
+{
+#ifdef LOW_LATENCY_INPUTS
+    if (library == nullptr || State::Instance().isShuttingDown)
+        return;
+
+    // libxell also comes in as another library's import, which isn't loaded through here
+    if (auto libxell = KernelBaseProxy::GetModuleHandleW_()(L"libxell.dll"))
+        XeLLProxy::RedirectToInput(libxell);
+
+    // Or as another copy by its full path
+    wchar_t path[MAX_PATH];
+
+    if (GetModuleFileNameW(library, path, MAX_PATH) != 0 &&
+        EndsWithInsensitive(std::wstring_view(path), std::wstring_view(L"\\libxell.dll")))
+    {
+        XeLLProxy::RedirectToInput(library);
+    }
+#endif
 }
 
 HMODULE LibraryLoadHooks::LoadNvApi()
@@ -976,30 +1035,6 @@ HMODULE LibraryLoadHooks::LoadNvngxDlss(std::wstring originalPath)
 
 void LibraryLoadHooks::CheckModulesInMemory()
 {
-    if (!StreamlineHooks::isInterposerHooked())
-    {
-        // hook streamline right away if it's already loaded
-        HMODULE slModule = nullptr;
-        slModule = GetDllNameWModule(&slInterposerNamesW);
-        if (slModule != nullptr && slModule != State::Instance().optiSlInterposer)
-        {
-            LOG_DEBUG("sl.interposer.dll already in memory");
-            StreamlineHooks::hookInterposer(slModule);
-            slInterposerModule = slModule;
-        }
-    }
-
-    if (!StreamlineHooks::isDlssHooked())
-    {
-        HMODULE slDlss = nullptr;
-        slDlss = GetDllNameWModule(&slDlssNamesW);
-        if (slDlss != nullptr)
-        {
-            LOG_DEBUG("sl.dlss.dll already in memory");
-            StreamlineHooks::hookDlss(slDlss);
-        }
-    }
-
     const auto isLocalStreamlineModule = [](HMODULE module) -> bool
     {
         if (module == nullptr)
@@ -1015,81 +1050,126 @@ void LibraryLoadHooks::CheckModulesInMemory()
         return Util::IsSubpath(path, localSlPath.lexically_normal());
     };
 
-    // DLSS-G
-    if (!StreamlineHooks::isDlssgHooked() || !StreamlineHooks::isLocalDlssgHooked())
+    if (!StreamlineHooks::isInterposerHooked())
     {
-        HMODULE slDlssg = GetDllNameWModule(&slDlssgNamesW);
+        // hook streamline right away if it's already loaded
+        HMODULE slModule = nullptr;
+        slModule = GetDllNameWModule(&slInterposerNamesW);
 
-        if (slDlssg != nullptr && slDlssg != State::Instance().optiSlDLSSG)
+        const bool gameInterposer =
+            slModule != nullptr && slModule != State::Instance().optiSlInterposer &&
+            (!isLocalStreamlineModule(slModule) || State::Instance().activeFgInput == FGInput::NvngxFG);
+
+        if (gameInterposer)
         {
-            const bool localDlssg = isLocalStreamlineModule(slDlssg);
+            LOG_DEBUG("sl.interposer.dll already in memory");
+            StreamlineHooks::hookInterposer(slModule);
+            slInterposerModule = slModule;
+        }
+    }
 
-            if (localDlssg && State::Instance().activeFgOutput == FGOutput::DLSSG)
+    {
+        std::scoped_lock lock(StreamlineHooks::mutexHookDlss);
+        if (!StreamlineHooks::isDlssHooked())
+        {
+            HMODULE slDlss = nullptr;
+            slDlss = GetDllNameWModule(&slDlssNamesW);
+            if (slDlss != nullptr)
             {
-                if (!StreamlineHooks::isLocalDlssgHooked())
-                {
-                    LOG_DEBUG("local sl.dlss_g.dll already in memory");
-                    StreamlineHooks::hookLocalDlssg(slDlssg);
-                }
+                LOG_DEBUG("sl.dlss.dll already in memory");
+                StreamlineHooks::hookDlss(slDlss);
             }
-            else if (!localDlssg && !StreamlineHooks::isDlssgHooked())
+        }
+    }
+
+    // DLSS-G
+    {
+        std::scoped_lock lock1(StreamlineHooks::mutexHookDlssg);
+        std::scoped_lock lock2(StreamlineHooks::mutexHookLocalDlssg);
+        if (!StreamlineHooks::isDlssgHooked() || !StreamlineHooks::isLocalDlssgHooked())
+        {
+            HMODULE slDlssg = GetDllNameWModule(&slDlssgNamesW);
+
+            if (slDlssg != nullptr && slDlssg != State::Instance().optiSlDLSSG)
             {
-                LOG_DEBUG("sl.dlss_g.dll already in memory");
-                StreamlineHooks::hookDlssg(slDlssg);
+                const bool localDlssg = isLocalStreamlineModule(slDlssg);
+
+                if (localDlssg && State::Instance().activeFgOutput == FGOutput::DLSSG)
+                {
+                    if (!StreamlineHooks::isLocalDlssgHooked())
+                    {
+                        LOG_DEBUG("local sl.dlss_g.dll already in memory");
+                        StreamlineHooks::hookLocalDlssg(slDlssg);
+                    }
+                }
+                else if (!localDlssg && !StreamlineHooks::isDlssgHooked())
+                {
+                    LOG_DEBUG("sl.dlss_g.dll already in memory");
+                    StreamlineHooks::hookDlssg(slDlssg);
+                }
             }
         }
     }
 
     // Reflex
-    if (!StreamlineHooks::isReflexHooked())
     {
-        HMODULE slReflex = GetDllNameWModule(&slReflexNamesW);
-
-        if (slReflex != nullptr && slReflex != State::Instance().optiSlReflex)
+        std::scoped_lock lock(StreamlineHooks::mutexHookReflex);
+        if (!StreamlineHooks::isReflexHooked())
         {
-            const bool localReflex = isLocalStreamlineModule(slReflex);
+            HMODULE slReflex = GetDllNameWModule(&slReflexNamesW);
 
-            if (!localReflex || State::Instance().activeFgOutput != FGOutput::DLSSG)
+            if (slReflex != nullptr && slReflex != State::Instance().optiSlReflex)
             {
-                if (localReflex)
-                    LOG_DEBUG("local sl.reflex.dll already in memory");
-                else
-                    LOG_DEBUG("sl.reflex.dll already in memory");
+                const bool localReflex = isLocalStreamlineModule(slReflex);
 
-                StreamlineHooks::hookReflex(slReflex);
+                if (!localReflex || State::Instance().activeFgOutput != FGOutput::DLSSG)
+                {
+                    if (localReflex)
+                        LOG_DEBUG("local sl.reflex.dll already in memory");
+                    else
+                        LOG_DEBUG("sl.reflex.dll already in memory");
+
+                    StreamlineHooks::hookReflex(slReflex);
+                }
             }
         }
     }
 
     // PCL
-    if (!StreamlineHooks::isPclHooked())
     {
-        HMODULE slPcl = GetDllNameWModule(&slPclNamesW);
-
-        if (slPcl != nullptr && slPcl != State::Instance().optiSlPCL)
+        std::scoped_lock lock(StreamlineHooks::mutexHookPcl);
+        if (!StreamlineHooks::isPclHooked())
         {
-            const bool localPcl = isLocalStreamlineModule(slPcl);
+            HMODULE slPcl = GetDllNameWModule(&slPclNamesW);
 
-            if (!localPcl || State::Instance().activeFgOutput != FGOutput::DLSSG)
+            if (slPcl != nullptr && slPcl != State::Instance().optiSlPCL)
             {
-                if (localPcl)
-                    LOG_DEBUG("local sl.pcl.dll already in memory");
-                else
-                    LOG_DEBUG("sl.pcl.dll already in memory");
+                const bool localPcl = isLocalStreamlineModule(slPcl);
 
-                StreamlineHooks::hookPcl(slPcl);
+                if (!localPcl || State::Instance().activeFgOutput != FGOutput::DLSSG)
+                {
+                    if (localPcl)
+                        LOG_DEBUG("local sl.pcl.dll already in memory");
+                    else
+                        LOG_DEBUG("sl.pcl.dll already in memory");
+
+                    StreamlineHooks::hookPcl(slPcl);
+                }
             }
         }
     }
 
-    if (!StreamlineHooks::isCommonHooked())
     {
-        HMODULE slCommon = nullptr;
-        slCommon = GetDllNameWModule(&slCommonNamesW);
-        if (slCommon != nullptr && slCommon != State::Instance().optiSlCommon)
+        std::scoped_lock lock(StreamlineHooks::mutexHookCommon);
+        if (!StreamlineHooks::isCommonHooked())
         {
-            LOG_DEBUG("sl.common.dll already in memory");
-            StreamlineHooks::hookCommon(slCommon);
+            HMODULE slCommon = nullptr;
+            slCommon = GetDllNameWModule(&slCommonNamesW);
+            if (slCommon != nullptr && slCommon != State::Instance().optiSlCommon)
+            {
+                LOG_DEBUG("sl.common.dll already in memory");
+                StreamlineHooks::hookCommon(slCommon);
+            }
         }
     }
 

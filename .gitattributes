@@ -1,3 +1,5 @@
 # Auto detect text files and perform LF normalization
 * text=auto
 *.sh eol=lf
+# Preserve the exact third-party licence payload, including its final blank line.
+redist/sm86/*.txt whitespace=-blank-at-eof

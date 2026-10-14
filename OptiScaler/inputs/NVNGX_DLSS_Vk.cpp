@@ -8,14 +8,13 @@
 
 #include "NVNGX_DLSS.h"
 #include <framegen/nvngx/Nvngx_FG.h>
+#include <inputs/FG/Upscaler_Inputs_Vk.h>
 #include "NVNGX_Parameter.h"
 #include "proxies/NVNGX_Proxy.h"
 
 #include "upscalers/FeatureProvider_Vk.h"
 
-#include <upscaler_time/UpscalerTime_Vk.h>
-
-#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan.h>
 #include <ankerl/unordered_dense.h>
 #include <imgui/ImGuiNotify.hpp>
 #include <misc/IdentifyGpu.h>
@@ -250,8 +249,6 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_Init_Ext2(
     }
 
     State::Instance().currentVkDevice = InDevice;
-
-    UpscalerTimeVk::Init(InDevice, InPD);
 
     State::Instance().nvngxVkInited = true;
 
@@ -1095,7 +1092,7 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_EvaluateFeature(VkCommandBuffer 
     deviceContext = VkContexts[handleId].feature.get();
     state.currentFeature = deviceContext;
 
-    UpscalerTimeVk::UpscaleStart(InCmdList);
+    UpscalerInputsVk::UpscaleStart(InCmdList, InParameters, deviceContext);
 
     const auto backend = deviceContext->GetUpscalerType();
     const bool bridged = backend == Upscaler::XeSS_on12 || backend == Upscaler::FSR21_on12 ||
@@ -1125,7 +1122,6 @@ NVSDK_NGX_API NVSDK_NGX_Result NVSDK_NGX_VULKAN_EvaluateFeature(VkCommandBuffer 
         return NVSDK_NGX_Result_Success;
     }
 
-    UpscalerTimeVk::UpscaleEnd(InCmdList);
 
     // Same pass, for OptiScaler's own upscalers rather than native DLSS. Natively on Vulkan now: the
     // model exports a complete Vulkan surface and OptiScaler's vkCreateDevice hook already adds the

@@ -6,6 +6,7 @@
 #include <framegen/ffx/FSRFG_Dx12.h>
 #include <framegen/xefg/XeFG_Dx12.h>
 #include <framegen/dlssg/DLSSG_Dx12.h>
+#include <framegen/reprojection/Reprojection_Dx12.h>
 
 #include <inputs/FG/FSR3_Dx12_FG.h>
 #include <inputs/FG/FfxApi_Dx12_FG.h>
@@ -18,6 +19,7 @@
 #include <misc/IdentifyGpu.h>
 #include <misc/REFrameworkCompat.h>
 #include <hooks/Reflex_Hooks.h>
+#include <low_latency/input/input_common.h>
 #include <menu/menu_overlay_dx.h>
 #include <native/NativeDriverDx12.h>
 #include <native/NativeLowLatency.h>
@@ -162,6 +164,10 @@ HRESULT FGHooks::CreateSwapChain(IDXGIFactory* pFactory, IUnknown* pDevice, DXGI
         {
             State::Instance().currentFG = new DLSSG_Dx12();
         }
+        else if (State::Instance().activeFgOutput == FGOutput::Reprojection)
+        {
+            State::Instance().currentFG = new Reprojection_Dx12();
+        }
     }
 
     // Create FG swapchain
@@ -267,6 +273,10 @@ HRESULT FGHooks::CreateSwapChainForHwnd(IDXGIFactory* pFactory, IUnknown* pDevic
         else if (State::Instance().activeFgOutput == FGOutput::DLSSG)
         {
             State::Instance().currentFG = new DLSSG_Dx12();
+        }
+        else if (State::Instance().activeFgOutput == FGOutput::Reprojection)
+        {
+            State::Instance().currentFG = new Reprojection_Dx12();
         }
     }
 
@@ -1275,7 +1285,7 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
                 state.currentD3D11Device->GetImmediateContext(&context);
 
                 if (upscalerTimeOpt = currentFeature->ReadUpscalerTime(context); upscalerTimeOpt.has_value())
-                    currentFeature->ReadDetailedGpuTimes(context, State::Instance().detailedGpuTimes);
+                    currentFeature->ReadDetailedGpuTimes(context, state.detailedGpuTimes);
 
                 context->Release();
             }
@@ -1285,6 +1295,11 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
                     upscalerTimeOpt.has_value())
                 {
                     currentFeature->ReadDetailedGpuTimes(state.currentCommandQueue, state.detailedGpuTimes);
+                }
+
+                if (auto fgGpuTime = fg->ReadGpuTime(state.currentCommandQueue))
+                {
+                    state.detailedGpuTimes.emplace_back(DetailedGpuTime { fg->Name(), fgGpuTime.value(), false });
                 }
             }
 
@@ -1335,7 +1350,10 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
                 tokenResult = StreamlineProxy::GetNewFrameToken()(localToken, &frameId);
 
                 if (tokenResult == sl::Result::eOk)
+                {
+                    ScopedOptiScalerReflex optiScalerCall {};
                     StreamlineProxy::PCLSetMarker()(sl::PCLMarker::ePresentStart, *localToken);
+                }
             }
         }
     }
@@ -1421,6 +1439,28 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
             native::lowlatency::OnPresentBegin(lowLatencyDevice, native::lowlatency::PresentSource::FrameGeneration);
     }
 
+#ifdef LOW_LATENCY_INPUTS
+    // FSR-FG and XeFG with the Reflex output: the game's present as DLSSG reports it
+    ID3D12CommandQueue* gameQueue = nullptr;
+    uint32_t frameMultiplier = 1;
+    void* xefgContext = nullptr;
+    uint64_t xefgFrameId = 0;
+
+    if (auto fg = state.currentFG; willPresent && fg != nullptr &&
+                                   (state.activeFgOutput == FGOutput::FSRFG || state.activeFgOutput == FGOutput::XeFG))
+    {
+        gameQueue = fg->GetCommandQueue();
+        frameMultiplier = fg->IsActive() && !fg->IsPaused() ? fg->GetInterpolatedFrameCount() + 1 : 1;
+        InputCommon::fg_game_present(gameQueue, false, frameMultiplier);
+
+        if (state.activeFgOutput == FGOutput::XeFG)
+        {
+            xefgContext = fg->SwapchainContext();
+            xefgFrameId = InputCommon::xefg_marked_frame_id();
+        }
+    }
+#endif
+
     HRESULT result;
     const auto presentStartMs = Util::MillisecondsNow();
 
@@ -1452,6 +1492,23 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         }
     }
 
+#ifdef LOW_LATENCY_INPUTS
+    if (gameQueue != nullptr)
+        InputCommon::fg_game_present(gameQueue, true, frameMultiplier);
+
+    // How many frames XeFG sends to its presenter for the batch it marked in this present
+    if (xefgContext != nullptr && XeFGProxy::GetLastPresentStatus() != nullptr)
+    {
+        xefg_swapchain_present_status_t status {};
+
+        if (XeFGProxy::GetLastPresentStatus()((xefg_swapchain_handle_t) xefgContext, &status) ==
+            XEFG_SWAPCHAIN_RESULT_SUCCESS)
+        {
+            InputCommon::xefg_present_status(xefgFrameId, status.framesPresented);
+        }
+    }
+#endif
+
     if (result == S_OK)
     {
         LOG_DEBUG("Result: {:X}", result);
@@ -1467,9 +1524,13 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         willPresent && state.activeFgOutput == FGOutput::DLSSG)
     {
         if (StreamlineProxy::PCLSetMarker() != nullptr)
+        {
+            ScopedOptiScalerReflex optiScalerCall {};
             StreamlineProxy::PCLSetMarker()(sl::PCLMarker::ePresentEnd, *localToken);
+        }
 
         LOG_DEBUG("Calling ReflexSleep");
+        ScopedOptiScalerReflex optiScalerCall {};
         StreamlineProxy::ReflexSleep()(*localToken);
     }
 
@@ -1480,7 +1541,7 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
     // here, as a native Vulkan game's does: the limiter applies to it.
     if (willPresent && !state.reflexLimitsFps && !native::lowlatency::OwnsFrameCap() &&
         state.activeFgOutput != FGOutput::NoFG &&
-        (!IdentifyGpu::getPrimaryGpu().usesDxvk || VkPresentBridge::DxvkThroughVulkan()) && !XellHooks::canLimit())
+        (!IdentifyGpu::getPrimaryGpu().dxgiIsDxvk || VkPresentBridge::DxvkThroughVulkan()) && !XellHooks::canLimit() && !InputCommon::can_limit_fps())
     {
         // Shown frames per rendered one only while it generates (native::lowlatency::ShownPerRendered)
         FrameLimit::sleep(native::lowlatency::ShownPerRendered(fg != nullptr && fg->IsGenerating(),

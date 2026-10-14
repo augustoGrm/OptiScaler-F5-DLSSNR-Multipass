@@ -488,7 +488,7 @@ bool DxvkGame()
         if (IdentifyGpu::getAllGpus().empty())
             return false;
 
-        known = IdentifyGpu::getPrimaryGpu().usesDxvk ? 1 : 0;
+        known = IdentifyGpu::getPrimaryGpu().dxgiIsDxvk ? 1 : 0;
         g_dxvkGame.store(known, std::memory_order_relaxed);
     }
 

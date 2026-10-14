@@ -59,9 +59,8 @@ bool LowLatency::update_low_latency_tech(IUnknown* pDevice)
             }
         }
 
-        // Don't use AL2 and XeLL when using DMFG or MFG
+        // Don't use AL2 and XeLL when using DMFG
         if (!Config::Instance()->FN_ForceLatencyFlex.value_or_default() &&
-            State::Instance().dlssgDetectedInterpolationCount <= 1 &&
             State::Instance().dlssgLastSetMode != sl::DLSSGMode::eDynamic)
         {
             auto new_tech_al2 = std::make_shared<AntiLag2>();
@@ -194,7 +193,7 @@ void LowLatency::get_latency_result(NV_LATENCY_RESULT_PARAMS* pGetLatencyParams)
 
 void LowLatency::add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams)
 {
-    auto current_timestamp = get_timestamp() / 1000;
+    auto current_timestamp = Util::GetTimestamp() / 1000;
 
     if (last_sim_start == 0)
         last_sim_start = second_last_sim_start = current_timestamp;
@@ -219,26 +218,26 @@ void LowLatency::add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarke
     {
     case SIMULATION_START:
         second_last_sim_start = last_sim_start;
-        last_sim_start = get_timestamp() / 1000;
+        last_sim_start = Util::GetTimestamp() / 1000;
         current_report->simStartTime = last_sim_start;
         break;
     case SIMULATION_END:
-        current_report->simEndTime = get_timestamp() / 1000;
+        current_report->simEndTime = Util::GetTimestamp() / 1000;
         break;
     case RENDERSUBMIT_START:
-        current_report->renderSubmitStartTime = get_timestamp() / 1000;
+        current_report->renderSubmitStartTime = Util::GetTimestamp() / 1000;
         break;
     case RENDERSUBMIT_END:
-        current_report->renderSubmitEndTime = get_timestamp() / 1000;
+        current_report->renderSubmitEndTime = Util::GetTimestamp() / 1000;
         break;
     case PRESENT_START:
-        current_report->presentStartTime = get_timestamp() / 1000;
+        current_report->presentStartTime = Util::GetTimestamp() / 1000;
         break;
     case PRESENT_END:
-        current_report->presentEndTime = get_timestamp() / 1000;
+        current_report->presentEndTime = Util::GetTimestamp() / 1000;
         break;
     case INPUT_SAMPLE:
-        current_report->inputSampleTime = get_timestamp() / 1000;
+        current_report->inputSampleTime = Util::GetTimestamp() / 1000;
         break;
     default:
         break;

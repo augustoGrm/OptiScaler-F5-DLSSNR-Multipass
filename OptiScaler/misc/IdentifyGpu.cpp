@@ -54,6 +54,7 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
 
     {
         DxgiProxy::ScopedFactoryCreation factoryCreation {};
+        ScopedCreatingD3DDevice creatingD3DDevice {};
         result = DxgiProxy::CreateDxgiFactory_()(__uuidof(factory), (IDXGIFactory**) factory.GetAddressOf());
     }
 
@@ -100,7 +101,7 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
             ComPtr<IDXGIVkInteropAdapter> interopAdapter;
             if (SUCCEEDED(adapter->QueryInterface(__uuidof(IDXGIVkInteropAdapter), (void**) &interopAdapter)))
             {
-                gpuInfo.usesDxvk = true;
+                gpuInfo.dxgiIsDxvk = true;
 
                 // dxvk lists the outputs in monitor order, not with the primary display first as Windows' DXGI does
                 DxvkOutputs::Hook(adapter.Get());
@@ -128,9 +129,10 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
                         if (!pvkGetProps)
                         {
                             HMODULE hVulkan = GetModuleHandleA("vulkan-1.dll");
-                            pvkGetProps = hVulkan ? (PFN_vkGetPhysicalDeviceProperties) GetProcAddress(
-                                                        hVulkan, "vkGetPhysicalDeviceProperties")
-                                                  : nullptr;
+                            pvkGetProps = hVulkan
+                                              ? (PFN_vkGetPhysicalDeviceProperties) KernelBaseProxy::GetProcAddress_()(
+                                                    hVulkan, "vkGetPhysicalDeviceProperties")
+                                              : nullptr;
                         }
 
                         if (pvkGetProps)
@@ -193,6 +195,16 @@ std::vector<GpuInformation> IdentifyGpu::checkGpuInfo()
         if (gpuInfo.vendorId == VendorId::Nvidia)
         {
             queryNvapi(gpuInfo);
+
+            // Attempt to use real DLSSG by default on Ada+
+            if (gpuInfo.nvidiaArchInfo.architecture_id >= NV_GPU_ARCHITECTURE_AD100 &&
+                !Config::Instance()->FGNvngxReplacement.has_value())
+            {
+                Config::Instance()->FGNvngxReplacement = FGNvngxReplacement::None;
+
+                if (State::Instance().activeFgOutput == FGOutput::DLSSG)
+                    State::Instance().activeFgNvngx = FGNvngxReplacement::None;
+            }
         }
     }
 
@@ -373,6 +385,10 @@ GpuInformation IdentifyGpu::getPrimaryGpu()
     return !allGpus.empty() ? allGpus.front() : GpuInformation {};
 }
 
+bool IdentifyGpu::gameUsesDxvk() { return State::Instance().api == DX11 && getPrimaryGpu().dxgiIsDxvk; }
+
+bool IdentifyGpu::gameUsesVkd3dProton() { return State::Instance().api == DX12 && getPrimaryGpu().d3d12IsVkd3dProton; }
+
 void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3D12CreateDevice)
 {
     if (hasD3d12Capabilities)
@@ -397,7 +413,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
     struct D3d12Result
     {
         LUID luid;
-        bool usesVkd3dProton = false;
+        bool isVkd3dProton = false;
         FSR4Support fsr4Support = FSR4Support::None;     // Includes force
         FSR4Support realFsr4Support = FSR4Support::None; // Doesn't include force
         bool fsr4ForcedSupport = false;
@@ -406,7 +422,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
 
     for (auto& gpuInfo : cache)
     {
-        if (gpuInfo.vendorId != VendorId::AMD && !gpuInfo.usesDxvk &&
+        if (gpuInfo.vendorId != VendorId::AMD && !gpuInfo.dxgiIsDxvk &&
             Config::Instance()->Fsr4ForceModel.value_or_default() == FSR4Support::None)
         {
             continue;
@@ -446,7 +462,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
 
                 ComPtr<ID3D12DXVKInteropDevice> vkd3dInterop;
                 if (localDevice && SUCCEEDED(localDevice->QueryInterface(IID_PPV_ARGS(&vkd3dInterop))))
-                    res.usesVkd3dProton = true;
+                    res.isVkd3dProton = true;
 
                 // Kinda questionable, may need to reconsider
                 if (Config::Instance()->Fsr4ForceModel.value_or_default() != FSR4Support::None)
@@ -458,7 +474,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
                 if (gpuInfo.vendorId == VendorId::AMD)
                 {
                     // Query vkd3d-proton for extensions it's using to look for the required one for FSR 4
-                    if (res.usesVkd3dProton)
+                    if (res.isVkd3dProton)
                     {
                         UINT extensionCount = 0;
 
@@ -510,7 +526,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
 
                         // Query amdxc for a specific intrinsics support, FSR 4 checks more but hopefully this one
                         // is enough amdxc on Windows hates vkd3d-proton's device, on Linux it's fine
-                        if (localDevice && (State::Instance().isRunningOnLinux || !res.usesVkd3dProton) &&
+                        if (localDevice && (State::Instance().isRunningOnLinux || !res.isVkd3dProton) &&
                             AmdExtD3DCreateInterface)
                         {
                             IAmdExtD3DFactory* amdExtD3DFactory = nullptr;
@@ -588,7 +604,7 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
             {
                 if (IsEqualLUID(gpuInfo.luid, res.luid))
                 {
-                    gpuInfo.usesVkd3dProton = res.usesVkd3dProton;
+                    gpuInfo.d3d12IsVkd3dProton = res.isVkd3dProton;
                     gpuInfo.fsr4Support = res.fsr4Support;
                     gpuInfo.realFsr4Support = res.realFsr4Support;
                     gpuInfo.fsr4ForcedSupport = res.fsr4ForcedSupport;
@@ -635,7 +651,8 @@ void IdentifyGpu::updateD3d12Capabilities(D3d12Proxy::PFN_D3D12CreateDevice o_D3
         gpus += std::format("{}{}\n", indent, gpu.name);
         gpus += std::format("{}    vendorId: {:X}, deviceId: {:X}, VRAM: {}MB\n", indent, (uint32_t) gpu.vendorId,
                             gpu.deviceId, gpu.dedicatedVramInBytes / (1024 * 1024));
-        gpus += std::format("{}    dxvk: {}, vkd3d-proton: {}\n", indent, gpu.usesDxvk, gpu.usesVkd3dProton);
+        gpus += std::format("{}    dxgi is dxvk: {}, d3d12 is vkd3d-proton: {}\n", indent, gpu.dxgiIsDxvk,
+                            gpu.d3d12IsVkd3dProton);
         gpus += std::format("{}    Upscaler support - fsr4: {}, dlss: {}\n", indent, fsr4Support, gpu.dlssCapable);
     }
 

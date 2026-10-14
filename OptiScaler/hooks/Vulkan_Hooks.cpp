@@ -9,14 +9,15 @@
 
 #include <menu/menu_overlay_vk.h>
 #include <proxies/KernelBase_Proxy.h>
-#include <upscaler_time/UpscalerTime_Vk.h>
+#include <upscalers/IFeature_Vk.h>
+#include <framegen/ffx/FSRFG_Vk.h>
 
 #include <misc/FrameLimit.h>
 #include "Reflex_Hooks.h"
 
 #include <spoofing/Vulkan_Spoofing.h>
 
-#include <vulkan/vulkan.hpp>
+#include <vulkan/vulkan.h>
 
 #include <dlssnr/DlssNr_VkExtensions.h>
 #include <dlssnr/DlssNrFeature_Vk.h>
@@ -32,6 +33,12 @@
 #include <misc/IdentifyGpu.h>
 
 #include "Hook_Utils.h"
+
+#include <low_latency/input/input_common.h>
+#include <low_latency/input/input_reflex_vk.h>
+#include <low_latency/input/input_antilag_vk.h>
+
+#pragma intrinsic(_ReturnAddress)
 
 // for menu rendering
 static VkDevice _device = VK_NULL_HANDLE;
@@ -51,6 +58,9 @@ static PFN_vkDestroySwapchainKHR o_DestroySwapchainKHR = nullptr;
 static PFN_vkDestroySurfaceKHR o_vkDestroySurfaceKHR = nullptr;
 static PFN_vkAcquireFullScreenExclusiveModeEXT o_AcquireFullScreenExclusiveModeEXT = nullptr;
 static PFN_vkReleaseFullScreenExclusiveModeEXT o_ReleaseFullScreenExclusiveModeEXT = nullptr;
+static PFN_vkGetSwapchainImagesKHR o_GetSwapchainImagesKHR = nullptr;
+static PFN_vkAcquireNextImageKHR o_AcquireNextImageKHR = nullptr;
+static PFN_vkSetHdrMetadataEXT o_SetHdrMetadataEXT = nullptr;
 static PFN_vkGetInstanceProcAddr o_vkGetInstanceProcAddr = nullptr;
 static PFN_vkGetDeviceProcAddr o_vkGetDeviceProcAddr = nullptr;
 
@@ -59,6 +69,33 @@ static PFN_vkGetPhysicalDeviceFeatures2 o_vkGetPhysicalDeviceFeatures2 = nullptr
 PFN_vkCreateSemaphore VulkanHooks::o_vkCreateSemaphore = nullptr;
 PFN_vkSignalSemaphore VulkanHooks::o_vkSignalSemaphore = nullptr;
 PFN_vkAntiLagUpdateAMD VulkanHooks::o_vkAntiLagUpdateAMD = nullptr;
+
+// The device with VK_NV_low_latency2 enabled
+static VkDevice _lowLatency2Device = VK_NULL_HANDLE;
+
+// FFX creates its real swapchain while creating the FG one
+static bool _creatingFGSwapchain = false;
+
+// VK_NV_low_latency2's sleep signals a timeline semaphore
+static bool TimelineSemaphoresEnabled(const VkDeviceCreateInfo* pCreateInfo)
+{
+    for (auto next = (const VkBaseInStructure*) pCreateInfo->pNext; next != nullptr; next = next->pNext)
+    {
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES &&
+            ((const VkPhysicalDeviceVulkan12Features*) next)->timelineSemaphore)
+        {
+            return true;
+        }
+
+        if (next->sType == VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES &&
+            ((const VkPhysicalDeviceTimelineSemaphoreFeatures*) next)->timelineSemaphore)
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
 
 // Forward declaration
 static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo);
@@ -300,6 +337,11 @@ static void VKAPI_CALL hkvkSetLatencyMarkerNV(VkDevice device, VkSwapchainKHR sw
 // other name.
 static PFN_vkVoidFunction HookLowLatency2(const std::string& name, PFN_vkVoidFunction orgFunc)
 {
+    // Native Vulkan OptiFG uses upstream's Vulkan low latency inputs. Preserve
+    // the fork's XeLL forwarding only for its D3D12 present bridge.
+    if (State::Instance().externalFrameGeneration ||
+        (State::Instance().currentVkFG != nullptr && !VkPresentBridge::IsUp()))
+        return nullptr;
     if (name == "vkSetLatencySleepModeNV")
     {
         if (o_vkSetLatencySleepModeNV == nullptr)
@@ -422,6 +464,82 @@ bool VulkanHooks::SignalTimelineSemaphore(VkDevice device, VkSemaphore semaphore
 
     return signal(device, &info) == VK_SUCCESS;
 }
+static VkResult hkvkGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pSwapchainImageCount,
+                                          VkImage* pSwapchainImages);
+static VkResult hkvkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
+                                        VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex);
+static void hkvkSetHdrMetadataEXT(VkDevice device, uint32_t swapchainCount, const VkSwapchainKHR* pSwapchains,
+                                  const VkHdrMetadataEXT* pMetadata);
+
+// Swapchain calls coming from dxvk/vkd3d-proton's DXGI based modules
+// For those the menu is drawn on the DXGI swapchain instead
+static bool IsDxgiBackedCaller(void* returnAddress)
+{
+    // dxvk and vkd3d-proton present from their own threads
+    thread_local HMODULE lastModule = nullptr;
+    thread_local bool lastResult = false;
+
+    auto module = Util::GetCallerModule(returnAddress);
+
+    if (module == nullptr || module == dllModule)
+        return false;
+
+    if (module == lastModule)
+        return lastResult;
+
+    auto name = Util::WhoIsTheCaller(returnAddress);
+    to_lower_in_place(name);
+
+    lastModule = module;
+    lastResult = name == "dxgi.dll" || name == "d3d11.dll" || name == "d3d10core.dll" || name == "d3d12.dll" ||
+                 name == "d3d12core.dll";
+
+    LOG_DEBUG("Swapchain caller: {}, DXGI backed: {}", name, lastResult);
+
+    return lastResult;
+}
+
+// The game's low latency calls go to the low latency inputs, nullptr for the other functions. dxvk and vkd3d-proton
+// use them for the D3D games' own, those are the D3D inputs.
+static PFN_vkVoidFunction LowLatencyInputHook(const char* pName, PFN_vkVoidFunction orgFunc, void* returnAddress)
+{
+#ifdef LOW_LATENCY_INPUTS
+    if (pName == nullptr || State::Instance().vulkanSkipHooks || State::Instance().externalFrameGeneration)
+        return nullptr;
+
+    // Also captured here in case the device was created before OptiScaler's hooks
+    auto hook = [&]<typename PFN>(PFN& original, auto input) -> PFN_vkVoidFunction
+    {
+        if (IsDxgiBackedCaller(returnAddress))
+            return nullptr;
+
+        if (original == nullptr)
+            original = (PFN) orgFunc;
+
+        return (PFN_vkVoidFunction) input;
+    };
+
+    if (std::strcmp(pName, "vkSetLatencySleepModeNV") == 0)
+        return hook(VulkanHooks::o_vkSetLatencySleepModeNV, &InputReflexVk::SetLatencySleepMode);
+
+    if (std::strcmp(pName, "vkLatencySleepNV") == 0)
+        return hook(VulkanHooks::o_vkLatencySleepNV, &InputReflexVk::LatencySleep);
+
+    if (std::strcmp(pName, "vkSetLatencyMarkerNV") == 0)
+        return hook(VulkanHooks::o_vkSetLatencyMarkerNV, &InputReflexVk::SetLatencyMarker);
+
+    if (std::strcmp(pName, "vkGetLatencyTimingsNV") == 0)
+        return hook(VulkanHooks::o_vkGetLatencyTimingsNV, &InputReflexVk::GetLatencyTimings);
+
+    if (std::strcmp(pName, "vkQueueNotifyOutOfBandNV") == 0)
+        return hook(VulkanHooks::o_vkQueueNotifyOutOfBandNV, &InputReflexVk::QueueNotifyOutOfBand);
+
+    if (std::strcmp(pName, "vkAntiLagUpdateAMD") == 0)
+        return hook(VulkanHooks::o_vkAntiLagUpdateAMD, &InputAntiLagVk::AntiLagUpdate);
+#endif
+
+    return nullptr;
+}
 
 static void HookDevice(VkDevice InDevice)
 {
@@ -437,6 +555,9 @@ static void HookDevice(VkDevice InDevice)
         InDevice, "vkAcquireFullScreenExclusiveModeEXT"));
     o_ReleaseFullScreenExclusiveModeEXT = (PFN_vkReleaseFullScreenExclusiveModeEXT) (vkGetDeviceProcAddr(
         InDevice, "vkReleaseFullScreenExclusiveModeEXT"));
+    o_GetSwapchainImagesKHR = (PFN_vkGetSwapchainImagesKHR) (vkGetDeviceProcAddr(InDevice, "vkGetSwapchainImagesKHR"));
+    o_AcquireNextImageKHR = (PFN_vkAcquireNextImageKHR) (vkGetDeviceProcAddr(InDevice, "vkAcquireNextImageKHR"));
+    o_SetHdrMetadataEXT = (PFN_vkSetHdrMetadataEXT) (vkGetDeviceProcAddr(InDevice, "vkSetHdrMetadataEXT"));
 
     if (o_CreateSwapchainKHR)
     {
@@ -461,14 +582,47 @@ static void HookDevice(VkDevice InDevice)
         if (o_ReleaseFullScreenExclusiveModeEXT != nullptr)
             DetourAttach(&(PVOID&) o_ReleaseFullScreenExclusiveModeEXT, hkvkReleaseFullScreenExclusiveModeEXT);
 
+            DetourAttach(&(PVOID&) o_DestroySwapchainKHR, hkvkDestroySwapchainKHR);
+
+        if (o_GetSwapchainImagesKHR != nullptr)
+            DetourAttach(&(PVOID&) o_GetSwapchainImagesKHR, hkvkGetSwapchainImagesKHR);
+
+        if (o_AcquireNextImageKHR != nullptr)
+            DetourAttach(&(PVOID&) o_AcquireNextImageKHR, hkvkAcquireNextImageKHR);
+
+        if (o_SetHdrMetadataEXT != nullptr)
+            DetourAttach(&(PVOID&) o_SetHdrMetadataEXT, hkvkSetHdrMetadataEXT);
+
         auto detourResult = DetourTransactionCommit();
         if (detourResult != NO_ERROR)
         {
             LOG_ERROR("Failed to hook VkDevice, error code: {:X}", detourResult);
             o_QueuePresentKHR = nullptr;
             o_CreateSwapchainKHR = nullptr;
+            o_DestroySwapchainKHR = nullptr;
+            o_GetSwapchainImagesKHR = nullptr;
+            o_AcquireNextImageKHR = nullptr;
+            o_SetHdrMetadataEXT = nullptr;
         }
     }
+}
+
+// Created with the device as the output's queues have to be added to it
+static IFGFeature_Vk* CreateFGFeature()
+{
+    auto& state = State::Instance();
+
+    const bool supportedInput = state.activeFgInput == FGInput::DLSSG || state.activeFgInput == FGInput::Upscaler;
+
+    if (state.currentVkFG == nullptr && supportedInput && state.activeFgOutput == FGOutput::FSRFG)
+    {
+        if (FfxApiProxy::InitFfxVk())
+            state.currentVkFG = new FSRFG_Vk();
+        else
+            LOG_ERROR("Can't load amd_fidelityfx_vk.dll, FSR FG won't be available");
+    }
+
+    return state.currentVkFG;
 }
 
 VALIDATE_HOOK(hkvkCreateWin32SurfaceKHR, PFN_vkCreateWin32SurfaceKHR)
@@ -957,6 +1111,23 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
         LOG_INFO("Vulkan Anti-Lag: antiLag feature {}", what);
     }
 
+    IFGFeature_Vk* fg = nullptr;
+
+    if (!State::Instance().vulkanSkipHooks && !State::Instance().creatingD3DDevice &&
+        !IsDxgiBackedCaller(_ReturnAddress()) && (fg = CreateFGFeature()) != nullptr)
+    {
+        // FFX's swapchain syncs with them
+        if (TimelineSemaphoresEnabled(&localCreteInfo))
+        {
+            fg->ReserveQueues(physicalDevice, localCreteInfo);
+        }
+        else
+        {
+            LOG_WARN("Device created without timeline semaphores, can't use FG with it");
+            fg = nullptr;
+        }
+    }
+
     auto result = o_vkCreateDevice(physicalDevice, &localCreteInfo, pAllocator, pDevice);
 
     if (antiLagBorrowedFlag != nullptr)
@@ -993,6 +1164,12 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
         LOG_INFO("DLSS-NR Vulkan: vkCreateDevice returned {} with {} extensions requested", (int) result,
                  localCreteInfo.enabledExtensionCount);
 
+    if (result == VK_SUCCESS && fg != nullptr)
+    {
+        fg->OnDeviceCreated(*pDevice);
+        HookDevice(*pDevice);
+    }
+
     if (result == VK_SUCCESS && Config::Instance()->OverlayMenu.value_or_default())
     {
         if (!ScopedSkipVulkanHooks::Active())
@@ -1005,6 +1182,7 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
             _device = *pDevice;
             LOG_DEBUG("_device captured: {0:X}", (UINT64) _device);
             HookDevice(_device);
+            MenuOverlayVk::DeviceCreated(_device, &localCreteInfo);
         }
 
         ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
@@ -1041,6 +1219,26 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
         }
     }
 
+    // The driver's VK_NV_low_latency2, only there when the device has it enabled
+    if (result == VK_SUCCESS && o_vkGetDeviceProcAddr && !State::Instance().vulkanSkipHooks &&
+        !State::Instance().creatingD3DDevice && TimelineSemaphoresEnabled(&localCreteInfo))
+    {
+        auto getProc = [&](const char* name) { return o_vkGetDeviceProcAddr(*pDevice, name); };
+
+        if (auto setSleepMode = (PFN_vkSetLatencySleepModeNV) getProc("vkSetLatencySleepModeNV"))
+        {
+            VulkanHooks::o_vkSetLatencySleepModeNV = setSleepMode;
+            VulkanHooks::o_vkLatencySleepNV = (PFN_vkLatencySleepNV) getProc("vkLatencySleepNV");
+            VulkanHooks::o_vkSetLatencyMarkerNV = (PFN_vkSetLatencyMarkerNV) getProc("vkSetLatencyMarkerNV");
+            VulkanHooks::o_vkGetLatencyTimingsNV = (PFN_vkGetLatencyTimingsNV) getProc("vkGetLatencyTimingsNV");
+            VulkanHooks::o_vkQueueNotifyOutOfBandNV =
+                (PFN_vkQueueNotifyOutOfBandNV) getProc("vkQueueNotifyOutOfBandNV");
+
+            _lowLatency2Device = *pDevice;
+            LOG_INFO("VK_NV_low_latency2 enabled");
+        }
+    }
+
 #ifdef USE_QUEUE_SUBMIT_2_KHR
     if (result == VK_SUCCESS)
         hkvkGetDeviceProcAddr(*pDevice, "vkQueueSubmit2KHR");
@@ -1072,8 +1270,113 @@ static void NotePresentTiming(double hookStartMs)
 }
 
 VALIDATE_HOOK(hkvkQueuePresentKHR, PFN_vkQueuePresentKHR)
+static VkResult hkvkQueuePresentNativeFG(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
+{
+    auto fg = State::Instance().currentVkFG;
+
+    // FFX presents the real swapchain from its own queue
+    if (fg != nullptr && fg->OwnsQueue(queue))
+        return o_QueuePresentKHR(queue, pPresentInfo);
+
+    LOG_FUNC();
+    State::Instance().vulkanPresentCount.fetch_add(1, std::memory_order_relaxed);
+    NoteDroppedLogLinesOnPresent();
+
+    // Upscaler GPU time computation
+    if (auto vkFeature = dynamic_cast<IFeature_Vk*>(State::Instance().currentFeature); vkFeature != nullptr)
+    {
+        if (auto upscalerTimeOpt = vkFeature->ReadUpscalerTime(nullptr); upscalerTimeOpt.has_value())
+        {
+            vkFeature->ReadDetailedGpuTimes(nullptr, State::Instance().detailedGpuTimes);
+
+            auto upscalerTime = upscalerTimeOpt.value();
+            // filter out possibly wrong measured high values
+            if (upscalerTime < 100.0)
+            {
+                State::Instance().frameTimeMutex.lock();
+                State::Instance().upscaleTimes.push_back(upscalerTime);
+                State::Instance().upscaleTimes.pop_front();
+                State::Instance().frameTimeMutex.unlock();
+            }
+        }
+    }
+
+    // dxvk/vkd3d-proton presents are handled by the DXGI swapchain
+    const bool dxgiBacked = IsDxgiBackedCaller(_ReturnAddress());
+
+    if (!dxgiBacked)
+    {
+        State::Instance().swapchainApi = Vulkan;
+
+        // Tick feature to let it know if it's frozen
+        if (auto currentFeature = State::Instance().currentFeature; currentFeature != nullptr)
+        {
+            if (auto currentFg = State::Instance().CurrentFG(); currentFg != nullptr)
+                currentFeature->TickFrozenCheck(currentFg->GetInterpolatedFrameCount());
+            else
+                currentFeature->TickFrozenCheck();
+        }
+    }
+
+    VkPresentInfoKHR localPresentInfo {};
+    memcpy(&localPresentInfo, pPresentInfo, sizeof(VkPresentInfoKHR));
+
+    // F5Low still processes the game's picture when the new native Vulkan FG
+    // engine owns presentation. Generated presents bypass this path above.
+    VkDevice presentDevice = _device;
+    VkPhysicalDevice presentPhysical = _PD;
+    native::VkFrameSource::DeviceOfQueue(queue, &presentDevice, &presentPhysical);
+    NativeMotionVk::OnPresent(queue, &localPresentInfo, presentDevice, presentPhysical);
+
+    // render menu if needed
+    if (!dxgiBacked && !MenuOverlayVk::QueuePresent(queue, &localPresentInfo))
+    {
+        LOG_ERROR("QueuePresent: false!");
+        return VK_ERROR_OUT_OF_DATE_KHR;
+    }
+
+    ReflexHooks::update(false, true);
+
+    // dxvk/vkd3d-proton's go through the DXGI swapchain
+    if (!dxgiBacked)
+        InputCommon::update();
+
+    const bool fgPresent = !dxgiBacked && fg != nullptr && localPresentInfo.swapchainCount == 1 &&
+                           fg->OwnsSwapchain(localPresentInfo.pSwapchains[0]);
+
+    if (fgPresent)
+    {
+        auto& state = State::Instance();
+        state.fgLastFrame++;
+
+        static double lastPresentTime = 0.0;
+        auto now = Util::MillisecondsNow();
+        state.lastFGFrameTime = lastPresentTime > 0.0 ? now - lastPresentTime : 0.0;
+        lastPresentTime = now;
+
+        if (fg->IsActive() && !fg->IsPaused())
+            fg->Present();
+    }
+
+    // original call
+    ScopedVulkanCreatingSC scopedVulkanCreatingSC {};
+    auto result = fgPresent ? fg->QueuePresent(queue, &localPresentInfo) : o_QueuePresentKHR(queue, &localPresentInfo);
+
+    // Unsure about Vulkan Reflex fps limit and if that could be causing an issue here
+    if (!State::Instance().reflexLimitsFps && !InputCommon::can_limit_fps())
+        FrameLimit::sleep(false);
+
+    LOG_FUNC_RESULT(result);
+    return result;
+}
+
 static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo)
 {
+    if (auto fg = State::Instance().currentVkFG; fg != nullptr && fg->OwnsQueue(queue))
+        return o_QueuePresentKHR(queue, pPresentInfo);
+    if (auto fg = State::Instance().currentVkFG; fg != nullptr && pPresentInfo != nullptr &&
+        pPresentInfo->swapchainCount == 1 && fg->OwnsSwapchain(pPresentInfo->pSwapchains[0]))
+        return hkvkQueuePresentNativeFG(queue, pPresentInfo);
     LOG_FUNC();
 
     using native::presenttiming::Stage;
@@ -1088,13 +1391,23 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     VkPhysicalDevice presentPhysical = _PD;
     native::VkFrameSource::DeviceOfQueue(queue, &presentDevice, &presentPhysical);
 
-    // get upscaler time (no device when the queue is unknown and the last device made is gone)
-    if (presentDevice != VK_NULL_HANDLE)
-        UpscalerTimeVk::ReadUpscalingTime(presentDevice);
+    if (auto vkFeature = dynamic_cast<IFeature_Vk*>(State::Instance().currentFeature); vkFeature != nullptr)
+    {
+        if (auto time = vkFeature->ReadUpscalerTime(nullptr); time.has_value())
+        {
+            vkFeature->ReadDetailedGpuTimes(nullptr, State::Instance().detailedGpuTimes);
+            if (time.value() < 100.0)
+            {
+                std::lock_guard lock(State::Instance().frameTimeMutex);
+                State::Instance().upscaleTimes.push_back(time.value());
+                State::Instance().upscaleTimes.pop_front();
+            }
+        }
+    }
 
     // ??? TODO: if we are hooking dxvk's vulkan calls then this present call could be either coming from dxvk or from a
     // native vk game
-    if (!IdentifyGpu::getPrimaryGpu().usesDxvk)
+    if (!IdentifyGpu::getPrimaryGpu().dxgiIsDxvk)
         State::Instance().swapchainApi = Vulkan;
 
     // Tick feature to let it know if it's frozen
@@ -1139,6 +1452,8 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     }
 
     ReflexHooks::update(false, true);
+    if (!bridged && !State::Instance().externalFrameGeneration)
+        InputCommon::update();
 
     // Optical F5Low's low latency (native/NativeLowLatency.h): Reflex markers around the game's present. This call is the
     // game's own present whether or not the frame-generation bridge is up -- bridged, it is on the hidden window
@@ -1169,7 +1484,7 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
     // None of them takes a swapchain, and the Vulkan specification lists no externally synchronised parameter for
     // vkWaitSemaphores, so none has to stay on dxvk's thread. The VK_NV_low_latency2 calls that do take the swapchain
     // (vkLatencySleepNV, vkSetLatencyMarkerNV, externally synchronised in that extension) are not part of our pair.
-    const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().usesDxvk || dxvkBridged) &&
+    const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().dxgiIsDxvk || dxvkBridged) &&
                             lowLatencyTarget.device != nullptr && pairHere;
 
     const auto lowLatencyBegin = [&]
@@ -1247,7 +1562,7 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
             result = VK_ERROR_OUT_OF_DATE_KHR;
 
         // Unsure about Vulkan Reflex fps limit and if that could be causing an issue here
-        if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap())
+        if (!State::Instance().reflexLimitsFps && !native::lowlatency::OwnsFrameCap() && !InputCommon::can_limit_fps())
             FrameLimit::sleep();
     }
 
@@ -1308,8 +1623,20 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
 
     {
         ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
-        result = o_CreateSwapchainKHR(device, pCreateInfo != nullptr ? &localCreateInfo : nullptr, pAllocator,
-                                      pSwapchain);
+        auto* fg = State::Instance().currentVkFG;
+        bool fgSwapchain = false;
+        if (!bridged && fg != nullptr && !ScopedSkipVulkanHooks::Active() && !State::Instance().vulkanSkipHooks &&
+            !IsDxgiBackedCaller(_ReturnAddress()))
+        {
+            _creatingFGSwapchain = true;
+            fgSwapchain = fg->CreateSwapchain(device, &localCreateInfo, pAllocator, pSwapchain);
+            _creatingFGSwapchain = false;
+            if (fgSwapchain)
+                result = VK_SUCCESS;
+        }
+        if (!fgSwapchain)
+            result = o_CreateSwapchainKHR(device, pCreateInfo != nullptr ? &localCreateInfo : nullptr, pAllocator,
+                                          pSwapchain);
     }
 
     if (fullScreenMode != nullptr)
@@ -1408,6 +1735,10 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
 VALIDATE_HOOK(hkvkDestroySwapchainKHR, PFN_vkDestroySwapchainKHR)
 static void hkvkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator)
 {
+    if (swapchain != VK_NULL_HANDLE)
+        VulkanHooks::ForgetLowLatencySwapchain(swapchain);
+    if (auto fg = State::Instance().currentVkFG; fg != nullptr && fg->DestroySwapchain(device, swapchain, pAllocator))
+        return;
     o_DestroySwapchainKHR(device, swapchain, pAllocator);
 
     if (swapchain != VK_NULL_HANDLE)
@@ -1457,6 +1788,41 @@ static void hkvkDestroyDevice(VkDevice device, const VkAllocationCallbacks* pAll
         VkPresentBridge::OnDeviceDestroyed(device);
 }
 
+VALIDATE_HOOK(hkvkGetSwapchainImagesKHR, PFN_vkGetSwapchainImagesKHR)
+static VkResult hkvkGetSwapchainImagesKHR(VkDevice device, VkSwapchainKHR swapchain, uint32_t* pSwapchainImageCount,
+                                          VkImage* pSwapchainImages)
+{
+    if (auto fg = State::Instance().currentVkFG; fg != nullptr && fg->OwnsSwapchain(swapchain))
+        return fg->GetSwapchainImages(device, swapchain, pSwapchainImageCount, pSwapchainImages);
+
+    return o_GetSwapchainImagesKHR(device, swapchain, pSwapchainImageCount, pSwapchainImages);
+}
+
+VALIDATE_HOOK(hkvkAcquireNextImageKHR, PFN_vkAcquireNextImageKHR)
+static VkResult hkvkAcquireNextImageKHR(VkDevice device, VkSwapchainKHR swapchain, uint64_t timeout,
+                                        VkSemaphore semaphore, VkFence fence, uint32_t* pImageIndex)
+{
+    if (auto fg = State::Instance().currentVkFG; fg != nullptr && fg->OwnsSwapchain(swapchain))
+        return fg->AcquireNextImage(device, swapchain, timeout, semaphore, fence, pImageIndex);
+
+    return o_AcquireNextImageKHR(device, swapchain, timeout, semaphore, fence, pImageIndex);
+}
+
+VALIDATE_HOOK(hkvkSetHdrMetadataEXT, PFN_vkSetHdrMetadataEXT)
+static void hkvkSetHdrMetadataEXT(VkDevice device, uint32_t swapchainCount, const VkSwapchainKHR* pSwapchains,
+                                  const VkHdrMetadataEXT* pMetadata)
+{
+    auto fg = State::Instance().currentVkFG;
+
+    for (uint32_t i = 0; i < swapchainCount; i++)
+    {
+        if (fg != nullptr && fg->OwnsSwapchain(pSwapchains[i]))
+            fg->SetHdrMetadata(device, pSwapchains[i], &pMetadata[i]);
+        else
+            o_SetHdrMetadataEXT(device, 1, &pSwapchains[i], &pMetadata[i]);
+    }
+}
+
 VALIDATE_HOOK(hkvkGetInstanceProcAddr, PFN_vkGetInstanceProcAddr)
 PFN_vkVoidFunction hkvkGetInstanceProcAddr(VkInstance instance, const char* pName)
 {
@@ -1494,6 +1860,9 @@ PFN_vkVoidFunction hkvkGetInstanceProcAddr(VkInstance instance, const char* pNam
 
     if (auto lowLatency2 = HookLowLatency2(procName, orgFunc); lowLatency2 != nullptr)
         return lowLatency2;
+
+    if (auto lowLatencyInput = LowLatencyInputHook(pName, orgFunc, _ReturnAddress()))
+        return lowLatencyInput;
 
     auto result = VulkanSpoofing::hkvkGetInstanceProcAddr(orgFunc, pName);
     if (result != VK_NULL_HANDLE)
@@ -1540,6 +1909,9 @@ PFN_vkVoidFunction hkvkGetDeviceProcAddr(VkDevice device, const char* pName)
     if (auto lowLatency2 = HookLowLatency2(procName, orgFunc); lowLatency2 != nullptr)
         return lowLatency2;
 
+    if (auto lowLatencyInput = LowLatencyInputHook(pName, orgFunc, _ReturnAddress()))
+        return lowLatencyInput;
+
     auto result = VulkanSpoofing::hkvkGetDeviceProcAddr(orgFunc, pName);
     if (result != VK_NULL_HANDLE)
         return result;
@@ -1555,6 +1927,23 @@ PFN_vkCreateWin32SurfaceKHR VulkanHooks::OriginalCreateWin32Surface()
 PFN_vkDestroySurfaceKHR VulkanHooks::OriginalDestroySurface()
 {
     return o_vkDestroySurfaceKHR != nullptr ? o_vkDestroySurfaceKHR : &vkDestroySurfaceKHR;
+}
+
+void VulkanHooks::SetLowLatencySwapchain(VkSwapchainKHR swapchain)
+{
+    // The game's handle of the FG swapchain isn't a driver one, and FFX's real one has no low latency mode
+    if (auto fg = State::Instance().currentVkFG; fg != nullptr && fg->OwnsSwapchain(swapchain))
+        swapchain = VK_NULL_HANDLE;
+
+    lowLatencySwapchain = swapchain;
+}
+
+PFN_vkVoidFunction VulkanHooks::GetDeviceProcAddr(VkDevice device, const char* pName)
+{
+    if (o_vkGetDeviceProcAddr != nullptr)
+        return o_vkGetDeviceProcAddr(device, pName);
+
+    return vkGetDeviceProcAddr(device, pName);
 }
 
 void VulkanHooks::Hook(HMODULE vulkan1)
@@ -1663,6 +2052,17 @@ void VulkanHooks::Unhook()
     if (o_vkDestroySurfaceKHR != nullptr)
         DetourDetach(&(PVOID&) o_vkDestroySurfaceKHR, hkvkDestroySurfaceKHR);
 
+        DetourDetach(&(PVOID&) o_DestroySwapchainKHR, hkvkDestroySwapchainKHR);
+
+    if (o_GetSwapchainImagesKHR != nullptr)
+        DetourDetach(&(PVOID&) o_GetSwapchainImagesKHR, hkvkGetSwapchainImagesKHR);
+
+    if (o_AcquireNextImageKHR != nullptr)
+        DetourDetach(&(PVOID&) o_AcquireNextImageKHR, hkvkAcquireNextImageKHR);
+
+    if (o_SetHdrMetadataEXT != nullptr)
+        DetourDetach(&(PVOID&) o_SetHdrMetadataEXT, hkvkSetHdrMetadataEXT);
+
     if (o_vkCreateDevice != nullptr)
         DetourDetach(&(PVOID&) o_vkCreateDevice, hkvkCreateDevice);
 
@@ -1691,6 +2091,9 @@ void VulkanHooks::Unhook()
         o_AcquireFullScreenExclusiveModeEXT = nullptr;
         o_ReleaseFullScreenExclusiveModeEXT = nullptr;
         o_vkDestroySurfaceKHR = nullptr;
+        o_GetSwapchainImagesKHR = nullptr;
+        o_AcquireNextImageKHR = nullptr;
+        o_SetHdrMetadataEXT = nullptr;
         o_vkCreateDevice = nullptr;
         o_vkDestroyDevice = nullptr;
         o_vkCreateInstance = nullptr;

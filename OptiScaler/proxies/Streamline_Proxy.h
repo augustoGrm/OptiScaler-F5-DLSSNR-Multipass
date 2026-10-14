@@ -70,8 +70,7 @@ class StreamlineProxy
             return true;
 
         auto owner = State::GetOwner();
-        if (State::Instance().activeFgOutput == FGOutput::DLSSG &&
-            State::Instance().activeFgNvngx != FGNvngxReplacement::None)
+        if (State::Instance().activeFgOutput == FGOutput::DLSSG)
         {
             State::DisableChecks(owner, "sl.");
         }
@@ -318,8 +317,10 @@ class StreamlineProxy
         ok &= ResolveActiveFeature(sl::kFeatureReflex, "slReflexGetState", _slReflexGetState, state.optiSlReflex);
         ok &= ResolveActiveFeature(sl::kFeatureReflex, "slReflexSleep", _slReflexSleep, state.optiSlReflex);
         ok &= ResolveActiveFeature(sl::kFeatureReflex, "slReflexSetOptions", _slReflexSetOptions, state.optiSlReflex);
-        ResolveActiveFeature(sl::kFeatureReflex, "slReflexSetCameraData", _slReflexSetCameraData, state.optiSlReflex, false);
-        ResolveActiveFeature(sl::kFeatureReflex, "slReflexGetPredictedCameraData", _slReflexGetPredictedCameraData, state.optiSlReflex, false);
+        ResolveActiveFeature(sl::kFeatureReflex, "slReflexSetCameraData", _slReflexSetCameraData, state.optiSlReflex,
+                             false);
+        ResolveActiveFeature(sl::kFeatureReflex, "slReflexGetPredictedCameraData", _slReflexGetPredictedCameraData,
+                             state.optiSlReflex, false);
         ResolveActiveFeature(sl::kFeaturePCL, "slPCLGetState", _slPCLGetState, state.optiSlPCL, false);
         ok &= ResolveActiveFeature(sl::kFeaturePCL, "slPCLSetMarker", _slPCLSetMarker, state.optiSlPCL);
         ok &= ResolveActiveFeature(sl::kFeaturePCL, "slPCLSetOptions", _slPCLSetOptions, state.optiSlPCL);
@@ -396,8 +397,7 @@ class StreamlineProxy
         pref.numPathsToPlugins = (uint32_t) paths.size();
 
         auto owner = State::GetOwner();
-        if (State::Instance().activeFgOutput == FGOutput::DLSSG &&
-            State::Instance().activeFgNvngx != FGNvngxReplacement::None)
+        if (State::Instance().activeFgOutput == FGOutput::DLSSG)
         {
             State::DisableChecks(owner, "sl.");
         }
@@ -408,6 +408,27 @@ class StreamlineProxy
 
         _isD3D12Requested = true;
         auto initResult = StreamlineProxy::Init()(pref, sl::kSDKVersion);
+
+        sl::AdapterInfo adapterInfo {};
+        if (StreamlineProxy::IsFeatureSupported()(sl::kFeatureDLSS_G, adapterInfo) != sl::Result::eOk)
+        {
+            if (State::Instance().activeFgNvngx == FGNvngxReplacement::None)
+            {
+                Config::Instance()->FGNvngxReplacement = FGNvngxReplacement::Nukems;
+                Config::Instance()->SaveIni();
+
+                MessageBoxW(NULL,
+                            L"You've tried to use real DLSSG, but it's not supported\n"
+                            "Opti will try to use a replacement, restart the game",
+                            L"No DLSSG Support", MB_ICONWARNING | MB_OK);
+
+                std::exit(1);
+            }
+            else
+            {
+                LOG_ERROR("FG Nvngx replacement was selected but SL failed to init DLSSG");
+            }
+        }
 
         State::EnableChecks(owner);
 

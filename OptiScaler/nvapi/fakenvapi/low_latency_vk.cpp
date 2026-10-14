@@ -131,7 +131,7 @@ void LowLatency::get_latency_result(NV_VULKAN_LATENCY_RESULT_PARAMS* pGetLatency
 
 void LowLatency::add_marker_to_report(NV_VULKAN_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams)
 {
-    auto current_timestamp = get_timestamp() / 1000;
+    auto current_timestamp = Util::GetTimestamp() / 1000;
 
     if (last_sim_start == 0)
         last_sim_start = second_last_sim_start = current_timestamp;
@@ -156,26 +156,26 @@ void LowLatency::add_marker_to_report(NV_VULKAN_LATENCY_MARKER_PARAMS* pSetLaten
     {
     case VULKAN_SIMULATION_START:
         second_last_sim_start = last_sim_start;
-        last_sim_start = get_timestamp() / 1000;
+        last_sim_start = Util::GetTimestamp() / 1000;
         current_report->simStartTime = last_sim_start;
         break;
     case VULKAN_SIMULATION_END:
-        current_report->simEndTime = get_timestamp() / 1000;
+        current_report->simEndTime = Util::GetTimestamp() / 1000;
         break;
     case VULKAN_RENDERSUBMIT_START:
-        current_report->renderSubmitStartTime = get_timestamp() / 1000;
+        current_report->renderSubmitStartTime = Util::GetTimestamp() / 1000;
         break;
     case VULKAN_RENDERSUBMIT_END:
-        current_report->renderSubmitEndTime = get_timestamp() / 1000;
+        current_report->renderSubmitEndTime = Util::GetTimestamp() / 1000;
         break;
     case VULKAN_PRESENT_START:
-        current_report->presentStartTime = get_timestamp() / 1000;
+        current_report->presentStartTime = Util::GetTimestamp() / 1000;
         break;
     case VULKAN_PRESENT_END:
-        current_report->presentEndTime = get_timestamp() / 1000;
+        current_report->presentEndTime = Util::GetTimestamp() / 1000;
         break;
     case VULKAN_INPUT_SAMPLE:
-        current_report->inputSampleTime = get_timestamp() / 1000;
+        current_report->inputSampleTime = Util::GetTimestamp() / 1000;
         break;
     default:
         break;

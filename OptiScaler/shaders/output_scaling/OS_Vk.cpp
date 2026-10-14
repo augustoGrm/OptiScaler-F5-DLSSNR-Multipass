@@ -137,6 +137,8 @@ bool OS_Vk::Dispatch(VkCommandBuffer InCmdList, const VkImageInfo& InResourceVie
     const uint32_t dstW = nr ? OutResourceView.Width : State::Instance().currentFeature->DisplayWidth();
     const uint32_t dstH = nr ? OutResourceView.Height : State::Instance().currentFeature->DisplayHeight();
 
+    ScopedGpuTime_Vk scopedGpuTime(GpuTime.get(), InCmdList);
+
     // Update Constants
     FsrEasuCon(fsr1Constants.const0, fsr1Constants.const1, fsr1Constants.const2, fsr1Constants.const3,
                srcW, srcH, srcW, srcH, dstW, dstH);

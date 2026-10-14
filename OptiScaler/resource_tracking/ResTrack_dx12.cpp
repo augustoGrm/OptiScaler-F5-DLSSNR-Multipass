@@ -563,10 +563,9 @@ static bool IsDescriptorEnabled(ResourceType type)
 
 bool ResTrack_Dx12::IsHudFixActive()
 {
-    if (!Config::Instance()->FGEnabled.value_or_default() || !Config::Instance()->FGHUDFix.value_or_default())
+    if (!Config::Instance()->IsFGEnabled() || !Config::Instance()->FGHUDFix.value_or_default())
     {
-        LOG_TRACK(
-            "!Config::Instance()->FGEnabled.value_or_default() || !Config::Instance()->FGHUDFix.value_or_default()");
+        LOG_TRACK("!Config::Instance()->IsFGEnabled() || !Config::Instance()->FGHUDFix.value_or_default()");
         return false;
     }
 
@@ -2616,6 +2615,10 @@ void ResTrack_Dx12::HookCommandList(ID3D12Device* InDevice)
                     o_DrawIndexedInstanced = nullptr;
                     o_Dispatch = nullptr;
                     o_SetComputeRootDescriptorTable = nullptr;
+                }
+                else if (State::Instance().activeFgInput == FGInput::Upscaler)
+                {
+                    _bindingTrackingEnabled.store(persistentBindings, std::memory_order_release);
                 }
                 else if (State::Instance().activeFgInput == FGInput::Upscaler)
                 {

@@ -4,7 +4,8 @@
 #include "misc/Quirks.h"
 #include "misc/SkipSpoof.h"
 #include "framegen/IFGFeature_Dx12.h"
-#include <inputs/FG/Streamline_Inputs_Dx12.h>
+#include "framegen/IFGFeature_Vk.h"
+#include <inputs/FG/Streamline_Inputs.h>
 #include <inputs/FG/Streamline_Inputs_Sl1_Dx12.h>
 
 #include <set>
@@ -42,12 +43,37 @@ enum class FGInput : uint32_t
     ForceXeLL, // Do not expose this option
 };
 
+template <> struct EnumConfig<FGInput>
+{
+    static constexpr auto default_value = FGInput::NoFG;
+
+    static constexpr std::pair<FGInput, std::string_view> mapping[] = {
+        { FGInput::NoFG, "NoFG" },       { FGInput::Upscaler, "Upscaler" },   { FGInput::DLSSG, "DLSSG" },
+        { FGInput::NvngxFG, "NvngxFG" }, { FGInput::FSRFG, "FSRFG" },         { FGInput::FSRFG30, "FSRFG30" },
+        { FGInput::XeFG, "XeFG" },       { FGInput::ForceXeLL, "ForceXeLL" },
+    };
+};
+
 enum class FGOutput : uint32_t
 {
     NoFG,
     FSRFG,
     DLSSG,
     XeFG,
+    Reprojection
+};
+
+template <> struct EnumConfig<FGOutput>
+{
+    static constexpr auto default_value = FGOutput::NoFG;
+
+    static constexpr std::pair<FGOutput, std::string_view> mapping[] = {
+        { FGOutput::NoFG, "NoFG" },
+        { FGOutput::FSRFG, "FSRFG" },
+        { FGOutput::DLSSG, "DLSSG" },
+        { FGOutput::XeFG, "XeFG" },
+        { FGOutput::Reprojection, "Reprojection" },
+    };
 };
 
 enum class FGNvngxReplacement : uint32_t
@@ -86,6 +112,48 @@ enum class SwapchainInteropApi : uint32_t
     None,
     Dx11wDx12,
     VkwDx12, // a Vulkan game presenting through a D3D12 swapchain (native/VkPresentBridge.h)
+};
+
+enum class ColorTransfer : uint32_t
+{
+    Unknown,
+    SRGB,
+    Linear,
+    PQ,
+    HLG
+};
+
+enum class ColorPrimaries : uint32_t
+{
+    Unknown,
+    Rec709,
+    Rec2020
+};
+
+enum class ColorRange : uint32_t
+{
+    Unknown,
+    Full,
+    Studio
+};
+
+enum class ColorModel : uint32_t
+{
+    Unknown,
+    RGB,
+    YCbCr
+};
+
+struct OutputColorSpace
+{
+    DXGI_COLOR_SPACE_TYPE dxgiColorSpace = DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709;
+
+    ColorTransfer transfer = ColorTransfer::SRGB;
+    ColorPrimaries primaries = ColorPrimaries::Rec709;
+    ColorRange range = ColorRange::Full;
+    ColorModel model = ColorModel::RGB;
+
+    bool valid = false;
 };
 
 enum class ColorTransfer : uint32_t
@@ -186,7 +254,7 @@ class State
     FGNvngxReplacement activeFgNvngx = FGNvngxReplacement::None;
 
     // Streamline FG inputs
-    Sl_Inputs_Dx12 slFGInputs = {};
+    Sl_Inputs slFGInputs = {};
     Sl1_Inputs_Dx12 s_sl1FGInputs {};
 
     // OptiFG
@@ -285,6 +353,11 @@ class State
     std::atomic<UINT64> dlssgLastEvaluateFrameVk { UINT64_MAX };
     std::atomic<bool> dlssgLastEvaluateGeneratesVk { false };
 
+    // What the game requested from DLSSG when it's used as FG Input
+    // This might need to get moved to Sl_Inputs
+    bool dlssgInputGameEnabled = false;
+    int dlssgInputGameInterpolationCount = 1;
+
     // DLSS
     bool dlssPresetsOverriddenExternally = false;
     bool dlssPresetsOverridenByOpti = false;
@@ -316,8 +389,14 @@ class State
     std::vector<std::string> detectedQuirks {};
 
     // FFX
-    std::vector<const char*> ffxUpscalerVersionNames {};
-    std::vector<uint64_t> ffxUpscalerVersionIds {};
+    // Separate lists as DX12 (incl. w/Dx12) and Vulkan FFX can report different upscalers
+    struct FfxVersionList
+    {
+        std::vector<const char*> names {};
+        std::vector<uint64_t> ids {};
+    };
+    FfxVersionList ffxUpscalerVersionsDx12 {};
+    FfxVersionList ffxUpscalerVersionsVk {};
     std::vector<const char*> ffxFGVersionNames {};
     std::vector<uint64_t> ffxFGVersionIds {};
     std::optional<uint32_t> currentFsr4Preset {};
@@ -330,6 +409,10 @@ class State
 
     // Vulkan stuff
     bool vulkanCreatingSC = false;
+    // Per thread, it's only meant for the call chain of the thread creating the device
+    // and overlapping ScopedCreatingD3DDevice from different threads could leave it stuck
+    inline static thread_local bool creatingD3DDevice = false;
+    bool vulkanSkipHooks = false;
     VkInstance VulkanInstance = nullptr;
 
     // Framegraph
@@ -385,6 +468,7 @@ class State
 
     IFeature* currentFeature = nullptr;
     IFGFeature_Dx12* currentFG = nullptr;
+    IFGFeature_Vk* currentVkFG = nullptr;
     IDXGISwapChain* currentSwapchain = nullptr;
     IDXGISwapChain* currentWrappedSwapchain = nullptr;
     IDXGISwapChain* currentRealSwapchain = nullptr;
@@ -397,6 +481,20 @@ class State
 
     std::vector<ID3D12Device*> d3d12Devices;
     std::vector<ID3D11Device*> d3d11Devices;
+
+    // The FG output of whichever API the game uses
+    IFGFeature* CurrentFG() const
+    {
+        if (currentFG != nullptr)
+            return currentFG;
+
+        return currentVkFG;
+    }
+
+    bool FGSwapchainExists() const
+    {
+        return currentFGSwapchain != nullptr || (currentVkFG != nullptr && currentVkFG->HasSwapchain());
+    }
 
     static UINT GetOwner()
     {

@@ -32,6 +32,7 @@ struct Luid
 std::filesystem::path ExePath();
 std::filesystem::path DllPath();
 std::optional<std::filesystem::path> NvngxPath();
+std::filesystem::path ReShadePath();
 
 double MillisecondsNow();
 std::wstring ToLower(std::wstring value);
@@ -57,6 +58,7 @@ void LoadProxyLibrary(const std::wstring& name, const std::wstring& optiPath, co
                       HMODULE* memoryModule, HMODULE* loadedModule);
 
 std::map<Luid, std::filesystem::path> GetDriverStore();
+uint64_t GetTimestamp();
 
 template <typename T> void DelayedDestroy(std::unique_ptr<T> ptr)
 {

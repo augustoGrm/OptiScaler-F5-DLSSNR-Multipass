@@ -1,0 +1,35 @@
+{
+  "repository": "SilyNoMeta/dlssg_for_sm86",
+  "commit": "329b4c85927c64a8dba2e25125e6d02a42ab63fe",
+  "version": "0.3.5-5",
+  "files": [
+    {
+      "path": "version.dll",
+      "sha256": "7489a89bf593cda243d95c62e6d8b75905d9774e27b7b2d53b91625a79c05ca4"
+    },
+    {
+      "path": "THIRD_PARTY_NOTICES.txt",
+      "sha256": "8559e5b6549f9d03685675883dc423e8d768a79ec32d0bdda48f96005336a620"
+    },
+    {
+      "path": "LICENSE-NGX.txt",
+      "sha256": "d4216e39ebef5f9b50a6712ebb37beeb5379862a67733a9999c651f21592aaf0"
+    },
+    {
+      "path": "LICENSE-DLSSG-Transfusion.txt",
+      "sha256": "433da96087fd9b91afd44c6350ca92da53167c9636a0a71e428f71036d8c372f"
+    },
+    {
+      "path": "LICENSE-ReShade.txt",
+      "sha256": "237ded5b8344f820113efab1e65e91e1f159d9202c5b4856606a0590d3ffdab0"
+    },
+    {
+      "path": "LICENSE-ImGui.txt",
+      "sha256": "c80c5789748d955c4a650562baa0d750494e2c7128c2ca66aaebe2e3c4e198bf"
+    },
+    {
+      "path": "LICENSE-Streamline-headers.txt",
+      "sha256": "d42b17119b616c68447c9b89c70139a4baf2b759df170ce16fcec25b9c30abba"
+    }
+  ]
+}

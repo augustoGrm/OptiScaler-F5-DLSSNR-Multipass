@@ -102,12 +102,13 @@ template <class T, HasDefaultValue defaultState = WithDefault> class CustomOptio
     }
 
     constexpr T value_or_default() &&
-        requires(defaultState != NoDefault) {
-            return this->has_value() ? std::move(this->value()) : std::move(_defaultValue);
-        }
+        requires(defaultState != NoDefault)
+    {
+        return this->has_value() ? std::move(this->value()) : std::move(_defaultValue);
+    }
 
-        constexpr std::optional<T> value_for_config()
-            requires(defaultState == WithDefault)
+    constexpr std::optional<T> value_for_config()
+        requires(defaultState == WithDefault)
     {
         if (_volatile)
         {
@@ -208,6 +209,7 @@ enum class LowLatencyInput : uint32_t
     Reflex,
     XeLL,
     UeLowLatency,
+    OptiScaler, // OptiScaler's own Streamline (DLSSG output) when the game has no low latency of its own
     _
 };
 
@@ -219,7 +221,29 @@ enum class LowLatencyMode : uint32_t
     AntiLag2,
     XeLL,
     AntiLagVk,
-    Reflex
+    Reflex,
+    FpsLimiter,
+    _
+};
+
+enum class ReprojectionFill : uint32_t
+{
+    StrechEdge,
+    Dithering,
+    Noise,
+    Debug,
+};
+
+template <> struct EnumConfig<ReprojectionFill>
+{
+    static constexpr auto default_value = ReprojectionFill::Dithering;
+
+    static constexpr std::pair<ReprojectionFill, std::string_view> mapping[] = {
+        { ReprojectionFill::StrechEdge, "strech" },
+        { ReprojectionFill::Dithering, "dithering" },
+        { ReprojectionFill::Noise, "noise" },
+        { ReprojectionFill::Debug, "debug" }
+    };
 };
 
 class Config
@@ -923,7 +947,13 @@ class Config
     CustomOptional<float> MenuBGColorR { 0.0f };
     CustomOptional<float> MenuBGColorG { 0.0f };
     CustomOptional<float> MenuBGColorB { 0.0f };
-    CustomOptional<float> MenuBGColorA { 0.99f };
+    CustomOptional<float> MenuBGColorA { 0.93f };
+    CustomOptional<bool> MenuBlur { true };
+    CustomOptional<float> MenuBlurStrength { 1.0f };
+    CustomOptional<bool> CustomTabEnabled { true };
+    CustomOptional<std::string> CustomTabCards { "upscaler,sharpness,fg_selection,fg_fsrfg,fg_xefg,fg_dlssg,fg_"
+                                                 "reprojection,fg_optifg,fg_nvngx,fg_fsrfg_inputs,fg_sl_"
+                                                 "inputs,framerate" }; // Comma separated ids of the boxes
 
     // Hooks
     CustomOptional<bool> HookOriginalNvngxOnly { false };
@@ -1050,6 +1080,8 @@ class Config
 
     // NVAPI Override
     CustomOptional<bool> DisableFlipMetering { false };
+    CustomOptional<bool> DisableOTA { false };
+    CustomOptional<bool> ImASillyGooseThatIsAboutToMisuseReflex { false };
 
     // Spoofing
     CustomOptional<bool, SoftDefault> DxgiSpoofing { true };
@@ -1089,14 +1121,18 @@ class Config
     CustomOptional<bool> FGDLSSGAdaFlipMeteringPatch { false };  // pin sl.dlss_g to software frame pacing
     // Ampere/Turing (SM86/SM75) MFG unlocker — sideloads the dlssg_for_sm86 proxy
     CustomOptional<bool> FGDLSSGAmpereMfgUnlock { false };
-    CustomOptional<int>  FGDLSSGAmpereMfgMaxFrames { 3 };       // 0-3: 0=runtime default (3X), 1=2X, 2=3X, 3=4X
+    CustomOptional<int>  FGDLSSGAmpereMfgMaxFrames { 5 };       // 1..5 generated frames, up to X6
+    CustomOptional<int> FGDLSSGAmpereMfgMultiplier { 0 }; // 0 follows game, 2..6 fixed factor
+    CustomOptional<bool> FGDLSSGAmpereMfgDynamic { false };
+    CustomOptional<int> FGDLSSGAmpereMfgTargetFPS { 0 }; // 0 = refresh rate, 1..1000 FPS
+
     CustomOptional<std::string, NoDefault> FGDLSSGAmpereMfgKernelImage;     // Auto / PTX / Cubin
     CustomOptional<bool> FGDLSSGAmpereMfgHardwareBilinear { false };        // Optional approximate sampling (SM86 only)
     CustomOptional<FGOutput> FGOutput { FGOutput::NoFG };
     // Keeps Streamline from picking up the driver's OTA/downloaded plugins; only files in
     // OptiScaler/streamline are used for sl.* plugins and nvngx_dlssg.dll
     CustomOptional<bool> FGStreamlineIgnoreOTA { false };
-    CustomOptional<FGNvngxReplacement> FGNvngxReplacement { FGNvngxReplacement::None };
+    CustomOptional<FGNvngxReplacement> FGNvngxReplacement { FGNvngxReplacement::Nukems };
     CustomOptional<bool> FGDrawUIOverFG { false };
     CustomOptional<bool> FGUIPremultipliedAlpha { true };
     CustomOptional<bool> FGDisableHudless { false };
@@ -1113,9 +1149,11 @@ class Config
     CustomOptional<bool> FGModifySCIndex { false };
     CustomOptional<float> FGHudCutoff { 0.0f };
     CustomOptional<FrameTimeSource> FTInput { FrameTimeSource::Input };
+    CustomOptional<bool> FGReprojectionEnabled { false }; // WIP Not saved or loaded
 
     // OptiFG
-    CustomOptional<bool> FGEnabled { false };
+    // Unset (auto) follows the game's DLSSG state when FG Input is DLSSG, use IsFGEnabled() to read
+    CustomOptional<bool, SoftDefault> FGEnabled { false };
     CustomOptional<bool> FGUseMutexForSwapchain { true };
     CustomOptional<bool> FGMakeMVCopy { true };
     CustomOptional<bool> FGMakeDepthCopy { true };
@@ -1176,6 +1214,7 @@ class Config
     // XeFG
     CustomOptional<bool> FGXeFGIgnoreInitChecks { false };
     CustomOptional<int> FGXeFGInterpolationCount { 1 };
+    CustomOptional<int, NoDefault> FGXeFGOverrideInterpolationCount; // Game's own XeFG (XeFG input), 0 = off
     CustomOptional<bool> FGXeFGUIComposition { false };
     CustomOptional<bool> FGXeFGDepthInverted { true };
     CustomOptional<bool> FGXeFGJitteredMV { false };
@@ -1197,6 +1236,12 @@ class Config
     CustomOptional<bool> FGDLSSGForceDMFG { false };           // Overrides Opti's DLSSG mode to Dynamic
     CustomOptional<float> FGDLSSGFramerateTargetDMFG { 0.0f }; // 0.0 means auto-detects the display refresh rate
 
+    // Reprojection
+    CustomOptional<ReprojectionFill> ReprojectionFillMode { ReprojectionFill::Dithering };
+    CustomOptional<float> ReprojectionDepthCutoff { 0.1f };
+    CustomOptional<uint32_t> ReprojectionCutoffExpand { 1 };
+    CustomOptional<bool> ReprojectionLateLatch { true };
+
     // As per
     // https://github.com/artur-graniszewski/dlss-enabler-main/blob/a92464d468eb0d91ae17befa66c6bf6229f20b9f/Utils/DlssgProxy.cpp#L1033
     CustomOptional<uint32_t> NvngxFGDispatchFlags { 0x10000000 }; // IGNORE_UI_TEXTURE
@@ -1209,7 +1254,7 @@ class Config
     CustomOptional<bool> FN_ForceLatencyFlex { false };
     CustomOptional<LFXMode> FN_LatencyFlexMode { LFXMode::Conservative };
     CustomOptional<ForceReflex> FN_ForceReflex { ForceReflex::InGame };
-    CustomOptional<LowLatencyInput> LowLatencyInput { LowLatencyInput::Auto }; // TODO: no reading/saving to config
+    CustomOptional<LowLatencyInput> LowLatencyInput { LowLatencyInput::Auto };
     CustomOptional<LowLatencyMode> LowLatencyOutput { LowLatencyMode::Auto };
 
     // Inputs
@@ -1255,6 +1300,12 @@ class Config
     bool SaveXeFG();
 
     void CheckUpscalerFiles();
+
+    // FG on/off and interpolation count, following the game's DLSSG state when FGEnabled is unset
+    static bool FGCanFollowGame();
+    bool FGFollowsGame() const;
+    bool IsFGEnabled() const;
+    int FGInterpolationCount(int outputCount) const;
 
     std::vector<std::string> GetConfigLog();
 
