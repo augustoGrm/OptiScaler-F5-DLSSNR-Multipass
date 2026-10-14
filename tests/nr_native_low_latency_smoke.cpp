@@ -947,6 +947,23 @@ int main()
         CHECK(OutputShown(nvFake, false, false, true) == Output::Auto);
         CHECK(OutputShown(nvFake, false, true, false) == Output::Auto);
 
+        // The menu hides entries whose reason holds for the whole session and greys only the passing ones. Where the
+        // driver's Reflex runs, the Auto entry is that method by name, and it is what OutputShown selects there.
+        CHECK(OutputAvailability(Output::LatencyFlex, real).hidden);
+        CHECK(OutputAvailability(Output::FrameCapOnly, real).hidden);
+        CHECK(OutputAvailability(Output::FrameCapOnly, nvFake).hidden);
+        CHECK(!OutputAvailability(Output::XeLL, real).hidden && !OutputAvailability(Output::Auto, real).hidden);
+        OutputInputs amdNoFake; // LatencyFlex needs fakenvapi, which the session does not get later
+        amdNoFake.amdGpu = true;
+        CHECK(OutputAvailability(Output::LatencyFlex, amdNoFake).hidden);
+        CHECK(!OutputAvailability(Output::FrameCapOnly, amdNoFake).hidden);
+        CHECK(AutoEntryName(real) != nullptr && std::strcmp(AutoEntryName(real), "NVIDIA Reflex") == 0);
+        CHECK(AutoEntryName(nvFake) != nullptr);
+        CHECK(AutoEntryName(fake) == nullptr && AutoEntryName(amdReal) == nullptr);
+        for (const bool frameCapOnly : { false, true })
+            for (const bool forceLatencyFlex : { false, true })
+                CHECK(OutputShown(real, false, forceLatencyFlex, frameCapOnly) == Output::Auto);
+
         // Boost: only with real Reflex as the output, and only while OptiScaler makes the calls
         CHECK(BoostAvailable(Input::Auto, real, false));
         CHECK(BoostAvailable(Input::OptiScaler, real, false));
@@ -1059,6 +1076,7 @@ int main()
             CHECK(!XefgLatencyAvailable(XefgLatency::AntiLag2, failed));
             CHECK(!OutputAvailability(Output::AntiLag2, failed).available);
             CHECK(std::strstr(OutputAvailability(Output::AntiLag2, failed).why, "could not start") != nullptr);
+            CHECK(!OutputAvailability(Output::AntiLag2, failed).hidden); // can pass: greyed, not hidden
             CHECK(OutputShown(failed, false, false) == Output::XeLL);
             CHECK(EffectiveXefgLatency(failed, false, false) == XefgLatency::XeLL);
             CHECK(OutputLocked(failed));
@@ -1075,6 +1093,7 @@ int main()
             CHECK(!XefgLatencyAvailable(XefgLatency::Reflex, failed));
             CHECK(!OutputAvailability(Output::Reflex, failed).available);
             CHECK(std::strstr(OutputAvailability(Output::Reflex, failed).why, "could not start") != nullptr);
+            CHECK(!OutputAvailability(Output::Reflex, failed).hidden); // can pass: greyed, not hidden
             CHECK(OutputShown(failed, false, false) == Output::XeLL);
             CHECK(EffectiveXefgLatency(failed, false, false) == XefgLatency::XeLL);
             CHECK(OutputLocked(failed));

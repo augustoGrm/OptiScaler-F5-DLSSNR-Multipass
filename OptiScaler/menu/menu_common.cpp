@@ -5802,7 +5802,8 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
                                    config->FramerateFrameCapOnly.value_or_default());
         const Output shownBefore = shown;
 
-        const std::string autoLabel = std::string("Auto (") + status.output + ")";
+        const char* autoName = AutoEntryName(outputInputs);
+        const std::string autoLabel = autoName != nullptr ? autoName : std::string("Auto (") + status.output + ")";
         const bool xefgOutput = outputInputs.xefgOutput;
 
         // With XeFG the choices are the ones that pair with it (XeLL it always needs, Reflex or Anti-Lag 2 beside it);
@@ -5825,12 +5826,14 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         {
             outputOptions = {
                 { Output::Auto, autoLabel,
-                    "What the setup has: NVIDIA Reflex, or Anti-Lag 2 / XeLL / LatencyFlex on other cards." },
+                    autoName != nullptr
+                        ? "Picked for this card: its driver's Reflex lowers latency and keeps the frame cap."
+                        : "Picked for this setup: NVIDIA Reflex, or Anti-Lag 2 / XeLL / LatencyFlex on other cards." },
                 { Output::XeLL, "XeLL",
-                    "Force XeLL. Works without frame generation on non-Intel cards.\n"
-                    "Takes the frame generation slot (disables FG). Needs a restart." },
+                    "XeLL on any card, without frame generation: OptiScaler's frame generation stays off.\n"
+                    "Needs a restart." },
                 { Output::LatencyFlex, "LatencyFlex",
-                    "Force LatencyFlex instead of Anti-Lag 2 or XeLL." },
+                    "LatencyFlex instead of Anti-Lag 2 or XeLL." },
                 { Output::FrameCapOnly, "Frame cap only",
                     "Only moves the FPS Limit's wait to just before the game reads input. While the cap is reached\n"
                     "that shows input up to a frame sooner; it does nothing else.\n"
@@ -5843,6 +5846,7 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         for (auto& option : outputOptions)
         {
             const auto choice = OutputAvailability(option.value, outputInputs);
+            option.set_hidden(choice.hidden);
             option.set_disabled(!choice.available, choice.why);
         }
 
@@ -5855,27 +5859,24 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
             ShowTooltip("Nothing to lower while the Input is Off.");
         else if (outputLocked)
         {
-            ShowTooltip(outputInputs.antiLag2Failed ? "XeFG uses XeLL here: Anti-Lag 2 could not start."
-                        : outputInputs.reflexFailed
-                            ? "XeFG uses XeLL here: Reflex could not start (on Vulkan: the game's device has neither "
-                              "VK_NV_low_latency2 nor NVIDIA's NvAPI Vulkan Reflex)."
-                            : "XeFG uses XeLL here. Reflex needs an NVIDIA card on its own nvapi (not fakenvapi), "
-                              "Anti-Lag 2 an AMD card with fakenvapi as the nvapi.");
+            // The details (Vulkan extensions, which nvapi) are in the log
+            ShowTooltip(outputInputs.antiLag2Failed ? "XeFG uses XeLL here: Anti-Lag 2 could not start in this game."
+                        : outputInputs.reflexFailed ? "XeFG uses XeLL here: Reflex could not start in this game."
+                                                    : "XeFG uses XeLL here: this setup has neither NVIDIA Reflex "
+                                                      "nor Anti-Lag 2 to put beside it.");
         }
 
         if (xefgOutput)
         {
             ShowHelpMarker("What lowers latency while XeFG generates frames. XeFG always keeps an XeLL; Reflex or "
                            "Anti-Lag 2 do the work instead when you pick them.\n"
-                           "Entries that do not fit this setup say why when hovered.");
+                           "Leave it as it is unless a game stutters or misbehaves with it.");
         }
         else
         {
-            ShowHelpMarker(
-                "What lowers latency. Auto uses what the setup has. XeLL and LatencyFlex force that method "
-                "(fakenvapi's Force XeLL and Force LatencyFlex). Frame cap only just moves the FPS Limit's wait "
-                "to before the game reads input.\n"
-                "Entries that do not fit this setup say why when hovered.");
+            ShowHelpMarker("What lowers latency. The first entry is picked for this setup: leave it there unless a "
+                           "game stutters or misbehaves with it.\n"
+                           "Frame cap only just moves the FPS Limit's wait to before the game reads input.");
         }
 
         if (!outputLocked && !inputOff && shown != shownBefore)
