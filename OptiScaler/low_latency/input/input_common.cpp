@@ -1159,7 +1159,11 @@ void InputCommon::fg_output_present(ID3D12CommandQueue* presentQueue, bool prese
     // (InputAntiLag2::injectAl2Context).
     if (State::Instance().activeFgOutput == FGOutput::XeFG)
     {
-        if (presentQueue == nullptr)
+        auto tech = currently_active_tech.load();
+
+        // Not once XeFG let go of its XeLL (release_xefg_xell released the queue): a present still on its way would
+        // keep a reference nobody releases
+        if (presentQueue == nullptr || xefg_xell.load() == nullptr || tech == nullptr)
             return;
 
         if (xefg_present_queue.load() != presentQueue)
@@ -1169,11 +1173,6 @@ void InputCommon::fg_output_present(ID3D12CommandQueue* presentQueue, bool prese
             if (auto old = xefg_present_queue.exchange(presentQueue))
                 old->Release();
         }
-
-        auto tech = currently_active_tech.load();
-
-        if (xefg_xell.load() == nullptr || tech == nullptr)
-            return;
 
         uint64_t frame_id = 0;
 
@@ -1293,7 +1292,7 @@ void InputCommon::xefg_marker(void* xellContext, uint32_t frame_id, uint32_t mar
     // Only XeFG's own context next to a Reflex or AntiLag 2 output, the XeLL output's context has them already
     auto own = xefg_xell.load();
 
-    if (own == nullptr || own->get_tech_context() != xellContext)
+    if (own == nullptr || own->get_tech_context() != xellContext || own == currently_active_tech.load())
         return;
 
     // Without generated frames XeFG sends both right away, DLSSG doesn't send them

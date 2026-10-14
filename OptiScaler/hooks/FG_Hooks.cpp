@@ -23,6 +23,8 @@
 #include <native/NativeLowLatency.h>
 #include <native/PresentStageTiming.h>
 #include <native/VkPresentBridge.h>
+#include <low_latency/input/input_common.h>
+#include <proxies/XeFG_Proxy.h>
 
 #include <d3d12.h>
 #include <detours/detours.h>
@@ -1424,6 +1426,17 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
             native::lowlatency::OnPresentBegin(lowLatencyDevice, native::lowlatency::PresentSource::FrameGeneration);
     }
 
+    // XeFG marks a batch of frames during the game's present (InputCommon::xefg_marker); its own count of the frames
+    // it sends for it, read after, sets how many of its presents carry that batch's frame id
+    void* xefgContext = nullptr;
+    uint64_t xefgFrameId = 0;
+
+    if (willPresent && state.currentFG != nullptr && state.activeFgOutput == FGOutput::XeFG)
+    {
+        xefgContext = state.currentFG->SwapchainContext();
+        xefgFrameId = InputCommon::xefg_marked_frame_id();
+    }
+
     HRESULT result;
     const auto presentStartMs = Util::MillisecondsNow();
 
@@ -1431,6 +1444,17 @@ HRESULT FGHooks::FGPresent(IDXGISwapChain* This, UINT SyncInterval, UINT Flags,
         result = o_FGSCPresent(This, SyncInterval, Flags);
     else
         result = o_FGSCPresent1((IDXGISwapChain1*) This, SyncInterval, Flags, pPresentParameters);
+
+    if (xefgContext != nullptr && XeFGProxy::GetLastPresentStatus() != nullptr)
+    {
+        xefg_swapchain_present_status_t status {};
+
+        if (XeFGProxy::GetLastPresentStatus()((xefg_swapchain_handle_t) xefgContext, &status) ==
+            XEFG_SWAPCHAIN_RESULT_SUCCESS)
+        {
+            InputCommon::xefg_present_status(xefgFrameId, status.framesPresented);
+        }
+    }
 
     // Where a stall sits when the game's present is held up inside frame generation's own (the game's present thread
     // only; native/PresentStageTiming.h). Only for the Vulkan bridge: other games log nothing of this.

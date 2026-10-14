@@ -17,6 +17,7 @@
 #include <native/NativeDriverDx12.h>
 #include <native/NativeLowLatency.h>
 #include <native/VkPresentBridge.h>
+#include <low_latency/input/input_common.h>
 
 #include <misc/FrameLimit.h>
 
@@ -616,11 +617,24 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             native::lowlatency::OnPresentBegin(lowLatencyDevice);
     }
 
+    // XeFG with Reflex or Anti-Lag 2 lowering latency next to its XeLL: each of its presents, generated or real, as
+    // DLSSG reports them, with the frame id of the batch XeFG marked (out of band present markers; Anti-Lag 2 takes the
+    // frame type from them). InputCommon::fg_output_present does nothing while XeLL is the output.
+    const bool xefgPresent = willPresent && cq != nullptr && fg != nullptr &&
+                             State::Instance().activeFgOutput == FGOutput::XeFG && fg->IsGenerating();
+    const uint32_t xefgFrameMultiplier = xefgPresent ? fg->GetInterpolatedFrameCount() + 1 : 1;
+
+    if (xefgPresent)
+        InputCommon::fg_output_present(cq, false, xefgFrameMultiplier);
+
     // swapchain present
     if (pPresentParameters == nullptr)
         presentResult = pSwapChain->Present(SyncInterval, Flags);
     else
         presentResult = ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
+
+    if (xefgPresent)
+        InputCommon::fg_output_present(cq, true, xefgFrameMultiplier);
 
     if (lowLatencyDevice != nullptr)
         native::lowlatency::OnPresentEnd(lowLatencyDevice);
