@@ -59,10 +59,11 @@ class TrustMaskDx12
     // call after Reset() (and the first with a valid flow) has no history and returns a mask of ones.
     bool Dispatch(ID3D12GraphicsCommandList* list, const Inputs& in);
 
-    // The guides the DLSS-NR seam takes (Story 4), at the picture's size: the depth (raw, in the convention it came in,
-    // the nearest over the copies) as R32_FLOAT, and the flow enlarged as RGBA16F in picture pixels towards the previous
-    // frame (bilinearly, or with depth by surface: Settings::guideSurface). Both rest in NON_PIXEL_SHADER_RESOURCE. The
-    // inputs are those of the Dispatch() just before. GuideDepth() is null after a call without depth.
+    // The guides the DLSS-NR seam takes (Story 4), at the picture's size: the depth (the nearest over the copies,
+    // always reversed-Z: near is 1.0, whatever the copies' convention) as R32_FLOAT, and the flow enlarged as RGBA16F
+    // in picture pixels towards the previous frame (bilinearly, or with depth by surface: Settings::guideSurface). Both
+    // rest in NON_PIXEL_SHADER_RESOURCE. The inputs are those of the Dispatch() just before. GuideDepth() is null after
+    // a call without depth.
     bool BuildGuides(ID3D12GraphicsCommandList* list, const Inputs& in, uint32_t width, uint32_t height);
     ID3D12Resource* GuideDepth() const { return _guideDepthValid ? _guideDepth.resource : nullptr; }
     ID3D12Resource* GuideMotion() const { return _guideMotion.resource; }

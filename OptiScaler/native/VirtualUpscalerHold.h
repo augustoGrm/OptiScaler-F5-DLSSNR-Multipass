@@ -7,7 +7,8 @@
 // the present thread plus a gap in frame generation. A game that calls its own upscaler only for a moment (menus,
 // cutscenes, a loading screen) therefore only pauses it; it is let go once the game's calls have run for kTakeoverMs.
 // And the backend is rebuilt at once for a new size, format or backend, but for a flip of the depth direction or HDR
-// (the depth finder's pick can change between candidates) only once the flip has held for kKeySettleFrames frames.
+// only once the flip has held for kKeySettleFrames frames. The depth direction no longer flips: the guide depth is
+// always reversed-Z (TrustMaskDx12::BuildGuides), however the depth finder's pick changes.
 
 #include <cstdint>
 
