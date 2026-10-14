@@ -5922,8 +5922,8 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
     if (state.rtssReflexInjection)
         output += " (RTSS)";
 
-    if ((fakenvapi::isUsingAsMainNvapi() || fakenvapi::getCurrentMode() == LowLatencyMode::XeLL) &&
-        !fakenvapi::isLowLatencyActive() && state.reflexLimitsFps)
+    if ((fakenvapi::isUsingAsMainNvapi() || InputCommon::current_mode() == LowLatencyMode::XeLL) &&
+        !InputCommon::low_latency_active() && state.reflexLimitsFps)
         output += " (inactive)";
 
     const char* who = ActiveInputText(status.decision, ReflexHooks::gameCalledReflex(), XellHooks::canLimit(),
@@ -6023,7 +6023,7 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
             "Framerate", "Uses Reflex when possible\nOn AMD/Intel cards, you can use Fakenvapi to substitute Reflex");
 
         if (state.rtssReflexInjection && state.reflexLimitsFps &&
-            fakenvapi::getCurrentMode() == LowLatencyMode::AntiLag2 &&
+            InputCommon::current_mode() == LowLatencyMode::AntiLag2 &&
             config->FGOutput.value_or_default() == FGOutput::FSRFG)
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
                                "Using RTSS Reflex injection with FSR Anti-Lag 2.0 and FSR FG "
@@ -6068,7 +6068,7 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
 
             float refreshRateF = static_cast<float>(refreshRate);
             // it's fine to use with real reflex, we only care about antilag
-            auto fpsLimitTech = fakenvapi::getCurrentMode();
+            auto fpsLimitTech = InputCommon::current_mode();
             constexpr float margin = 0.3f; // in ms
             float frameCap = std::round(10000.f / (1000.f / refreshRateF + margin)) / 10.f;
 
@@ -6118,7 +6118,7 @@ void MenuCommon::RenderFakenvapiSettings(RenderMenuContext& ctx)
     // clang-format on
 
     // Only while LatencyFlex is what lowers latency
-    if (fakenvapi::getCurrentMode() == LowLatencyMode::LatencyFlex)
+    if (InputCommon::current_mode() == LowLatencyMode::LatencyFlex)
         PopulateCombo("LatencyFlex mode", config->FN_LatencyFlexMode, lfx_modes);
 
     // clang-format off

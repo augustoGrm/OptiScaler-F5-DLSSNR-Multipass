@@ -622,10 +622,9 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
     // frame type from them). InputCommon::fg_output_present does nothing while XeLL is the output.
     const bool xefgPresent = willPresent && cq != nullptr && fg != nullptr &&
                              State::Instance().activeFgOutput == FGOutput::XeFG && fg->IsGenerating();
-    const uint32_t xefgFrameMultiplier = xefgPresent ? fg->GetInterpolatedFrameCount() + 1 : 1;
 
     if (xefgPresent)
-        InputCommon::fg_output_present(cq, false, xefgFrameMultiplier);
+        InputCommon::fg_output_present(cq, false);
 
     // swapchain present
     if (pPresentParameters == nullptr)
@@ -634,7 +633,7 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         presentResult = ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
 
     if (xefgPresent)
-        InputCommon::fg_output_present(cq, true, xefgFrameMultiplier);
+        InputCommon::fg_output_present(cq, true);
 
     if (lowLatencyDevice != nullptr)
         native::lowlatency::OnPresentEnd(lowLatencyDevice);

@@ -22,10 +22,10 @@ void fakenvapi::init(bool onlyContext)
         return;
 }
 
-// The second context XeFG's Anti-Lag 2 output runs in (fakenvapi.h companion*): one for D3D, one for Vulkan, each its own
-// LowLatency with one tech. The mutex only guards making, switching and dropping the context: a call copies the pointer
-// under it and runs outside, because Sleep and the simulation-start marker block inside Anti-Lag 2's Update and the
-// render thread's markers must not wait for the game thread's sleep.
+// The second context XeFG's Anti-Lag Vk output runs in for a Vulkan game (fakenvapi.h companion*), its own LowLatency
+// with one tech (a D3D game's split is InputCommon's). The mutex only guards making, switching and dropping the
+// context: a call copies the pointer under it and runs outside, because Sleep and the simulation-start marker block
+// inside Anti-Lag 2's Update and the render thread's markers must not wait for the game thread's sleep.
 namespace
 {
 struct Companion
@@ -36,7 +36,6 @@ struct Companion
     LowLatencyMode tech = LowLatencyMode::None;
 };
 
-Companion g_companionD3D { {}, nullptr, nullptr, LowLatencyMode::AntiLag2 };
 Companion g_companionVk { {}, nullptr, nullptr, LowLatencyMode::AntiLagVk };
 
 // Set once a tech could not start: kept after the context is let go, or the Output would flip back and forth
@@ -88,42 +87,6 @@ void DropCompanion(Companion& companion)
 }
 } // namespace
 
-NvAPI_Status fakenvapi::companionSetSleepMode(IUnknown* device, NV_SET_SLEEP_MODE_PARAMS* params)
-{
-    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.SetSleepMode(device, params); });
-}
-
-NvAPI_Status fakenvapi::companionSleep(IUnknown* device)
-{
-    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.Sleep(device); });
-}
-
-NvAPI_Status fakenvapi::companionSetLatencyMarker(IUnknown* device, NV_LATENCY_MARKER_PARAMS* params)
-{
-    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.SetLatencyMarker(device, params); });
-}
-
-NvAPI_Status fakenvapi::companionSetAsyncFrameMarker(ID3D12CommandQueue* queue, NV_ASYNC_FRAME_MARKER_PARAMS* params)
-{
-    std::shared_ptr<LowLatency> context;
-
-    {
-        std::scoped_lock lock(g_companionD3D.mutex);
-        context = g_companionD3D.context;
-    }
-
-    // It cannot start its tech from a queue: only once a device call has
-    if (context == nullptr)
-        return NVAPI_ERROR;
-
-    return context->SetAsyncFrameMarker(queue, params);
-}
-
-NvAPI_Status fakenvapi::companionGetLatency(IUnknown* device, NV_LATENCY_RESULT_PARAMS* params)
-{
-    return WithCompanion(g_companionD3D, device, [&](LowLatency& ll) { return ll.GetLatency(device, params); });
-}
-
 NvAPI_Status fakenvapi::companionSetSleepMode(HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* params)
 {
     return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.SetSleepMode(vkDevice, params); });
@@ -141,7 +104,7 @@ NvAPI_Status fakenvapi::companionGetLatency(HANDLE vkDevice, NV_VULKAN_LATENCY_R
 
 void fakenvapi::companionDeviceGone(const void* device)
 {
-    for (Companion* companion : { &g_companionD3D, &g_companionVk })
+    for (Companion* companion : { &g_companionVk })
     {
         std::shared_ptr<LowLatency> context;
 
@@ -164,15 +127,10 @@ void fakenvapi::companionDeviceGone(const void* device)
 
 bool fakenvapi::companionFailed() { return g_companionFailed.load(); }
 
-void fakenvapi::companionRelease()
-{
-    DropCompanion(g_companionD3D);
-    DropCompanion(g_companionVk);
-}
+void fakenvapi::companionRelease() { DropCompanion(g_companionVk); }
 
 void fakenvapi::deinit()
 {
-    DropCompanion(g_companionD3D);
     DropCompanion(g_companionVk);
 
     LowLatencyCtx::get()->deinit_current_tech();
@@ -354,7 +312,8 @@ bool fakenvapi::updateModeAndContext()
 {
     LOG_FUNC();
 
-    // A D3D game's low latency is InputCommon's (low_latency/input): its output, when it runs one
+    // A D3D game's low latency is InputCommon's (low_latency/input): its output, when it runs one. reportFGPresent
+    // hands FSR FG that output's Anti-Lag 2 context.
     if (auto mode = InputCommon::active_output(); mode != LowLatencyMode::None)
     {
         _lowLatencyTechContext = InputCommon::output_context();
@@ -381,36 +340,8 @@ bool fakenvapi::updateModeAndContext()
     return result;
 }
 
-bool fakenvapi::forceMode(IUnknown* device, LowLatencyMode mode)
-{
-    LOG_FUNC();
-
-    // Force init here, in case Reflex is not supported
-    LowLatencyCtx::init();
-
-    auto lowLatencyCtx = LowLatencyCtx::get();
-
-    if (!lowLatencyCtx)
-    {
-        LOG_ERROR("Couldn't get low latency context");
-        return false;
-    }
-
-    auto result = lowLatencyCtx->set_low_latency_tech_mode(device, mode);
-    ++_forcedModeGeneration;
-
-    if (!result)
-        LOG_TRACE_FAKENVAPI("Can't set Low Latency context from fakenvapi");
-
-    return result;
-}
-
 bool fakenvapi::isLowLatencyActive()
 {
-    // A D3D game's low latency is InputCommon's
-    if (InputCommon::active_output() != LowLatencyMode::None)
-        return InputCommon::output_enabled();
-
     auto lowLatencyCtx = LowLatencyCtx::get();
 
     if (!lowLatencyCtx)
@@ -424,22 +355,12 @@ bool fakenvapi::isLowLatencyActive()
     return lowLatencyCtx->is_low_latency_enabled();
 }
 
-uint32_t fakenvapi::forcedModeGeneration() { return _forcedModeGeneration.load(); }
-
 LowLatencyMode fakenvapi::getCurrentMode()
 {
     if (updateModeAndContext())
         return _lowLatencyMode;
     else
         return LowLatencyMode::None;
-}
-
-void* fakenvapi::getCurrentContext()
-{
-    if (updateModeAndContext())
-        return _lowLatencyTechContext;
-    else
-        return nullptr;
 }
 
 bool fakenvapi::isUsingAsMainNvapi() { return _usingFakenvapiAsMainNvapi; }

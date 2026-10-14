@@ -957,7 +957,7 @@ struct SleepModeCall
     const void* device = nullptr;
     uint32_t minimumIntervalUs = 0;
     bool boost = false;
-    uint32_t xellGeneration = 0; // fakenvapi::forcedModeGeneration while XeFG's XeLL is the method, else 0
+    uint32_t xellGeneration = 0; // InputCommon::xefg_xell_generation while XeFG's XeLL is the method, else 0
     uint32_t side = 0;           // XefgLatency in force with XeFG (XeLL, Reflex or Anti-Lag 2), else 0
 };
 

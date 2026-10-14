@@ -417,7 +417,7 @@ CapInputs FrameCapInputs(Api api)
     in.xefgGenerating = XefgGenerating();
     in.shownPerRendered = XefgShownPerRendered();
     in.xefgVsync = state.fgPresentVsync.load(std::memory_order_relaxed);
-    in.fakenvapiXell = in.method == Method::Fakenvapi && fakenvapi::getCurrentMode() == LowLatencyMode::XeLL;
+    in.fakenvapiXell = in.method == Method::Fakenvapi && InputCommon::current_mode() == LowLatencyMode::XeLL;
 
     // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
     static const bool intelGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::Intel;
@@ -453,31 +453,33 @@ std::string CapText(float capFps)
 const char* PathText(Api api)
 {
     const auto method = CurrentMethod(api);
+    // A D3D game's calls run on InputCommon's output; a Vulkan game's still go through fakenvapi's own context
+    const bool vulkan = api == Api::Vulkan;
 
     // XeFG's XeLL is not the method in the split: it only keeps XeFG running
     if (method == Method::RealReflexWithXefg)
         return "NVIDIA Reflex";
 
     if (method == Method::FakenvapiWithXefg)
-        return "Anti-Lag 2 (through fakenvapi)";
+        return vulkan ? "Anti-Lag (through fakenvapi)" : "Anti-Lag 2";
 
-    const bool viaFakenvapi = method != Method::RealReflex;
-
-    if (!viaFakenvapi)
+    if (method == Method::RealReflex)
         return "NVIDIA Reflex";
 
-    switch (fakenvapi::getCurrentMode())
+    switch (InputCommon::current_mode())
     {
     case LowLatencyMode::AntiLag2:
-        return "Anti-Lag 2 (through fakenvapi)";
+        return vulkan ? "Anti-Lag 2 (through fakenvapi)" : "Anti-Lag 2";
     case LowLatencyMode::LatencyFlex:
-        return "LatencyFlex (through fakenvapi)";
+        return vulkan ? "LatencyFlex (through fakenvapi)" : "LatencyFlex";
     case LowLatencyMode::XeLL:
-        return "XeLL (through fakenvapi)";
+        return "XeLL";
     case LowLatencyMode::AntiLagVk:
         return "Anti-Lag (through fakenvapi)";
+    case LowLatencyMode::Reflex:
+        return "NVIDIA Reflex";
     default:
-        return fakenvapi::isUsingAsMainNvapi() ? "fakenvapi (no method active yet)" : "NVIDIA Reflex";
+        return fakenvapi::isUsingAsMainNvapi() ? "no method active yet" : "NVIDIA Reflex";
     }
 }
 
