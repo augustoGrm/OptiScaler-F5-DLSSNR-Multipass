@@ -4,6 +4,12 @@ A game mod that uses NVIDIA AI to change lighting, detail and colour. You can ad
 
 This is an experimental community version of OptiScaler. Results and game support vary.
 
+## Integrated Windows build in this fork
+
+This branch bundles the supplied NR model/forwarder pair and the native SM86 backend inside OptiScaler. SM86 is automatic on compatible RTX 20/30 hardware; Frame Generation keeps OptiScaler's normal input, output and multiplier controls. Save Settings and Close are available at the bottom of the menu.
+
+Use this branch's [installation and build guide](docs/INTEGRATION-master-sm86.md) and [Windows build artifacts](https://github.com/augustoGrm/OptiScaler-F5-DLSSNR-Multipass/actions/workflows/integration_validation.yml). No separate NR or SM86 DLL download is required for its compiled package. The release links and separate-model instructions below describe the original janblade distribution.
+
 **[Download the latest version](https://github.com/janblade/OptiScaler-F5-DLSSNR-Multipass/releases/latest)** · [Setup guide](INSTALL-DLSSNR.md) · [What's new](https://github.com/janblade/OptiScaler-F5-DLSSNR-Multipass/releases) · [Discord](https://discord.gg/xzkNNwxbZu)
 
 ## What you can change

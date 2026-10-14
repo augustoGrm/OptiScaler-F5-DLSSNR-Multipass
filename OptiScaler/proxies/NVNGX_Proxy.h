@@ -1,5 +1,6 @@
 #pragma once
 #include <dlssnr/DlssNrBundle.h>
+#include <framegen/dlssg/AmpereMfgLoader.h>
 
 #include "SysUtils.h"
 #include "Util.h"
@@ -617,6 +618,21 @@ class NVNGXProxy
 
     static void GetFeatureCommonInfo(NVSDK_NGX_FeatureCommonInfo* fcInfo)
     {
+        // SR can initialize NGX before Streamline. Register the exact FG
+        // provider at that first initialization too, not only in SL preferences.
+        AmpereMfgLoader::EnsureSetup();
+        if (const auto runtime = AmpereMfgLoader::RuntimeModule())
+        {
+            wchar_t path[MAX_PATH] {};
+            if (GetModuleFileNameW(runtime, path, MAX_PATH) != 0)
+            {
+                const auto directory = std::filesystem::path(path).parent_path().wstring();
+                auto& paths = State::Instance().NVNGX_FeatureInfo_Paths;
+                if (std::find(paths.begin(), paths.end(), directory) == paths.end())
+                    paths.insert(paths.begin(), directory);
+            }
+        }
+
         // NGX caches the initial provider list. Make the embedded NR model
         // available before the first SR/FG initialization can lock that list.
         if (const auto model = DlssNrBundle::GetModel())
