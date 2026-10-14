@@ -46,8 +46,11 @@ class VirtualUpscalerDriver
     VirtualUpscalerDriver& operator=(const VirtualUpscalerDriver&) = delete;
 
     // A NativeProducer::ApplyFn: one synthetic upscaler call on `frame`, recorded on `cmd`, with the picture written back in
-    // place. True when the backend evaluated.
-    bool Run(ID3D12GraphicsCommandList* cmd, const NativeFrame& frame);
+    // place. True when the backend evaluated, or when it was only counted (Neural Rendering off, or NR on the picture in
+    // place: VirtualUpscalerMode.h). `queue`, `colorSpace` and `epoch` are what DlssNr::ApplyNativeInput takes for the
+    // same frame; NR on the picture in place needs them.
+    bool Run(ID3D12GraphicsCommandList* cmd, const NativeFrame& frame, ID3D12CommandQueue* queue,
+             DXGI_COLOR_SPACE_TYPE colorSpace, uint64_t epoch);
 
     // Drops the backend the way a game releasing its feature does: frame generation is told, currentFeature is cleared, and the
     // feature is destroyed once the GPU can no longer be using it. Nothing happens when there is none.
@@ -104,7 +107,7 @@ class VirtualUpscalerDriver
     ID3D12DescriptorHeap* _rtvHeap = nullptr;
 
     uint64_t _evaluations = 0;
-    bool _passThroughLogged = false; // the pass-through state the log last said (NR off: no upscaler pass)
+    int _routeLogged = -1; // the VuNrRoute the log last said (-1: none yet)
     uint32_t _zeroSizeFrames = 0;
     std::string _error;
 };

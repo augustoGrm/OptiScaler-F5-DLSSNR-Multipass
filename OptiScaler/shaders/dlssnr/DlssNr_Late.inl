@@ -559,20 +559,26 @@ bool NativeInputBlockedBySwapChainInterop()
     return State::Instance().swapchainInteropApi != SwapchainInteropApi::None;
 }
 
-bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
-                      ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
-                      bool depthReversed, bool reset,
-                      DXGI_COLOR_SPACE_TYPE colorSpace, D3D12_RESOURCE_STATES pictureState, unsigned long long epoch)
+// The body of ApplyNativeInput and ApplyVirtualUpscalerInput. `fromVirtualUpscaler` skips the two checks that are about
+// where NR Only mode runs, not about the picture: the Finished Picture setting (NR + upscaler & frame generation keeps it
+// off, for the game's own upscaler calls) and the swap-chain interop (the virtual upscaler runs from frame generation's
+// present, on the paired D3D12 queue).
+static bool ApplyFinishedPictureInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
+                                      ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
+                                      bool depthReversed, bool reset, DXGI_COLOR_SPACE_TYPE colorSpace,
+                                      D3D12_RESOURCE_STATES pictureState, unsigned long long epoch,
+                                      bool fromVirtualUpscaler)
 {
     std::lock_guard<std::recursive_mutex> lock(g_nrMutex);
-    if (!Config::Instance()->DlssNrFinishedPicture.value_or_default() ||
+    if ((!fromVirtualUpscaler && !Config::Instance()->DlssNrFinishedPicture.value_or_default()) ||
         !Config::Instance()->DlssNrEnabled.value_or_default())
     {
-        Late::Say("Native input needs Finished picture and Enable Neural Rendering on.");
+        Late::Say(fromVirtualUpscaler ? "Enable Neural Rendering to use it on the game's picture."
+                                      : "Native input needs Finished picture and Enable Neural Rendering on.");
         return false;
     }
     // Depth is optional: NR runs without it.
-    if (!queue || !cmd || !color || !motion || NativeInputBlockedBySwapChainInterop())
+    if (!queue || !cmd || !color || !motion || (!fromVirtualUpscaler && NativeInputBlockedBySwapChainInterop()))
         return false;
     if (Late::PausedForGameFrameGeneration())
     {
@@ -653,6 +659,25 @@ bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd,
     Late::Say(!Config::Instance()->DlssNrApplyModel.value_or_default() ? "NR changes are hidden." :
         ran ? "Applying NR to the finished picture (native input)." : "Preparing NR for the finished picture (native input).");
     if (ran && (++Late::successes == 1 || Late::successes % 300 == 0))
-        LOG_INFO("DLSS-NR native input: {} frames, {}x{}", Late::successes, desc.Width, desc.Height);
+        LOG_INFO("DLSS-NR {}: {} frames, {}x{}", fromVirtualUpscaler ? "on the virtual upscaler's picture" : "native input",
+                 Late::successes, desc.Width, desc.Height);
     return ran;
+}
+
+bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
+                      ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
+                      bool depthReversed, bool reset,
+                      DXGI_COLOR_SPACE_TYPE colorSpace, D3D12_RESOURCE_STATES pictureState, unsigned long long epoch)
+{
+    return ApplyFinishedPictureInput(queue, cmd, color, depth, motion, historyDistrust, depthReversed, reset, colorSpace,
+                                     pictureState, epoch, false);
+}
+
+bool ApplyVirtualUpscalerInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
+                               ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
+                               bool depthReversed, bool reset, DXGI_COLOR_SPACE_TYPE colorSpace,
+                               D3D12_RESOURCE_STATES pictureState, unsigned long long epoch)
+{
+    return ApplyFinishedPictureInput(queue, cmd, color, depth, motion, historyDistrust, depthReversed, reset, colorSpace,
+                                     pictureState, epoch, true);
 }
