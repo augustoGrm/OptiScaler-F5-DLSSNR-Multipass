@@ -221,16 +221,29 @@ void* __stdcall NvApiHooks::hkNvAPI_QueryInterface(unsigned int InterfaceId)
         return nullptr;
     }
 
+    // The game's Vulkan Reflex is the Reflex input on InputCommon (InputReflex), whatever the nvapi: the game gets a
+    // semaphore of ours, and the output is the driver's VK_NV_low_latency2 or NvAPI Vulkan Reflex, Anti-Lag Vk or
+    // LatencyFlex (low_latency/input/OutputRule.h)
+    if (InterfaceId == GET_ID(NvAPI_Vulkan_InitLowLatencyDevice) ||
+        InterfaceId == GET_ID(NvAPI_Vulkan_DestroyLowLatencyDevice) ||
+        InterfaceId == GET_ID(NvAPI_Vulkan_GetSleepStatus) || InterfaceId == GET_ID(NvAPI_Vulkan_SetSleepMode) ||
+        InterfaceId == GET_ID(NvAPI_Vulkan_Sleep) || InterfaceId == GET_ID(NvAPI_Vulkan_GetLatency) ||
+        InterfaceId == GET_ID(NvAPI_Vulkan_SetLatencyMarker) ||
+        InterfaceId == GET_ID(NvAPI_Vulkan_NotifyOutOfBandVkQueue))
+    {
+        ReflexHooks::hookReflex(o_NvAPI_QueryInterface);
+        return InputReflex::ForInterface(InterfaceId);
+    }
+
     if (InterfaceId == GET_ID(NvAPI_D3D_SetSleepMode) || InterfaceId == GET_ID(NvAPI_D3D_Sleep) ||
         InterfaceId == GET_ID(NvAPI_D3D_GetLatency) || InterfaceId == GET_ID(NvAPI_D3D_SetLatencyMarker) ||
-        InterfaceId == GET_ID(NvAPI_D3D12_SetAsyncFrameMarker) || InterfaceId == GET_ID(NvAPI_Vulkan_GetLatency) ||
-        InterfaceId == GET_ID(NvAPI_Vulkan_SetLatencyMarker) || InterfaceId == GET_ID(NvAPI_Vulkan_SetSleepMode))
+        InterfaceId == GET_ID(NvAPI_D3D12_SetAsyncFrameMarker))
     {
         // LOG_DEBUG("counter: {}, hookReflex()", qiCounter);
         ReflexHooks::hookReflex(o_NvAPI_QueryInterface);
         auto hooked = ReflexHooks::getHookedReflex(InterfaceId);
 
-        // The D3D calls enter as the Reflex low latency input, which hands them to the same hooks
+        // The game's calls enter as the Reflex low latency input, which hands Streamline's to the same hooks
         if (hooked != nullptr)
         {
             if (auto input = InputReflex::ForInterface(InterfaceId))

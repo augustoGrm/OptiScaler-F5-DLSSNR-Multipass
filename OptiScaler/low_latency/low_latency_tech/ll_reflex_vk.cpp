@@ -1,7 +1,4 @@
 #include "pch.h"
-
-// Upstream's low latency input layer: built only with LOW_LATENCY_INPUTS, which is not on yet.
-#ifdef LOW_LATENCY_INPUTS
 #include "ll_reflex_vk.h"
 
 #include <hooks/Vulkan_Hooks.h>
@@ -12,14 +9,15 @@ bool ReflexVk::init(IUnknown* pDevice)
     if (pDevice == nullptr)
         return false;
 
+    auto vkDevice = (VkDevice) pDevice;
+
     if (VulkanHooks::o_vkSetLatencySleepModeNV == nullptr || VulkanHooks::o_vkLatencySleepNV == nullptr ||
-        VulkanHooks::o_vkSetLatencyMarkerNV == nullptr || VulkanHooks::o_vkCreateSemaphore == nullptr)
+        VulkanHooks::o_vkSetLatencyMarkerNV == nullptr || VulkanHooks::o_vkCreateSemaphore == nullptr ||
+        !VulkanHooks::LowLatency2On(vkDevice))
     {
         LOG_INFO("Reflex needs VK_NV_low_latency2");
         return false;
     }
-
-    auto vkDevice = (VkDevice) pDevice;
 
     o_WaitSemaphores = (PFN_vkWaitSemaphores) VulkanHooks::GetDeviceProcAddr(vkDevice, "vkWaitSemaphores");
 
@@ -56,11 +54,12 @@ bool ReflexVk::init(IUnknown* pDevice)
 void ReflexVk::deinit()
 {
     // Leave the swapchain without low latency for the next output
-    if (auto current = swapchain(); current != VK_NULL_HANDLE && applied_swapchain == current)
+    if (VulkanHooks::LatencySwapchainUse use(device);
+        use.swapchain != VK_NULL_HANDLE && applied_swapchain == use.swapchain)
     {
         VkLatencySleepModeInfoNV info {};
         info.sType = VK_STRUCTURE_TYPE_LATENCY_SLEEP_MODE_INFO_NV;
-        VulkanHooks::o_vkSetLatencySleepModeNV(device, current, &info);
+        VulkanHooks::o_vkSetLatencySleepModeNV(device, use.swapchain, &info);
     }
 
     if (semaphore != VK_NULL_HANDLE)
@@ -70,14 +69,6 @@ void ReflexVk::deinit()
     applied_swapchain = VK_NULL_HANDLE;
     device = VK_NULL_HANDLE;
     LOG_INFO("Reflex Vulkan deinitialized");
-}
-
-VkSwapchainKHR ReflexVk::swapchain()
-{
-    if (device == VK_NULL_HANDLE)
-        return VK_NULL_HANDLE;
-
-    return VulkanHooks::LowLatencySwapchain();
 }
 
 bool ReflexVk::is_enabled()
@@ -123,50 +114,79 @@ void ReflexVk::set_sleep_mode(SleepMode* sleep_mode)
     this->sleep_mode = *sleep_mode;
     sleep_mode_known = true;
 
-    if (auto current = swapchain(); current != VK_NULL_HANDLE)
-        apply_sleep_mode(current);
+    if (VulkanHooks::LatencySwapchainUse use(device); use.swapchain != VK_NULL_HANDLE)
+        apply_sleep_mode(use.swapchain);
 }
 
 void ReflexVk::sleep(std::optional<uint32_t> frame_id)
 {
-    auto current = swapchain();
-
-    if (current == VK_NULL_HANDLE)
-        return;
-
-    // A new swapchain starts without the sleep mode, Force State in the menu can change at any time
-    if (current != applied_swapchain || (sleep_mode_known && is_enabled() != applied_enabled))
-        apply_sleep_mode(current);
-
-    // Without a sleep mode the driver might never signal
-    if (current != applied_swapchain)
+    if (gave_up)
         return;
 
     VkLatencySleepInfoNV info {};
     info.sType = VK_STRUCTURE_TYPE_LATENCY_SLEEP_INFO_NV;
     info.signalSemaphore = semaphore;
-    info.value = ++semaphore_value;
 
-    if (VulkanHooks::o_vkLatencySleepNV(device, current, &info) != VK_SUCCESS)
-        return;
+    {
+        VulkanHooks::LatencySwapchainUse use(device);
 
+        if (use.swapchain == VK_NULL_HANDLE)
+            return;
+
+        // A new swapchain starts without the sleep mode, Force State in the menu can change at any time
+        if (use.swapchain != applied_swapchain || (sleep_mode_known && is_enabled() != applied_enabled))
+            apply_sleep_mode(use.swapchain);
+
+        // Without a sleep mode the driver might never signal
+        if (use.swapchain != applied_swapchain)
+            return;
+
+        info.value = ++semaphore_value;
+
+        if (VulkanHooks::o_vkLatencySleepNV(device, use.swapchain, &info) != VK_SUCCESS)
+            return;
+    }
+
+    // The wait needs only our semaphore: the swapchain may go meanwhile
     VkSemaphoreWaitInfo waitInfo {};
     waitInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_WAIT_INFO;
     waitInfo.semaphoreCount = 1;
     waitInfo.pSemaphores = &semaphore;
     waitInfo.pValues = &info.value;
 
-    // A frame never waits a second, more is a driver that won't signal
-    if (auto result = o_WaitSemaphores(device, &waitInfo, 1'000'000'000); result != VK_SUCCESS)
-        LOG_WARN("Reflex Vulkan sleep wait: {}", (int) result);
+    // vkLatencySleepNV returns at once, this wait is the sleep itself (a capped frame's whole interval): a frame never
+    // waits a second, more is a driver that won't signal
+    constexpr uint64_t kWaitNs = 1'000'000'000;
+
+    if (auto result = o_WaitSemaphores(device, &waitInfo, kWaitNs); result == VK_SUCCESS)
+    {
+        timeouts = 0;
+        ever_signalled = true;
+        return;
+    }
+
+    if (++timeouts == 1)
+        LOG_WARN("Reflex Vulkan: the sleep's semaphore did not reach its value within {} ms", kWaitNs / 1000000);
+
+    // A driver that never signals would cost the whole wait every frame (as NativeLowLatencyVkSync.h): InputCommon
+    // makes the output again on NVIDIA's NvAPI Vulkan Reflex (gave_up_sleeping)
+    if (!ever_signalled && timeouts >= native::lowlatency::kVkSleepTimeoutsBeforeGivingUp)
+    {
+        gave_up = true;
+        LOG_WARN("Reflex Vulkan: VK_NV_low_latency2's sleep never signals on this device, no more sleeps through it");
+    }
 }
 
 void ReflexVk::set_marker(IUnknown* pDevice, const MarkerParams& marker_params)
 {
-    auto current = swapchain();
     auto marker = ToVkLatencyMarker(marker_params.marker_type);
 
-    if (current == VK_NULL_HANDLE || !marker.has_value())
+    if (!marker.has_value())
+        return;
+
+    VulkanHooks::LatencySwapchainUse use(device);
+
+    if (use.swapchain == VK_NULL_HANDLE)
         return;
 
     VkSetLatencyMarkerInfoNV info {};
@@ -174,7 +194,7 @@ void ReflexVk::set_marker(IUnknown* pDevice, const MarkerParams& marker_params)
     info.presentID = marker_params.frame_id;
     info.marker = *marker;
 
-    VulkanHooks::o_vkSetLatencyMarkerNV(device, current, &info);
+    VulkanHooks::o_vkSetLatencyMarkerNV(device, use.swapchain, &info);
 }
 
 void ReflexVk::set_async_marker(IUnknown* pCommandQueue, const MarkerParams& marker_params)
@@ -183,14 +203,64 @@ void ReflexVk::set_async_marker(IUnknown* pCommandQueue, const MarkerParams& mar
     set_marker(nullptr, marker_params);
 }
 
+NvAPI_Status ReflexVk::get_latency(NV_LATENCY_RESULT_PARAMS* latency_params)
+{
+    if (latency_params == nullptr)
+        return NVAPI_INVALID_ARGUMENT;
+
+    // The newest reports, oldest first, in NVAPI's layout (64 of them, the empty ones first)
+    VkLatencyTimingsFrameReportNV timings[NVAPI_BUFFER_SIZE] {};
+
+    for (auto& timing : timings)
+        timing.sType = VK_STRUCTURE_TYPE_LATENCY_TIMINGS_FRAME_REPORT_NV;
+
+    VkGetLatencyMarkerInfoNV info {};
+    info.sType = VK_STRUCTURE_TYPE_GET_LATENCY_MARKER_INFO_NV;
+    info.timingCount = NVAPI_BUFFER_SIZE;
+    info.pTimings = timings;
+
+    if (get_latency(&info) != VK_SUCCESS)
+        return NVAPI_ERROR;
+
+    const auto count = std::min<uint32_t>(info.timingCount, NVAPI_BUFFER_SIZE);
+    const auto first = NVAPI_BUFFER_SIZE - count;
+
+    for (uint32_t i = 0; i < NVAPI_BUFFER_SIZE; i++)
+    {
+        auto& to = latency_params->frameReport[i];
+        to = {};
+
+        if (i < first)
+            continue;
+
+        const auto& from = timings[i - first];
+        to.frameID = from.presentID;
+        to.inputSampleTime = from.inputSampleTimeUs;
+        to.simStartTime = from.simStartTimeUs;
+        to.simEndTime = from.simEndTimeUs;
+        to.renderSubmitStartTime = from.renderSubmitStartTimeUs;
+        to.renderSubmitEndTime = from.renderSubmitEndTimeUs;
+        to.presentStartTime = from.presentStartTimeUs;
+        to.presentEndTime = from.presentEndTimeUs;
+        to.driverStartTime = from.driverStartTimeUs;
+        to.driverEndTime = from.driverEndTimeUs;
+        to.osRenderQueueStartTime = from.osRenderQueueStartTimeUs;
+        to.osRenderQueueEndTime = from.osRenderQueueEndTimeUs;
+        to.gpuRenderStartTime = from.gpuRenderStartTimeUs;
+        to.gpuRenderEndTime = from.gpuRenderEndTimeUs;
+    }
+
+    return count > 0 ? NVAPI_OK : NVAPI_ERROR;
+}
+
 VkResult ReflexVk::get_latency(VkGetLatencyMarkerInfoNV* latency_info)
 {
-    auto current = swapchain();
+    VulkanHooks::LatencySwapchainUse use(device);
 
-    if (current == VK_NULL_HANDLE || VulkanHooks::o_vkGetLatencyTimingsNV == nullptr)
+    if (use.swapchain == VK_NULL_HANDLE || VulkanHooks::o_vkGetLatencyTimingsNV == nullptr)
         return VK_ERROR_INITIALIZATION_FAILED;
 
-    VulkanHooks::o_vkGetLatencyTimingsNV(device, current, latency_info);
+    VulkanHooks::o_vkGetLatencyTimingsNV(device, use.swapchain, latency_info);
     return VK_SUCCESS;
 }
 
@@ -205,5 +275,3 @@ void ReflexVk::notify_out_of_band(VkQueue queue, VkOutOfBandQueueTypeNV queue_ty
 
     VulkanHooks::o_vkQueueNotifyOutOfBandNV(queue, &info);
 }
-
-#endif // LOW_LATENCY_INPUTS

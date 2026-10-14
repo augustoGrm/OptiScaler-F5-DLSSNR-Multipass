@@ -4,7 +4,8 @@
 
 #include <vulkan/vulkan.h>
 
-// The game's Vulkan Reflex through VK_NV_low_latency2, it needs the driver's extension
+// The game's Vulkan Reflex through VK_NV_low_latency2 (it needs the driver's extension): the Reflex input on its
+// VkDevice, as the game's NvAPI_Vulkan Reflex is (InputReflex). Handed out by VulkanHooks (LowLatencyInputHook).
 class InputReflexVk
 {
     const static inline InputContext inputContext { .caller = LowLatencyInput::Reflex,

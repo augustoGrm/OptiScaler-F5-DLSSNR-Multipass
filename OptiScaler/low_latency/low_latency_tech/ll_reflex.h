@@ -13,6 +13,10 @@ inline ForceReflex RealReflexForceState()
     return force.value_or_default();
 }
 
+// NVIDIA's nvapi is loaded (not fakenvapi), initialized, and its Reflex table is there (ReflexHooks::ensureTable): the
+// driver's Reflex outputs can start. A game without Reflex might never have initialized nvapi.
+bool ReflexDriverReady();
+
 // NVIDIA Reflex as an output: every call goes to the driver past the hooks (ReflexHooks::nvapi*), the hooks only see
 // the inputs' calls. InputCommon gives it the sleep mode on OptiScaler's terms (OutputRule.h SleepModeFor).
 class Reflex : public LowLatencyTech

@@ -1,12 +1,14 @@
 #pragma once
 
-// The Vulkan flavour of Reflex's Sleep (NvAPI_Vulkan_*, the pre-VK_NV_low_latency2 interface) is a pair: the device has to
-// be initialised as a low-latency device once, which hands back a timeline semaphore, and each frame's Sleep is given a
-// value the driver signals on that semaphore once it is time to go on -- the app has to wait for it. One device's state and
-// the order of calls, with the calls themselves passed in: no NVAPI, no Vulkan, so a host test can drive it.
+// The Vulkan flavour of Reflex's Sleep (NvAPI_Vulkan_*, the pre-VK_NV_low_latency2 interface) is a pair: the device has
+// to be initialised as a low-latency device once, which hands back a timeline semaphore, and each frame's Sleep is
+// given a value the driver signals on that semaphore once it is time to go on -- the app has to wait for it. One
+// device's state and the order of calls, with the calls themselves passed in: no NVAPI, no Vulkan, so a host test can
+// drive it.
 //
-// Anything short of a working pair leaves the device "unavailable" and makes no further call: a Sleep without the
-// semaphore signals a null handle in fakenvapi (the vendor-neutral Reflex stand-in), which crashes.
+// Anything short of a working pair leaves the device "unavailable" and makes no further call: without the semaphore
+// there is nothing to wait for. InputCommon's NvAPI Vulkan Reflex output (low_latency_tech/ll_reflex_nvapi_vk.h) runs
+// it.
 
 #include <cstdint>
 #include <functional>

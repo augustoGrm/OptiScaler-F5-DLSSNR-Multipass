@@ -15,19 +15,21 @@ namespace lloutput
 using native::lowlatency::XefgLatency;
 using native::xefgreflex::SleepMode;
 
-// The low latency methods InputCommon can run (LowLatencyMode's, without the Vulkan ones and the FPS limiter)
+// The low latency methods InputCommon can run (LowLatencyMode's, without the FPS limiter). On a Vulkan device Reflex is
+// the driver's Vulkan Reflex (ReflexVkSurface) and Anti-Lag 2 is Anti-Lag Vk.
 enum class Tech : uint8_t
 {
     None,
     Reflex,      // the driver's (NVIDIA, real nvapi)
     AntiLag2,    // AMD
-    XeLL,        // Intel's, also XeFG's on every GPU
+    XeLL,        // Intel's, also XeFG's on every GPU; D3D12 only
     LatencyFlex, // works anywhere
 };
 
 struct OutputInputs
 {
-    bool realNvapi = false;               // NVIDIA's nvapi, not fakenvapi as the game's nvapi
+    bool realNvapi = false;               // NVIDIA's nvapi on an NVIDIA GPU, not fakenvapi as the game's nvapi
+    bool vulkan = false;                  // the input's device is a Vulkan one
     bool xefgOutput = false;              // XeFG is the frame generation output
     XefgLatency side = XefgLatency::XeLL; // with XeFG, what lowers latency (native::lowlatency::XefgSide, in force)
     bool forceLatencyFlex = false;        // fakenvapi's Force LatencyFlex
@@ -74,10 +76,113 @@ constexpr OutputPlan PlanOutput(const OutputInputs& in)
     if (in.forceLatencyFlex || in.multiFrame)
         return { { Tech::LatencyFlex, Tech::None, Tech::None }, false };
 
-    if (!in.inputFeedsXell)
+    // XeLL is D3D12's: a Vulkan device has Anti-Lag Vk, then LatencyFlex
+    if (!in.inputFeedsXell || in.vulkan)
         return { { Tech::AntiLag2, Tech::LatencyFlex, Tech::None }, false };
 
     return { { Tech::AntiLag2, Tech::XeLL, Tech::LatencyFlex }, false };
+}
+
+// The driver's Reflex on a Vulkan device: VK_NV_low_latency2 (upstream's output, ll_reflex_vk.h) where the device has
+// it and its swapchain has the latency mode, else NVIDIA's older NvAPI_Vulkan Reflex (ll_reflex_nvapi_vk.h), which
+// works on the device alone (upstream ran LatencyFlex there)
+enum class ReflexVkSurface : uint8_t
+{
+    None,
+    LowLatency2,
+    NvApi,
+};
+
+struct ReflexVkInputs
+{
+    bool lowLatency2Device = false; // made with VK_NV_low_latency2 and timeline semaphores (VulkanHooks::LowLatency2On)
+    bool swapchainKnown = false;    // the device has a swapchain
+    bool swapchainLatencyMode = false; // ... made with the latency mode (ours chained in, or the game's)
+    bool nvapiVulkan = false;          // NVIDIA's nvapi with its Vulkan Reflex
+    bool timelineSemaphores = false;   // NvAPI_Vulkan's sleep signals a timeline semaphore
+    bool lowLatency2Failed = false;    // VK_NV_low_latency2's sleep never signalled on this device (ReflexVk gave up)
+};
+
+// Also asked of a running VK_NV_low_latency2 output: another answer makes it again (its swapchain was remade without
+// the latency mode, or its sleep never signals)
+constexpr ReflexVkSurface ChooseReflexVk(const ReflexVkInputs& in)
+{
+    // No swapchain yet: the device's next one gets the latency mode (VulkanHooks chains it in)
+    if (in.lowLatency2Device && !in.lowLatency2Failed && (!in.swapchainKnown || in.swapchainLatencyMode))
+        return ReflexVkSurface::LowLatency2;
+
+    if (in.nvapiVulkan && in.timelineSemaphores)
+        return ReflexVkSurface::NvApi;
+
+    return ReflexVkSurface::None;
+}
+
+// Where a game's NvAPI_Vulkan_* Reflex call goes (InputReflex::Vulkan_*). A device with a sleep semaphore of ours (made
+// at its InitLowLatencyDevice): InputCommon, our semaphore is signalled after the sleep. Else the game made the device
+// a low latency one with the driver before our hooks, whose semaphore only the driver's Sleep signals: every call to
+// the driver as it is (one sleeper, the limiter keeps the cap: the game's Reflex is no input). Neither (fakenvapi as
+// the nvapi sets every device up through us, so a device it never saw): InputCommon, and a Sleep signals nothing.
+enum class GameVkReflexRoute : uint8_t
+{
+    InputCommon,
+    Driver,
+    NoSemaphore,
+};
+
+constexpr GameVkReflexRoute RouteGameVkReflex(bool ourSemaphore, bool driverVulkanReflex)
+{
+    if (ourSemaphore)
+        return GameVkReflexRoute::InputCommon;
+
+    return driverVulkanReflex ? GameVkReflexRoute::Driver : GameVkReflexRoute::NoSemaphore;
+}
+
+// VK_NV_low_latency2's VkLatencyMarkerNV against NVAPI's marker types (MarkerType, NV_LATENCY_MARKER_TYPE): 0-7
+// (simulation start .. trigger flash) are the same; NVAPI has PC_LATENCY_PING at 8, which Vulkan does not have, so
+// Vulkan's out of band markers 8-11 are NVAPI's 9-12. False for a value that has no counterpart.
+inline constexpr uint32_t kNvApiPcLatencyPing = 8;
+inline constexpr uint32_t kNvApiLastMarker = 12; // OUT_OF_BAND_PRESENT_END
+
+constexpr bool MarkerFromVulkanNV(uint32_t vkMarker, uint32_t* nvapiMarker)
+{
+    if (vkMarker > kNvApiLastMarker - 1)
+        return false;
+
+    *nvapiMarker = vkMarker < kNvApiPcLatencyPing ? vkMarker : vkMarker + 1;
+    return true;
+}
+
+constexpr bool MarkerToVulkanNV(uint32_t nvapiMarker, uint32_t* vkMarker)
+{
+    if (nvapiMarker == kNvApiPcLatencyPing || nvapiMarker > kNvApiLastMarker)
+        return false;
+
+    *vkMarker = nvapiMarker < kNvApiPcLatencyPing ? nvapiMarker : nvapiMarker - 1;
+    return true;
+}
+
+// Where InputCommon::update runs: once per frame, on one thread (its static locals rely on that). A D3D game, dxvk's
+// too: its own DXGI present (dxvk's Vulkan present runs on dxvk's own thread). A native Vulkan game: its Vulkan
+// present; its only DXGI swapchain is the present bridge's D3D12 one (frame generation's output). Told apart by what
+// presents, not by the DXGI adapter: under Proton every DXGI adapter is dxvk's, a native Vulkan game's too.
+enum class PresentSite : uint8_t
+{
+    Vulkan, // vkQueuePresentKHR
+    Dxgi,   // the wrapped DXGI swapchain's present
+};
+
+// A Vulkan present this long after the game's own last DXGI present is a native Vulkan game's (a D3D game presents
+// every frame)
+inline constexpr double kD3dGamePresentGapMs = 250.0;
+
+// `bridgeOutput`: a DXGI present of the Vulkan bridge's own D3D12 swapchain. `msSinceD3dGamePresent`: since the game's
+// own last DXGI present, negative when it never made one.
+constexpr bool RunsLowLatencyUpdate(PresentSite site, bool bridgeOutput, double msSinceD3dGamePresent)
+{
+    if (site == PresentSite::Dxgi)
+        return !bridgeOutput;
+
+    return msSinceD3dGamePresent < 0.0 || msSinceD3dGamePresent > kD3dGamePresentGapMs;
 }
 
 // The low latency inputs InputCommon chooses among (LowLatencyInput's)
@@ -102,6 +207,7 @@ struct InputChoice
     bool xefgInput = false;         // the frame generation input is the game's XeFG
     bool antiLag2 = false;          // the game's Anti-Lag 2
     bool antiLag2ReportsFg = false; // ... reports its frame generation's frames
+    bool antiLagVk = false;         // the game's Anti-Lag Vk (VK_AMD_anti_lag), in every build
 };
 
 // One sleeper per frame: the game's own Reflex, then OptiScaler's own low latency while it runs (Optical F5Low, for
@@ -128,6 +234,10 @@ constexpr Input ChooseInput(const InputChoice& in)
 
     if (in.ue)
         return Input::UeLowLatency;
+
+    // A Vulkan game's own Anti-Lag: last, as the game's Anti-Lag 2 is
+    if (in.antiLagVk)
+        return Input::AntiLag2;
 
     if (in.lowLatencyInputs)
     {
@@ -181,16 +291,27 @@ struct ShapeInputs
     bool forceDisabled = false; // fakenvapi's Force Disable
     bool blocked = false;       // the Framerate page's Input is Off (native::lowlatency::GameLowLatencyBlocked)
     bool inputSetMode = true;   // the input has set a sleep mode (a game may only mark frames)
+    // The input's own cap (OptiScaler's calls carry theirs) was planned for XeFG's other side: XeLL counts shown
+    // frames, the others rendered ones. No interval and no Boost until it sends one for this side.
+    bool modeForOtherSide = false;
 };
 
 // The sleep mode a tech gets from the input's own: XeLL with XeFG has low latency on whatever the game says (only Force
 // Disable turns it off), the split's other side the game's own with the cap, XeFG's own XeLL everything off; Input Off
 // sends low latency off, no Boost and no interval everywhere (OptiScaler's limiter keeps the cap)
-constexpr SleepMode SleepModeFor(const SleepMode& input, Role role, const ShapeInputs& in)
+constexpr SleepMode SleepModeFor(const SleepMode& game, Role role, const ShapeInputs& in)
 {
     using namespace native::xefgreflex;
 
     const bool split = in.xefgOutput && in.side != XefgLatency::XeLL;
+
+    SleepMode input = game;
+
+    if (in.modeForOtherSide)
+    {
+        input.boost = false;
+        input.minimumIntervalUs = 0;
+    }
 
     if (role == Role::XefgXell)
         return XellSleepModeInSplit(SleepModeForOutput(input, in.capIntervalUs, true, in.forceDisabled, in.blocked));
@@ -236,6 +357,7 @@ struct GameCapInputs
     uint32_t xefgShownPerRendered = 1; // native::lowlatency::XefgShownPerRendered
     uint8_t dlssgFramesToGenerate = 0; // the game's DLSS FG, seen from its async markers
     bool outputIsXell = false;         // the output runs XeLL (fakenvapi's choice)
+    bool outputRunning = true;         // an output runs (none: not started yet, or it could not start)
 };
 
 struct GameCap
@@ -280,6 +402,10 @@ constexpr GameCap CapForGame(const GameCapInputs& in)
         out.outputHoldsCap = false;
         out.showWarning = false;
     }
+
+    // Nothing would sleep with the cap: the limiter keeps it (one cap owner, never none)
+    if (!in.outputRunning)
+        out.outputHoldsCap = false;
 
     if (!out.outputHoldsCap)
         return out;

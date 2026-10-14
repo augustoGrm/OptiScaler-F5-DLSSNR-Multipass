@@ -22,117 +22,8 @@ void fakenvapi::init(bool onlyContext)
         return;
 }
 
-// The second context XeFG's Anti-Lag Vk output runs in for a Vulkan game (fakenvapi.h companion*), its own LowLatency
-// with one tech (a D3D game's split is InputCommon's). The mutex only guards making, switching and dropping the
-// context: a call copies the pointer under it and runs outside, because Sleep and the simulation-start marker block
-// inside Anti-Lag 2's Update and the render thread's markers must not wait for the game thread's sleep.
-namespace
-{
-struct Companion
-{
-    std::mutex mutex;
-    std::shared_ptr<LowLatency> context;
-    const void* device = nullptr;
-    LowLatencyMode tech = LowLatencyMode::None;
-};
-
-Companion g_companionVk { {}, nullptr, nullptr, LowLatencyMode::AntiLagVk };
-
-// Set once a tech could not start: kept after the context is let go, or the Output would flip back and forth
-std::atomic<bool> g_companionFailed = false;
-
-// The context for `device`: made on the first call, its tech made again for a new device. `fn` runs outside the lock.
-template <typename Fn> NvAPI_Status WithCompanion(Companion& companion, const void* device, Fn&& fn)
-{
-    std::shared_ptr<LowLatency> context;
-
-    {
-        std::scoped_lock lock(companion.mutex);
-
-        if (companion.context == nullptr)
-        {
-            companion.context = std::make_shared<LowLatency>();
-            companion.context->use_only(companion.tech);
-            companion.device = device;
-        }
-        else if (companion.device != device)
-        {
-            companion.context->use_only(companion.tech);
-            companion.device = device;
-        }
-
-        context = companion.context;
-    }
-
-    const auto result = fn(*context);
-
-    if (context->init_failed())
-        g_companionFailed = true;
-
-    return result;
-}
-
-void DropCompanion(Companion& companion)
-{
-    std::shared_ptr<LowLatency> context;
-
-    {
-        std::scoped_lock lock(companion.mutex);
-
-        context = std::move(companion.context);
-        companion.device = nullptr;
-    }
-
-    // Let go outside the lock: the last reference waits for a call still inside its tech
-}
-} // namespace
-
-NvAPI_Status fakenvapi::companionSetSleepMode(HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* params)
-{
-    return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.SetSleepMode(vkDevice, params); });
-}
-
-NvAPI_Status fakenvapi::companionSetLatencyMarker(HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* params)
-{
-    return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.SetLatencyMarker(vkDevice, params); });
-}
-
-NvAPI_Status fakenvapi::companionGetLatency(HANDLE vkDevice, NV_VULKAN_LATENCY_RESULT_PARAMS* params)
-{
-    return WithCompanion(g_companionVk, vkDevice, [&](LowLatency& ll) { return ll.GetLatency(vkDevice, params); });
-}
-
-void fakenvapi::companionDeviceGone(const void* device)
-{
-    for (Companion* companion : { &g_companionVk })
-    {
-        std::shared_ptr<LowLatency> context;
-
-        {
-            std::scoped_lock lock(companion->mutex);
-
-            if (companion->context != nullptr && companion->device == device)
-            {
-                context = companion->context;
-                companion->device = nullptr;
-            }
-        }
-
-        // Its tech goes with the device (outside the lock: it waits for a call still inside); the next call with a new
-        // device makes it again
-        if (context != nullptr)
-            context->use_only(companion->tech);
-    }
-}
-
-bool fakenvapi::companionFailed() { return g_companionFailed.load(); }
-
-void fakenvapi::companionRelease() { DropCompanion(g_companionVk); }
-
 void fakenvapi::deinit()
 {
-    DropCompanion(g_companionVk);
-
     LowLatencyCtx::get()->deinit_current_tech();
     LowLatencyCtx::shutdown();
 }
@@ -338,29 +229,6 @@ bool fakenvapi::updateModeAndContext()
         LOG_TRACE_FAKENVAPI("Can't get Low Latency context from fakenvapi");
 
     return result;
-}
-
-bool fakenvapi::isLowLatencyActive()
-{
-    auto lowLatencyCtx = LowLatencyCtx::get();
-
-    if (!lowLatencyCtx)
-    {
-        if (_usingFakenvapiAsMainNvapi)
-            LOG_ERROR("Couldn't get low latency context");
-
-        return false;
-    }
-
-    return lowLatencyCtx->is_low_latency_enabled();
-}
-
-LowLatencyMode fakenvapi::getCurrentMode()
-{
-    if (updateModeAndContext())
-        return _lowLatencyMode;
-    else
-        return LowLatencyMode::None;
 }
 
 bool fakenvapi::isUsingAsMainNvapi() { return _usingFakenvapiAsMainNvapi; }

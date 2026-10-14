@@ -2,26 +2,32 @@
 
 #include "low_latency_tech.h"
 
+#include <low_latency/input/OutputRule.h>
+#include <native/NativeLowLatencyVkSync.h>
+
 #include <vulkan/vulkan.h>
 
-// VK_NV_low_latency2 has no PC latency ping, the out of band markers come one earlier
+// VK_NV_low_latency2 has no PC latency ping, the out of band markers come one earlier (OutputRule.h, host tested)
 inline std::optional<VkLatencyMarkerNV> ToVkLatencyMarker(MarkerType type)
 {
-    if (type == MarkerType::PC_LATENCY_PING)
-        return std::nullopt;
+    if (uint32_t marker = 0; lloutput::MarkerToVulkanNV((uint32_t) type, &marker))
+        return (VkLatencyMarkerNV) marker;
 
-    auto value = (uint32_t) type;
-    return (VkLatencyMarkerNV) (value > (uint32_t) MarkerType::PC_LATENCY_PING ? value - 1 : value);
+    return std::nullopt;
 }
 
-inline MarkerType FromVkLatencyMarker(VkLatencyMarkerNV marker)
+inline std::optional<MarkerType> FromVkLatencyMarker(VkLatencyMarkerNV marker)
 {
-    auto value = (uint32_t) marker;
-    return (MarkerType) (value >= (uint32_t) MarkerType::PC_LATENCY_PING ? value + 1 : value);
+    if (uint32_t type = 0; lloutput::MarkerFromVulkanNV((uint32_t) marker, &type))
+        return (MarkerType) type;
+
+    return std::nullopt;
 }
 
 // NVIDIA Reflex for Vulkan through VK_NV_low_latency2 (nvapi's Vulkan Reflex is deprecated). Works on the swapchain
-// created with low latency mode, OptiScaler enables it on swapchains it sees.
+// created with low latency mode: VulkanHooks chains it into every swapchain of a device made with the extension
+// (VulkanSpoofing adds it on NVIDIA). Where that can't be, InputCommon runs ll_reflex_nvapi_vk.h (OutputRule.h
+// ChooseReflexVk).
 class ReflexVk : public LowLatencyTech
 {
     VkDevice device = VK_NULL_HANDLE;
@@ -33,11 +39,16 @@ class ReflexVk : public LowLatencyTech
     bool applied_enabled = false;
     VkSwapchainKHR applied_swapchain = VK_NULL_HANDLE; // Sleep mode is per swapchain
 
+    // Waits in a row that timed out, whether one ever reached its value, and given up on a driver that never signals
+    // (the same policy as native/NativeLowLatencyVkSync.h)
+    uint32_t timeouts = 0;
+    bool ever_signalled = false;
+    bool gave_up = false;
+
     PFN_vkWaitSemaphores o_WaitSemaphores = nullptr;
     PFN_vkDestroySemaphore o_DestroySemaphore = nullptr;
 
-    // The swapchain the calls go to, VK_NULL_HANDLE until there is one with low latency mode
-    VkSwapchainKHR swapchain();
+    // On the device's swapchain with latency mode (VulkanHooks::LatencySwapchainUse holds it)
     void apply_sleep_mode(VkSwapchainKHR swapchain);
 
   public:
@@ -64,7 +75,12 @@ class ReflexVk : public LowLatencyTech
     void set_marker(IUnknown* pDevice, const MarkerParams& marker_params) override;
     void set_async_marker(IUnknown* pCommandQueue, const MarkerParams& marker_params) override;
 
+    // Its sleep never signalled: the device's VK_NV_low_latency2 doesn't work (OutputRule.h ChooseReflexVk)
+    bool gave_up_sleeping() const { return gave_up; }
+
     // For passthrough
     VkResult get_latency(VkGetLatencyMarkerInfoNV* latency_info);
+    // The driver's timings in NVAPI's report layout (the menu, a game's NvAPI GetLatency)
+    NvAPI_Status get_latency(NV_LATENCY_RESULT_PARAMS* latency_params);
     void notify_out_of_band(VkQueue queue, VkOutOfBandQueueTypeNV queue_type) const;
 };

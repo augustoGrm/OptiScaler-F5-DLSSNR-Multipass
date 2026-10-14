@@ -4,31 +4,48 @@
 #include <hooks/LibraryLoad_Hooks.h>
 #include <nvapi/NvApiHooks.h>
 
+bool ReflexDriverReady()
+{
+    if (NvApiHooks::o_NvAPI_QueryInterface == nullptr)
+        LibraryLoadHooks::LoadNvApi();
+
+    // fakenvapi's Reflex is a translation of its own, only the driver's is Reflex. UseFakenvapi's fallback query is
+    // fakenvapi's without it being the main nvapi.
+    if (NvApiHooks::o_NvAPI_QueryInterface == nullptr || fakenvapi::isUsingAsMainNvapi() ||
+        NvApiHooks::o_NvAPI_QueryInterface == (PFN_NvApi_QueryInterface) fakenvapi::queryInterface)
+    {
+        return false;
+    }
+
+    auto queryInterface = NvApiHooks::o_NvAPI_QueryInterface;
+
+    // The outputs' calls go to the driver past the hooks (ReflexHooks::nvapi*)
+    if (!ReflexHooks::ensureTable(queryInterface))
+        return false;
+
+    // NvAPI_Initialize is counted: once is enough next to the game's
+    static std::atomic_bool initialized = false;
+
+    if (initialized.load())
+        return true;
+
+    auto initialize = GET_INTERFACE(NvAPI_Initialize, queryInterface);
+    initialized = initialize != nullptr && initialize() == NVAPI_OK;
+    return initialized.load();
+}
+
 bool Reflex::init(IUnknown* pDevice)
 {
     if (pDevice == nullptr)
         return false;
 
-    if (NvApiHooks::o_NvAPI_QueryInterface == nullptr)
-        LibraryLoadHooks::LoadNvApi();
-
-    // fakenvapi's Reflex is a translation of its own, only the driver's is Reflex
-    if (NvApiHooks::o_NvAPI_QueryInterface == nullptr || fakenvapi::isUsingAsMainNvapi())
+    if (!ReflexDriverReady())
     {
         LOG_INFO("Reflex needs NVIDIA's nvapi");
         return false;
     }
 
     auto queryInterface = NvApiHooks::o_NvAPI_QueryInterface;
-
-    // Its calls go to the driver past the hooks (ReflexHooks::nvapi*)
-    if (!ReflexHooks::ensureTable(queryInterface))
-        return false;
-
-    // A game without Reflex might never have initialized nvapi
-    if (auto initialize = GET_INTERFACE(NvAPI_Initialize, queryInterface);
-        initialize == nullptr || initialize() != NVAPI_OK)
-        return false;
 
     o_SetAsyncFrameMarker = GET_INTERFACE(NvAPI_D3D12_SetAsyncFrameMarker, queryInterface);
     o_GetSleepStatus = GET_INTERFACE(NvAPI_D3D_GetSleepStatus, queryInterface);

@@ -200,7 +200,6 @@ struct Inputs
     bool forceXell = false;                 // fakenvapi's Force XeLL (it takes the frame generation slot and runs XeLL)
     bool otherFrameGenerationOwner = false; // frame generation that runs Reflex itself (DLSS FG, an external owner)
     bool apiAvailable = true;               // the Reflex function table could be found
-    bool deviceAvailable = true;            // the device can do it (a Vulkan device without a working sleep semaphore cannot)
 };
 
 enum class Decision
@@ -214,8 +213,7 @@ enum class Decision
     ForceReflexDisabled,
     ForceXell,
     FrameGenerationOwnsReflex,
-    NoApi,
-    DeviceUnavailable
+    NoApi
 };
 
 // Order matters: what the player can change comes first, then what stops us for another reason.
@@ -249,9 +247,6 @@ inline Decision Decide(const Inputs& in)
     if (!in.apiAvailable)
         return Decision::NoApi;
 
-    if (!in.deviceAvailable)
-        return Decision::DeviceUnavailable;
-
     return Decision::Run;
 }
 
@@ -275,11 +270,11 @@ inline RunsFor RunReason(const Inputs& in)
     return in.fsrFgRunning ? RunsFor::FsrFg : RunsFor::F5Low;
 }
 
-// The Framerate page's "Output": what lowers latency. Auto leaves it to the setup (NVIDIA Reflex on real nvapi, Anti-Lag 2
-// or XeLL through fakenvapi, XeLL with XeFG); XeLL is fakenvapi's Force XeLL (a restart, it takes the frame generation
-// slot); LatencyFlex is fakenvapi's Force LatencyFlex. Nothing here is a new method.
-// With XeFG as the frame generation output the entries are XeLL (its own), Reflex and Anti-Lag 2 ([XeFG] LowLatencyOutput);
-// Reflex and Anti-Lag 2 are offered only then (without XeFG, Auto already is Reflex or Anti-Lag 2).
+// The Framerate page's "Output": what lowers latency. Auto leaves it to the setup (NVIDIA Reflex on real nvapi, else
+// InputCommon's Anti-Lag 2 / Anti-Lag Vk, XeLL or LatencyFlex; XeLL with XeFG); XeLL is the Force XeLL setting (a
+// restart, it takes the frame generation slot); LatencyFlex is the Force LatencyFlex setting. Nothing here is a new
+// method. With XeFG as the frame generation output the entries are XeLL (its own), Reflex and Anti-Lag 2 ([XeFG]
+// LowLatencyOutput); Reflex and Anti-Lag 2 are offered only then (without XeFG, Auto already is Reflex or Anti-Lag 2).
 enum class Output
 {
     Auto,
@@ -295,7 +290,9 @@ struct OutputInputs
     bool xefgOutput = false;    // XeFG is the frame generation output
     bool amdGpu = false;        // an AMD card is the primary GPU (Anti-Lag 2 and Anti-Lag Vk are AMD's)
     bool nvidiaGpu = false;     // an NVIDIA card is the primary GPU (Reflex is NVIDIA's)
-    bool antiLag2Failed = false; // fakenvapi's second Anti-Lag 2 context could not start (XeFG falls back to XeLL)
+    bool antiLag2Failed = false; // the Anti-Lag 2 output next to XeFG's XeLL could not start (XeFG falls back to XeLL)
+    bool reflexFailed = false; // the Reflex output next to XeFG's XeLL could not start (a Vulkan device without either
+                               // VK_NV_low_latency2 or NVIDIA's NvAPI Vulkan Reflex): XeFG falls back to XeLL
     XefgLatency xefgLatency = XefgLatency::XeLL; // [XeFG] LowLatencyOutput as chosen, whether the setup has it or not
 };
 
@@ -305,14 +302,14 @@ struct OutputChoice
     const char* why = ""; // the reason when it is not
 };
 
-// With XeFG: whether the setup has this way of lowering latency. Reflex is the driver's, so it needs the real nvapi on an
-// NVIDIA card; Anti-Lag 2 is fakenvapi's on an AMD card, unless its second context failed to start.
+// With XeFG: whether the setup has this way of lowering latency. Reflex is the driver's, so it needs the real nvapi on
+// an NVIDIA card; Anti-Lag 2 is fakenvapi's on an AMD card. Neither once its output failed to start.
 inline bool XefgLatencyAvailable(XefgLatency latency, const OutputInputs& in)
 {
     switch (latency)
     {
     case XefgLatency::Reflex:
-        return !in.fakenvapiMain && in.nvidiaGpu;
+        return !in.fakenvapiMain && in.nvidiaGpu && !in.reflexFailed;
     case XefgLatency::AntiLag2:
         return in.fakenvapiMain && in.amdGpu && !in.antiLag2Failed;
     default:
@@ -336,9 +333,13 @@ inline OutputChoice OutputAvailability(Output output, const OutputInputs& in)
         case Output::XeLL:
             return { true, "" };
         case Output::Reflex:
-            return XefgLatencyAvailable(XefgLatency::Reflex, in)
-                       ? OutputChoice { true, "" }
-                       : OutputChoice { false, "Needs an NVIDIA card with its own Reflex" };
+            if (XefgLatencyAvailable(XefgLatency::Reflex, in))
+                return { true, "" };
+
+            if (!in.fakenvapiMain && in.nvidiaGpu && in.reflexFailed)
+                return { false, "Reflex could not start" };
+
+            return { false, "Needs an NVIDIA card with its own Reflex" };
         case Output::AntiLag2:
             if (XefgLatencyAvailable(XefgLatency::AntiLag2, in))
                 return { true, "" };
@@ -710,8 +711,6 @@ inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = fa
         return "The frame generation in use runs Reflex itself";
     case Decision::NoApi:
         return "No Reflex or fakenvapi interface could be found";
-    case Decision::DeviceUnavailable:
-        return "Unavailable on this device";
     default:
         return "";
     }
@@ -958,7 +957,7 @@ struct SleepModeCall
     uint32_t minimumIntervalUs = 0;
     bool boost = false;
     uint32_t xellGeneration = 0; // InputCommon::xefg_xell_generation while XeFG's XeLL is the method, else 0
-    uint32_t side = 0;           // XefgLatency in force with XeFG (XeLL, Reflex or Anti-Lag 2), else 0
+    uint32_t side = 0;           // XefgLatency in force (XeLL, Reflex or Anti-Lag 2; XeLL without XeFG)
 };
 
 inline bool SameSleepMode(const SleepModeCall& a, const SleepModeCall& b)

@@ -1,16 +1,19 @@
 #include "pch.h"
-
-// Upstream's low latency input layer: built only with LOW_LATENCY_INPUTS, which is not on yet.
-#ifdef LOW_LATENCY_INPUTS
 #include "input_reflex_vk.h"
 
+#include <hooks/Reflex_Hooks.h>
 #include <hooks/Vulkan_Hooks.h>
 #include <low_latency/low_latency_tech/ll_reflex_vk.h>
+
+#include <intrin.h>
+
+#pragma intrinsic(_ReturnAddress)
 
 static void LogResult(InputResult result, const char* call)
 {
     if (result != InputResult::Ok && result != InputResult::UsingDifferentInput &&
-        result != InputResult::NotEnoughReports && result != InputResult::NoReadyOutput)
+        result != InputResult::NotEnoughReports && result != InputResult::NoReadyOutput &&
+        result != InputResult::InputNotSupported)
     {
         LOG_ERROR("{} result: {}", call, magic_enum::enum_name(result));
     }
@@ -22,8 +25,8 @@ VkResult VKAPI_CALL InputReflexVk::SetLatencySleepMode(VkDevice device, VkSwapch
     if (device == VK_NULL_HANDLE || swapchain == VK_NULL_HANDLE)
         return VK_ERROR_INITIALIZATION_FAILED;
 
-    // The game's swapchain has the low latency mode, the Reflex output uses it
-    VulkanHooks::SetLowLatencySwapchain(swapchain);
+    // The game's swapchain has the latency mode (the game made it so): the Reflex output on VK_NV_low_latency2 uses it
+    VulkanHooks::NoteLatencySwapchain(device, swapchain);
 
     // Without the info low latency is off
     SleepMode sleepMode {};
@@ -36,6 +39,9 @@ VkResult VKAPI_CALL InputReflexVk::SetLatencySleepMode(VkDevice device, VkSwapch
         sleepMode.minimum_interval_us = pSleepModeInfo->minimumIntervalUs;
     }
 
+    ReflexHooks::preVkSetSleepMode((HANDLE) device, sleepMode.low_latency_enabled,
+                                   ReflexHooks::isGameCall(_ReturnAddress()));
+
     LogResult(InputCommon::set_sleep_mode(inputContext, (IUnknown*) device, &sleepMode), "set_sleep_mode");
     return VK_SUCCESS;
 }
@@ -46,19 +52,36 @@ VkResult VKAPI_CALL InputReflexVk::LatencySleep(VkDevice device, VkSwapchainKHR 
     if (device == VK_NULL_HANDLE || swapchain == VK_NULL_HANDLE || pSleepInfo == nullptr)
         return VK_ERROR_INITIALIZATION_FAILED;
 
-    VulkanHooks::SetLowLatencySwapchain(swapchain);
+    VulkanHooks::NoteLatencySwapchain(device, swapchain);
+    ReflexHooks::preVkSleep((HANDLE) device, ReflexHooks::isGameCall(_ReturnAddress()));
+
+    // The game waits for its semaphore whatever the output does. Without vkSignalSemaphore on the device only the
+    // driver's own sleep can signal it: that one alone then, one sleeper per frame.
+    if (!VulkanHooks::CanSignalTimelineSemaphore(device) && VulkanHooks::o_vkLatencySleepNV != nullptr)
+    {
+        static std::atomic_bool logged = false;
+
+        if (!logged.exchange(true))
+            LOG_WARN(
+                "Vulkan Reflex: the device has no vkSignalSemaphore, the game's sleep goes to the driver as it is");
+
+        return VulkanHooks::o_vkLatencySleepNV(device, swapchain, pSleepInfo);
+    }
 
     LogResult(InputCommon::sleep(inputContext, (IUnknown*) device), "sleep");
 
-    // The game waits for it whatever the output did, the Reflex output's sleep has its own
-    if (VulkanHooks::o_vkSignalSemaphore != nullptr)
+    // The Reflex output's sleep has a semaphore of its own
+    if (!VulkanHooks::SignalTimelineSemaphore(device, pSleepInfo->signalSemaphore, pSleepInfo->value) &&
+        VulkanHooks::o_vkLatencySleepNV != nullptr)
     {
-        VkSemaphoreSignalInfo signalInfo {};
-        signalInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SIGNAL_INFO;
-        signalInfo.semaphore = pSleepInfo->signalSemaphore;
-        signalInfo.value = pSleepInfo->value;
+        // It must never wait for a value that does not come (a value below the semaphore's): the driver's sleep
+        // signals it, a second sleep this frame rather than a game that hangs
+        static std::atomic_bool logged = false;
 
-        return VulkanHooks::o_vkSignalSemaphore(device, &signalInfo);
+        if (!logged.exchange(true))
+            LOG_WARN("Vulkan Reflex: the game's sleep semaphore could not be signalled, the driver's sleep signals it");
+
+        return VulkanHooks::o_vkLatencySleepNV(device, swapchain, pSleepInfo);
     }
 
     return VK_SUCCESS;
@@ -70,12 +93,20 @@ void VKAPI_CALL InputReflexVk::SetLatencyMarker(VkDevice device, VkSwapchainKHR 
     if (device == VK_NULL_HANDLE || swapchain == VK_NULL_HANDLE || pLatencyMarkerInfo == nullptr)
         return;
 
-    VulkanHooks::SetLowLatencySwapchain(swapchain);
+    VulkanHooks::NoteLatencySwapchain(device, swapchain);
 
     // Out of band markers are ordinary markers here, OptiScaler has no Vulkan frame generation that sends its own
+    const auto type = FromVkLatencyMarker(pLatencyMarkerInfo->marker);
+
+    if (!type.has_value())
+        return;
+
     MarkerParams markerParams {};
     markerParams.frame_id = pLatencyMarkerInfo->presentID;
-    markerParams.marker_type = FromVkLatencyMarker(pLatencyMarkerInfo->marker);
+    markerParams.marker_type = *type;
+
+    ReflexHooks::preVkMarker((HANDLE) device, markerParams.frame_id, (uint32_t) markerParams.marker_type,
+                             ReflexHooks::isGameCall(_ReturnAddress()));
 
     LogResult(InputCommon::set_marker(inputContext, (IUnknown*) device, markerParams), "set_marker");
 }
@@ -88,7 +119,7 @@ void VKAPI_CALL InputReflexVk::GetLatencyTimings(VkDevice device, VkSwapchainKHR
 
     // The driver's own with the Reflex output on the game's swapchain
     if (auto reflex = InputCommon::reflex_vk_output(); reflex != nullptr &&
-                                                       VulkanHooks::LowLatencySwapchain() == swapchain &&
+                                                       VulkanHooks::LatencySwapchainOf(device).swapchain == swapchain &&
                                                        reflex->get_latency(pLatencyMarkerInfo) == VK_SUCCESS)
     {
         return;
@@ -146,9 +177,7 @@ void VKAPI_CALL InputReflexVk::QueueNotifyOutOfBand(VkQueue queue, const VkOutOf
     if (queue == VK_NULL_HANDLE || pQueueTypeInfo == nullptr)
         return;
 
-    // Only the Reflex output has a use for it
+    // Only the Reflex output on VK_NV_low_latency2 has a use for it
     if (auto reflex = InputCommon::reflex_vk_output())
         reflex->notify_out_of_band(queue, pQueueTypeInfo->queueType);
 }
-
-#endif // LOW_LATENCY_INPUTS

@@ -3,29 +3,25 @@
 #include <nvapi/NvApiTypes.h>
 #include "input_common.h"
 
-#ifdef LOW_LATENCY_INPUTS
 #include <vulkan/vulkan.h>
-#endif
 
-// The game's Reflex as a low latency input. The D3D calls that reach the nvapi hooks come in here: the game's own go to
-// InputCommon's output after the hooks' bookkeeping and game quirks (ReflexHooks::pre*); the ones of the Streamline
+// The game's Reflex as a low latency input. The calls that reach the nvapi hooks come in here: the game's own go to
+// InputCommon's output after the hooks' bookkeeping and game quirks (ReflexHooks::pre*); the D3D ones of the Streamline
 // OptiScaler loads for its DLSS frame generation output reach the nvapi through the hooks as before.
+// The game's NvAPI_Vulkan_* Reflex is the same input on its VkDevice. The game gets a timeline semaphore of ours,
+// signalled after each sleep, so the output can be the driver's VK_NV_low_latency2 or its NvAPI_Vulkan Reflex
+// (OutputRule.h ChooseReflexVk), Anti-Lag Vk or LatencyFlex.
 class InputReflex
 {
     const static inline InputContext inputContext { .caller = LowLatencyInput::Reflex,
                                                     .noFrameId = false,
                                                     .markerMode = InputMarkerMode::FullMarkers };
 
-#ifdef LOW_LATENCY_INPUTS
     // nvapi's Vulkan Reflex, deprecated for VK_NV_low_latency2 (InputReflexVk)
     const static inline InputContext vulkanContext { .caller = LowLatencyInput::Reflex,
                                                      .noFrameId = false,
                                                      .markerMode = InputMarkerMode::FullMarkers,
                                                      .api = API::Vulkan };
-
-    // The game waits on it after each sleep
-    static inline VkSemaphore vkSemaphore = VK_NULL_HANDLE;
-#endif
 
     // The game's marker, after the hooks' quirks (ReflexHooks::MarkerSend: Hitman's added markers come back here)
     static NvAPI_Status GameMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* params, bool game);
@@ -41,7 +37,6 @@ class InputReflex
     static NvAPI_Status D3D12_SetAsyncFrameMarker(ID3D12CommandQueue* pCommandQueue,
                                                   NV_ASYNC_FRAME_MARKER_PARAMS* pSetAsyncFrameMarkerParams);
 
-#ifdef LOW_LATENCY_INPUTS
     // Vulkan
     static NvAPI_Status Vulkan_InitLowLatencyDevice(HANDLE vkDevice, HANDLE* signalSemaphoreHandle);
     static NvAPI_Status Vulkan_DestroyLowLatencyDevice(HANDLE vkDevice);
@@ -54,5 +49,7 @@ class InputReflex
                                                 NV_VULKAN_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams);
     static NvAPI_Status Vulkan_NotifyOutOfBandVkQueue(HANDLE vkDevice, HANDLE queueHandle,
                                                       NV_VULKAN_OUT_OF_BAND_QUEUE_TYPE queueType);
-#endif
+
+    // The device is being destroyed: the game's semaphore on it goes first
+    static void ForgetVulkanDevice(VkDevice device);
 };

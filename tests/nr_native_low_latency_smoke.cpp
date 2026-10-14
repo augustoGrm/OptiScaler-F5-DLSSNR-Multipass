@@ -259,21 +259,6 @@ int main()
         CHECK(t.api == Api::Vulkan && t.device == &vkDevice);
     }
 
-    // A device that cannot do the Vulkan pair: its own reason, after the reasons the player can change and before nothing
-    {
-        Inputs d;
-        d.f5lowRunning = true;
-        d.deviceAvailable = false;
-        CHECK(Decide(d) == Decision::DeviceUnavailable);
-        CHECK(DecisionText(Decision::DeviceUnavailable)[0] != '\0');
-        CHECK(strcmp(StatusLabel(Decision::DeviceUnavailable), "Off") == 0);
-        d.setting = Setting::Off;
-        CHECK(Decide(d) == Decision::SettingOff);
-        d.setting = Setting::Auto;
-        d.gameCallsReflex = true;
-        CHECK(Decide(d) == Decision::GameRunsReflex);
-    }
-
     // The Vulkan Sleep pair (NativeLowLatencyVkSync.h): init once, strictly rising values from 1, a wait on each value
     {
         int initCalls = 0, sleepCalls = 0, waitCalls = 0;
@@ -713,7 +698,7 @@ int main()
         CHECK(history.Contains(xefg::FrameIdHistory::kSize + 1));
     }
 
-    // A bridged Vulkan game's own Reflex feeding XeFG's XeLL (native/XefgReflexRule.h)
+    // XeFG on the Vulkan present bridge, and the sleep modes (native/XefgReflexRule.h)
     {
         using namespace native::xefgreflex;
 
@@ -724,32 +709,7 @@ int main()
         CHECK(!ShouldForward(true, true, true));   // dxvk with no Vulkan bridge: the D3D hooks and dxvk own it
         CHECK(!ShouldForward(true, false, true));
 
-        // VkLatencyMarkerNV against NVAPI's NV_LATENCY_MARKER_TYPE (NVAPI has PC_LATENCY_PING at 8)
-        static_assert(VK_LATENCY_MARKER_SIMULATION_START_NV == 0 && VK_LATENCY_MARKER_TRIGGER_FLASH_NV == 7);
-        static_assert(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV == 8 &&
-                      VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV == 11);
-        uint32_t nv = 99;
-
-        for (uint32_t vk = 0; vk <= 7; ++vk)
-        {
-            CHECK(NvApiMarkerFromVulkanNV(vk, &nv) && nv == vk);
-        }
-
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV, &nv) && nv == 9);
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_END_NV, &nv) && nv == 10);
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_START_NV, &nv) && nv == 11);
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV, &nv) && nv == kNvApiLastMarker);
-        CHECK(!NvApiMarkerFromVulkanNV(12, &nv));
-        CHECK(!NvApiMarkerFromVulkanNV(0x7FFFFFFF, &nv));
-
-        // XeLL takes the six frame markers only
-        for (uint32_t marker = 0; marker <= kNvApiLastMarker; ++marker)
-        {
-            CHECK(XellTakesMarker(marker) == (marker <= 5));
-        }
-
-        // The sleep mode: XeLL keeps the game's values (the cap replaces the interval when one is set), the driver's is
-        // all off, the interval too (only one of the two may wait)
+        // The sleep mode: XeLL keeps the game's values (the cap replaces the interval when one is set)
         SleepMode game;
         game.lowLatency = true;
         game.boost = true;
@@ -760,8 +720,6 @@ int main()
         CHECK(xell.lowLatency && xell.boost && xell.minimumIntervalUs == 16667 && xell.useMarkersToOptimize);
         xell = SleepModeForOutput(game, 8333, true, false);
         CHECK(xell.lowLatency && xell.minimumIntervalUs == 8333);
-        CHECK(!kDriverSleepMode.lowLatency && !kDriverSleepMode.boost && kDriverSleepMode.minimumIntervalUs == 0);
-        CHECK(!kDriverSleepMode.useMarkersToOptimize);
 
         // The rule the D3D hooks share: XeFG is the output -> low latency on whatever the game says, the cap in place
         // of the game's interval; only fakenvapi's Force Disable turns it off; no XeFG -> the game's mode as it is
@@ -1080,6 +1038,21 @@ int main()
             CHECK(std::strstr(OutputAvailability(Output::AntiLag2, nvidia).why, "could not start") == nullptr);
         }
 
+        // Reflex that failed to start (a Vulkan device with neither VK_NV_low_latency2 nor NVIDIA's NvAPI Vulkan
+        // Reflex): the same, XeFG goes back to XeLL
+        {
+            OutputInputs failed = nvidia;
+            failed.xefgLatency = XefgLatency::Reflex;
+            failed.reflexFailed = true;
+            CHECK(!XefgLatencyAvailable(XefgLatency::Reflex, failed));
+            CHECK(!OutputAvailability(Output::Reflex, failed).available);
+            CHECK(std::strstr(OutputAvailability(Output::Reflex, failed).why, "could not start") != nullptr);
+            CHECK(OutputShown(failed, false, false) == Output::XeLL);
+            CHECK(EffectiveXefgLatency(failed, false, false) == XefgLatency::XeLL);
+            CHECK(OutputLocked(failed));
+            CHECK(std::strstr(OutputAvailability(Output::Reflex, amd).why, "could not start") == nullptr);
+        }
+
         // Without XeFG the two are not offered
         OutputInputs plain;
         CHECK(!OutputAvailability(Output::Reflex, plain).available && OutputAvailability(Output::Reflex, plain).why[0] != '\0');
@@ -1126,27 +1099,6 @@ int main()
         OutputInputs xellChosen = nvidia;
         xellChosen.xefgLatency = XefgLatency::XeLL;
         CHECK(EffectiveXefgLatency(xellChosen, false, false) == XefgLatency::XeLL);
-
-        // Routing per call. XeLL keeps what it had: everything, driver nothing.
-        for (const auto call : { Call::SetSleepMode, Call::Sleep, Call::Marker, Call::GetLatency })
-        {
-            const auto r = RouteFor(XefgLatency::XeLL, call);
-            CHECK(r.xell && !r.driver);
-        }
-
-        for (const auto side : { XefgLatency::Reflex, XefgLatency::AntiLag2 })
-        {
-            // The mode goes to both (XeLL's with low latency off), the Sleep to the driver alone (XeLL never sleeps),
-            // markers to both (XeLL's frame ID bookkeeping), the latency report from the driver
-            auto r = RouteFor(side, Call::SetSleepMode);
-            CHECK(r.xell && r.driver);
-            r = RouteFor(side, Call::Sleep);
-            CHECK(!r.xell && r.driver);
-            r = RouteFor(side, Call::Marker);
-            CHECK(r.xell && r.driver);
-            r = RouteFor(side, Call::GetLatency);
-            CHECK(!r.xell && r.driver);
-        }
 
         // The two sleep modes
         SleepMode game;
