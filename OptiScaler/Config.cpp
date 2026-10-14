@@ -551,6 +551,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrNativeMotion.set_from_config(readBool("DlssNr", "NativeMotion"));
             DlssNrNativeInput.set_from_config(readBool("DlssNr", "NativeInput"));
             DlssNrNativeUpscaler.set_from_config(readBool("DlssNr", "NativeUpscaler"));
+            DlssNrNativeUpscalerPass.set_from_config(readBool("DlssNr", "NativeUpscalerPass"));
             DlssNrNativeFrameGenerationOnly.set_from_config(readBool("DlssNr", "NativeFrameGenerationOnly"));
             DlssNrNativeLowLatencyBoost.set_from_config(readBool("DlssNr", "NativeLowLatencyBoost"));
             DlssNrNativeLowLatencyDxvkGameThread.set_from_config(readBool("DlssNr", "NativeLowLatencyDxvkGameThread"));
@@ -1632,6 +1633,8 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "NativeInput", GetBoolValue(Instance()->DlssNrNativeInput.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeUpscaler",
                  GetBoolValue(Instance()->DlssNrNativeUpscaler.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "NativeUpscalerPass",
+                 GetBoolValue(Instance()->DlssNrNativeUpscalerPass.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeFrameGenerationOnly",
                  GetBoolValue(Instance()->DlssNrNativeFrameGenerationOnly.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeLowLatencyBoost",
