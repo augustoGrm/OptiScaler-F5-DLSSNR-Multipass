@@ -8,6 +8,7 @@
 #include <hooks/Reflex_Hooks.h>
 #include <native/NativeLowLatency.h>
 #include <nvapi/fakenvapi.h>
+#include <low_latency/input/input_common.h>
 
 #include <magic_enum.hpp>
 
@@ -72,24 +73,12 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
             LOG_ERROR("SetLoggingCallback error: {} ({})", magic_enum::enum_name(result), (UINT) result);
         }
 
-#ifndef LOW_LATENCY_INPUTS
-        // Force fakenvapi to create XeLL for us
-        if (fakenvapi::forceMode(device, LowLatencyMode::XeLL))
+        // XeFG paces with OptiScaler's XeLL (InputCommon): the low latency output itself while XeLL lowers latency,
+        // else next to the Reflex or Anti-Lag 2 output with its low latency off. It stays until this context is
+        // destroyed.
+        if (auto xellContext = InputCommon::acquire_xefg_xell(device); xellContext != nullptr)
         {
-            xell_sleep_params_t sleepParams = {};
-            sleepParams.bLowLatencyMode = true;
-            sleepParams.bLowLatencyBoost = false;
-            sleepParams.minimumIntervalUs = 0;
-
-            auto xellResult =
-                XeLLProxy::SetSleepMode()((xell_context_handle_t) fakenvapi::getCurrentContext(), &sleepParams);
-            if (xellResult != XELL_RESULT_SUCCESS)
-            {
-                LOG_ERROR("SetSleepMode error: {} ({})", magic_enum::enum_name(xellResult), (UINT) xellResult);
-                return false;
-            }
-
-            result = XeFGProxy::SetLatencyReduction()(_swapChainContext, fakenvapi::getCurrentContext());
+            result = XeFGProxy::SetLatencyReduction()(_swapChainContext, xellContext);
 
             if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
             {
@@ -97,33 +86,6 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
                 return false;
             }
         }
-#else
-        InputXeLL::xell_input_handle_t localXellContext;
-        if (InputXeLL::D3D12CreateContext(device, &localXellContext) == XELL_RESULT_SUCCESS)
-        {
-            localXellContext->inputContext.localContext = true; // We created this context
-
-            xell_sleep_params_t sleepParams = {};
-            sleepParams.bLowLatencyMode = true;
-            sleepParams.bLowLatencyBoost = false;
-            sleepParams.minimumIntervalUs = 0;
-
-            auto xellResult = InputXeLL::SetSleepMode(localXellContext, &sleepParams);
-            if (xellResult != XELL_RESULT_SUCCESS)
-            {
-                LOG_ERROR("SetSleepMode error: {} ({})", magic_enum::enum_name(xellResult), (UINT) xellResult);
-                return false;
-            }
-
-            result = XeFGProxy::SetLatencyReduction()(_swapChainContext, (xell_context_handle_t) localXellContext);
-
-            if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
-            {
-                LOG_ERROR("SetLatencyReduction error: {} ({})", magic_enum::enum_name(result), (UINT) result);
-                return false;
-            }
-        }
-#endif
         else
         {
             LOG_ERROR("Couldn't create XeLL");
@@ -188,6 +150,9 @@ bool XeFG_Dx12::DestroySwapchainContext()
         else
         {
             State::Instance().currentFGSwapchain = nullptr;
+
+            // Its XeLL context isn't read anymore
+            InputCommon::release_xefg_xell();
         }
     }
 

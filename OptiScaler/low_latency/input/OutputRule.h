@@ -84,6 +84,7 @@ struct ShapeInputs
     uint32_t capIntervalUs = 0; // OptiScaler's frame cap for the output, in place of the input's interval; 0: none
     bool forceDisabled = false; // fakenvapi's Force Disable
     bool blocked = false;       // the Framerate page's Input is Off (native::lowlatency::GameLowLatencyBlocked)
+    bool inputSetMode = true;   // the input has set a sleep mode (a game may only mark frames)
 };
 
 // The sleep mode a tech gets from the input's own: XeLL with XeFG has low latency on whatever the game says (only Force
@@ -99,7 +100,19 @@ constexpr SleepMode SleepModeFor(const SleepMode& input, Role role, const ShapeI
         return XellSleepModeInSplit(SleepModeForOutput(input, in.capIntervalUs, true, in.forceDisabled, in.blocked));
 
     if (split && !in.blocked)
+    {
+        // A game that only marks frames: Anti-Lag 2 still sleeps on its markers with low latency on, the driver's
+        // Reflex has nothing to wait in
+        if (!in.inputSetMode && in.side == XefgLatency::AntiLag2)
+        {
+            SleepMode markersOnly;
+            markersOnly.lowLatency = true;
+            markersOnly.minimumIntervalUs = in.capIntervalUs;
+            return markersOnly;
+        }
+
         return DriverSleepModeInSplit(input, in.capIntervalUs);
+    }
 
     return SleepModeForOutput(input, in.capIntervalUs, in.xefgOutput && !split, in.forceDisabled, in.blocked);
 }

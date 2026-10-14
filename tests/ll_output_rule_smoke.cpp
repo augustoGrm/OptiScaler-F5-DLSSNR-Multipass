@@ -123,6 +123,15 @@ int main()
         // Without a cap the game's interval stays for the side
         in.capIntervalUs = 0;
         CHECK(Same(SleepModeFor(game, Role::Output, in), game));
+
+        // A game that only marks frames: Anti-Lag 2 sleeps on them with low latency on and the cap, Reflex gets its
+        // (empty) mode
+        in.capIntervalUs = 13333;
+        in.inputSetMode = false;
+        CHECK(Same(SleepModeFor(Mode(false, false, 0, false), Role::Output, in), Mode(false, false, 13333, false)));
+        in.side = XefgLatency::AntiLag2;
+        CHECK(Same(SleepModeFor(Mode(false, false, 0, false), Role::Output, in), Mode(true, false, 13333, false)));
+        CHECK(Same(SleepModeFor(Mode(false, false, 0, false), Role::XefgXell, in), Mode(false, false, 0, false)));
     }
 
     // ---- CapForGame ----

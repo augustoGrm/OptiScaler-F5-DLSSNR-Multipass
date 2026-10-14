@@ -6,6 +6,7 @@
 #include "fakenvapi.h"
 #include "NvApiTypes.h"
 #include "fakenvapi/nvapi_calls.h"
+#include <low_latency/input/input_common.h>
 
 #define nvapi_interface_table nvapi_interface_table_extern
 #include <nvapi_interface.h>
@@ -314,6 +315,9 @@ void fakenvapi::reportFGPresent(IDXGISwapChain* pSwapChain, bool fg_state, bool 
     else
         LOG_ERROR("Couldn't get low latency context");
 
+    if (!fg_state)
+        InputCommon::report_fg_present(false, false);
+
     if (fg_state)
     {
         // Starting with FSR 3.1.1 we can provide an AntiLag 2 context to FSR FG
@@ -335,6 +339,8 @@ void fakenvapi::reportFGPresent(IDXGISwapChain* pSwapChain, bool fg_state, bool 
 
             if (lowLatencyCtx)
                 lowLatencyCtx->set_fg_type(frame_interpolated, 0);
+
+            InputCommon::report_fg_present(true, frame_interpolated);
         }
     }
     else
@@ -347,6 +353,14 @@ void fakenvapi::reportFGPresent(IDXGISwapChain* pSwapChain, bool fg_state, bool 
 bool fakenvapi::updateModeAndContext()
 {
     LOG_FUNC();
+
+    // A D3D game's low latency is InputCommon's (low_latency/input): its output, when it runs one
+    if (auto mode = InputCommon::active_output(); mode != LowLatencyMode::None)
+    {
+        _lowLatencyTechContext = InputCommon::output_context();
+        _lowLatencyMode = mode;
+        return true;
+    }
 
     auto lowLatencyCtx = LowLatencyCtx::get();
 
@@ -393,6 +407,10 @@ bool fakenvapi::forceMode(IUnknown* device, LowLatencyMode mode)
 
 bool fakenvapi::isLowLatencyActive()
 {
+    // A D3D game's low latency is InputCommon's
+    if (InputCommon::active_output() != LowLatencyMode::None)
+        return InputCommon::output_enabled();
+
     auto lowLatencyCtx = LowLatencyCtx::get();
 
     if (!lowLatencyCtx)

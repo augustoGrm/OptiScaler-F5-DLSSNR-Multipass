@@ -7,7 +7,6 @@
 #include "Hook_Utils.h"
 #include "low_latency/ll_util.h"
 #include <native/XefgReflexRule.h>
-#include <low_latency/input/RoutedInputRule.h>
 
 enum TimingType : uint32_t
 {
@@ -26,8 +25,12 @@ class ReflexHooks
 {
     inline static bool _inited = false;
     inline static uint32_t _minimumIntervalUs = 0;
+    // OptiScaler's Streamline's (DLSS FG output) sleep mode and device: its calls still go through the hooks
     inline static NV_SET_SLEEP_MODE_PARAMS _lastSleepParams {};
     inline static IUnknown* _lastSleepDev = nullptr;
+    // The game's own D3D sleep mode and its device (set by SetSleepMode or Sleep): InputCommon delivers its calls
+    inline static NV_SET_SLEEP_MODE_PARAMS _gameSleepParams {};
+    inline static IUnknown* _gameSleepDev = nullptr;
     // Optical F5Low's own Sleep device: only the timing graph reads it (never update()'s fps cap hand-over)
     inline static IUnknown* _ownSleepDev = nullptr;
     inline static uint8_t _FgNumFramesToGenerate = 0;
@@ -54,49 +57,34 @@ class ReflexHooks
     // sleep mode to its new owner
     static ID3D12Device* vkForwardDevice();
     // The marker bookkeeping every game marker does: the frame IDs XeFG follows (gameXellFrameId) and the menu read
-    static void noteMarker(uint64_t frameId, uint32_t markerType, IUnknown* device);
+    // `countsAsGame`: the game sending markers (gameIsSendingMarkers), not one of ours
+    static void noteMarker(uint64_t frameId, uint32_t markerType, IUnknown* device, bool countsAsGame);
+    static void noteMarker(uint64_t frameId, uint32_t markerType, IUnknown* device)
+    {
+        noteMarker(frameId, markerType, device, !_ownCall);
+    }
     static NvAPI_Status forwardVkSleepMode(ID3D12Device* xellDevice, HANDLE vkDevice,
                                            const NV_VULKAN_SET_SLEEP_MODE_PARAMS& game);
-    // A D3D sleep mode with XeFG as the output: where it goes is native/XefgReflexRule.h RouteFor
-    static NvAPI_Status xefgSetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* params, uint32_t capIntervalUs);
 
-    // XeFG with Reflex or Anti-Lag 2 as the low latency Output (native/XefgReflexRule.h): XeLL (nvapi_calls, XeFG's
-    // context) gets every call with its low latency off and never sleeps, and "the other side" gets the real ones: the
-    // driver's Reflex (o_NvAPI_*), or fakenvapi's Anti-Lag 2 / Anti-Lag Vk context beside XeLL's (fakenvapi::companion*).
+    // A Vulkan game on the present bridge with XeFG and Reflex or Anti-Lag 2 as the low latency Output
+    // (native/XefgReflexRule.h): XeFG's XeLL (InputCommon's) gets every call with its low latency off and never sleeps,
+    // and "the other side" gets the real ones on the game's VkDevice: the driver's Reflex (o_NvAPI_Vulkan_*), or
+    // fakenvapi's Anti-Lag Vk context (fakenvapi::companion*). A D3D game's split is InputCommon's.
     // The side that lowers latency is passed in (native::lowlatency::XefgSide), asked once per call.
     using Side = native::xefgreflex::XefgLatency;
-    static NvAPI_Status sideSetSleepMode(Side side, IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* params);
-    static NvAPI_Status sideSleep(Side side, IUnknown* pDev);
-    static NvAPI_Status sideSetLatencyMarker(Side side, IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* params);
-    static NvAPI_Status sideGetLatency(Side side, IUnknown* pDev, NV_LATENCY_RESULT_PARAMS* params);
-    static NvAPI_Status sideSetAsyncFrameMarker(Side side, ID3D12CommandQueue* queue,
-                                                NV_ASYNC_FRAME_MARKER_PARAMS* params);
     static NvAPI_Status sideSetSleepModeVk(Side side, HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* params);
     static NvAPI_Status sideSetLatencyMarkerVk(Side side, HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* params);
     static NvAPI_Status sideGetLatencyVk(Side side, HANDLE vkDevice, NV_VULKAN_LATENCY_RESULT_PARAMS* params);
     // The side's sleep mode goes out with everything off to the device it was last set on: the Output went back to XeLL
     // (or Input Off, Force Disable), and the side must stop sleeping and limiting (_sleepModeMutex)
     static void releaseSide(Side previous);
-    // The side lives on one API at a time (the bridge's D3D12 device, or the game's VkDevice): a sleep mode going to one
-    // switches off what the other was left with, so a leftover cannot keep sleeping, limiting or answering the timings
-    // (_sleepModeMutex)
-    static void dropSideOnOtherApi(bool nowVulkan);
-    // setFPSLimit sends the side's sleep mode to its D3D and its Vulkan device in one call on purpose: no drop in between
-    inline static thread_local bool _keepBothSides = false;
-    // The devices the side's last sleep mode went to (null: none), and the side that took it
-    inline static IUnknown* _sideDev = nullptr;
+    // The VkDevice the side's last sleep mode went to (null: none), and the side that took it
     inline static HANDLE _sideVkDev = nullptr;
-    inline static Side _sideOfDev = Side::XeLL;
     inline static Side _sideOfVkDev = Side::XeLL;
-    // Which of the two the side's sleep mode went to last: the one with the current report (updateTimingData)
-    inline static bool _sideLastWasVk = false;
 
-    // The game's own Reflex calls versus OptiScaler's (ownSetSleepMode and friends, Optical F5Low's low latency): ours
-    // go through the same wrappers, so they take the same routing, but they are not "the game sends markers".
+    // The game's own Vulkan Reflex calls versus OptiScaler's (own*Vulkan, Optical F5Low's low latency): ours go through
+    // the same wrappers, so they take the same routing, but they are not "the game sends markers".
     inline static thread_local bool _ownCall = false;
-    // Set by route*: whether the D3D call InputReflex handed over is the game's (its caller told apart there), and how
-    // deep the router is nested on this thread
-    inline static thread_local routedinput::RoutedCall _routedCall {};
     inline static std::atomic<bool> _gameCalledReflex = false;
     inline static std::atomic<bool> _timingEstimated = false;
     inline static std::atomic<bool> _gameCalledSetSleepMode = false;
@@ -153,18 +141,64 @@ class ReflexHooks
     static void* getHookedReflex(unsigned int InterfaceId);
     static bool updateTimingData();
 
-    // The D3D Reflex calls that reach the nvapi hooks enter as a low latency input
-    // (low_latency/input/input_reflex.cpp), which tells the game's apart (`game`: not OptiScaler's own Streamline) and
-    // hands them here. The routing to the driver, fakenvapi, XeFG's XeLL and the split's other side is the same as
-    // before InputCommon knew them.
+    // ---- D3D Reflex: InputCommon delivers the game's calls and OptiScaler's own (low_latency/input) ----
+    // What the hooks still do for each call before InputCommon delivers it: who called Reflex, the frame IDs XeFG
+    // follows and the timings' devices, the game quirks (Hitman, RTSS) and DLSS frame generation's Streamline taking
+    // the game's Sleep and markers. `game`: the game's call, else OptiScaler's own (Optical F5Low).
+    enum class Pre
+    {
+        Deliver, // InputCommon delivers it
+        Skip,    // nothing is delivered, the call answers NVAPI_OK (Hitman's markers off its sleep thread)
+        Taken    // DLSS frame generation's Streamline took it, `*result` is its answer
+    };
+    static void preSetSleepMode(IUnknown* pDev, const NV_SET_SLEEP_MODE_PARAMS& params, bool game);
+    static Pre preSleep(IUnknown* pDev, bool game, NvAPI_Status* result);
+    // Delivers a marker (also the ones a game quirk adds)
+    using MarkerSend = NvAPI_Status (*)(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* params, bool game);
+    static Pre preMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* params, bool game, MarkerSend send,
+                         NvAPI_Status* result);
+    static void preAsyncMarker(uint64_t frameId, bool game);
+
+    // The game's own D3D sleep mode, for the frame cap's rule (InputCommon::update, OutputRule.h CapForGame): set on a
+    // device that is still there (by SetSleepMode or Sleep), and with low latency on
+    struct GameSleepMode
+    {
+        bool set = false;
+        bool lowLatency = false;
+    };
+    static GameSleepMode gameSleepMode();
+    // The game sent a marker within the last 20 presents
+    static bool markersRecently();
+
+    // OptiScaler's own Streamline (its DLSS frame generation output) goes to the nvapi through the hooks as before
+    // (InputReflex hands its calls here). Its sleep mode keeps the frame cap when InputCommon::update says so.
     static NvAPI_Status routeSetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* pParams, bool game);
     static NvAPI_Status routeSleep(IUnknown* pDev, bool game);
     static NvAPI_Status routeGetLatency(IUnknown* pDev, NV_LATENCY_RESULT_PARAMS* pParams);
     static NvAPI_Status routeSetLatencyMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* pParams, bool game);
     static NvAPI_Status routeSetAsyncFrameMarker(ID3D12CommandQueue* pQueue, NV_ASYNC_FRAME_MARKER_PARAMS* pParams,
                                                  bool game);
-    // The router is running a call on this thread: a Reflex call that comes in now is made from inside it
-    static bool inRoutedCall() { return _routedCall.depth > 0; }
+    static GameSleepMode streamlineSleepMode();
+    static void streamlineCap(uint32_t intervalUs);
+
+    // The nvapi's own D3D Reflex (the driver's on real nvapi), past every hook: InputCommon's Reflex output
+    static NvAPI_Status nvapiSetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* pParams)
+    {
+        return o_NvAPI_D3D_SetSleepMode != nullptr ? o_NvAPI_D3D_SetSleepMode(pDev, pParams) : NVAPI_NO_IMPLEMENTATION;
+    }
+    static NvAPI_Status nvapiSleep(IUnknown* pDev)
+    {
+        return o_NvAPI_D3D_Sleep != nullptr ? o_NvAPI_D3D_Sleep(pDev) : NVAPI_NO_IMPLEMENTATION;
+    }
+    static NvAPI_Status nvapiSetLatencyMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* pParams)
+    {
+        return o_NvAPI_D3D_SetLatencyMarker != nullptr ? o_NvAPI_D3D_SetLatencyMarker(pDev, pParams)
+                                                       : NVAPI_NO_IMPLEMENTATION;
+    }
+    static NvAPI_Status nvapiGetLatency(IUnknown* pDev, NV_LATENCY_RESULT_PARAMS* pParams)
+    {
+        return o_NvAPI_D3D_GetLatency != nullptr ? o_NvAPI_D3D_GetLatency(pDev, pParams) : NVAPI_NO_IMPLEMENTATION;
+    }
     // The last timings came from fakenvapi (XeFG's XeLL, or fakenvapi as the nvapi): its report has no GPU, driver or
     // queue times, only the markers' own
     static bool timingEstimated() { return _timingEstimated.load(std::memory_order_relaxed); }
@@ -176,16 +210,12 @@ class ReflexHooks
     // start's when it sends no render submit markers. 0 when the game sends none.
     static uint32_t gameXellFrameId();
 
-    // Calls OptiScaler makes itself (native/NativeLowLatency.cpp). Call ensureTable first. They run the hooked
-    // wrappers, so XeFG's routing and fakenvapi's modes apply as for the game's calls, without counting as the game's.
-    // OptiScaler's stored fps cap is never put into them: our SetSleepMode carries its own.
+    // The nvapi's Reflex table, looked up once (Optical F5Low's low latency, InputCommon's Reflex output)
     static bool ensureTable(PFN_NvApi_QueryInterface queryInterface);
-    static NvAPI_Status ownSetSleepMode(IUnknown* pDev, NV_SET_SLEEP_MODE_PARAMS* pParams);
-    static NvAPI_Status ownSleep(IUnknown* pDev);
-    static NvAPI_Status ownSetLatencyMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS* pParams);
-    static NvAPI_Status ownGetLatency(IUnknown* pDev, NV_LATENCY_RESULT_PARAMS* pParams);
-    // Same four, for a native Vulkan game (native/NativeDriverVk.cpp): vkDevice is the game's VkDevice, reinterpreted as
-    // the HANDLE the Vulkan Reflex entry points take.
+    // Calls OptiScaler makes itself in a native Vulkan game (native/NativeLowLatency.cpp): vkDevice is the game's
+    // VkDevice, reinterpreted as the HANDLE the Vulkan Reflex entry points take. They run the hooked wrappers, so
+    // XeFG's routing and fakenvapi's modes apply as for the game's calls, without counting as the game's. OptiScaler's
+    // stored fps cap is never put into them: our SetSleepMode carries its own. (A D3D game's go to InputCommon.)
     static NvAPI_Status ownSetSleepModeVulkan(HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* pParams);
     static NvAPI_Status ownSleepVulkan(HANDLE vkDevice, NvU64 signalValue);
     static NvAPI_Status ownSetLatencyMarkerVulkan(HANDLE vkDevice, NV_VULKAN_LATENCY_MARKER_PARAMS* pParams);

@@ -1073,9 +1073,6 @@
     <ClInclude Include="low_latency\input\UeInputRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="low_latency\input\RoutedInputRule.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
     <ClInclude Include="low_latency\input\OutputRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>

@@ -13,10 +13,8 @@ inline ForceReflex RealReflexForceState()
     return force.value_or_default();
 }
 
-// NVIDIA Reflex as an output. Sleep mode, Sleep, markers and GetLatency are OptiScaler's own Reflex calls
-// (ReflexHooks::own*): they take the hooks' routing (XeFG's split, DLSSG) and the Reflex timings, and never count as
-// the game's, which would make OptiScaler's other low latency stand aside. Sleep status, Reflex Sync and the async
-// markers go to the driver as they are.
+// NVIDIA Reflex as an output: every call goes to the driver past the hooks (ReflexHooks::nvapi*), the hooks only see
+// the inputs' calls. InputCommon gives it the sleep mode on OptiScaler's terms (OutputRule.h SleepModeFor).
 class Reflex : public LowLatencyTech
 {
     IUnknown* device = nullptr;
