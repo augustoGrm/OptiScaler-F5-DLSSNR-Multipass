@@ -8829,7 +8829,6 @@ void MenuCommon::RenderMainMenuGraphs(RenderMenuContext& ctx)
 
 void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
 {
-    auto& state = ctx.state;
     auto* currentFeature = ctx.currentFeature;
     auto config = ctx.config;
     auto& menuResScale = ctx.menuResScale;
@@ -8913,6 +8912,44 @@ void MenuCommon::RenderMainMenuBottomBar(RenderMenuContext& ctx)
     }
 
     ImGui::PopItemWidth();
+
+    // Footer actions stay on their own row so narrow windows keep Save and Close visible.
+    ImGui::Spacing();
+
+    if (ImGui::Button("Open Wiki"))
+    {
+        auto& platform = ImGui::GetPlatformIO();
+        if (platform.Platform_OpenInShellFn != nullptr)
+            platform.Platform_OpenInShellFn(ImGui::GetCurrentContext(),
+                                            "https://github.com/optiscaler/OptiScaler/wiki");
+    }
+    ShowTooltip("Open the OptiScaler Wiki in your browser");
+
+    const auto& style = ImGui::GetStyle();
+    const float buttonSpacing = style.ItemSpacing.x;
+    const float closeWidth = ImGui::CalcTextSize("Close").x + style.FramePadding.x * 2.0f;
+    const float actionsWidth =
+        ImGui::CalcTextSize("Save Settings").x + style.FramePadding.x * 2.0f + buttonSpacing + closeWidth;
+
+    ImGui::SameLine();
+    const float available = ImGui::GetContentRegionAvail().x;
+    if (available >= actionsWidth)
+        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + available - actionsWidth);
+    else
+        ImGui::NewLine();
+
+    if (ImGui::Button("Save Settings"))
+        config->SaveIni();
+
+    ImGui::SameLine(0.0f, buttonSpacing);
+    if (ImGui::GetContentRegionAvail().x < closeWidth)
+        ImGui::NewLine();
+
+    if (ImGui::Button("Close"))
+    {
+        HideMenu();
+        UpdateMenuInputMode(ctx);
+    }
 }
 
 static const char* ApiName(API api)
