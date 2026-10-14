@@ -1198,7 +1198,7 @@ bool Config::SaveIni()
         for (const char* key : { "AdaMfgUnlock", "AdaBlackwellKernels", "AdaTemporalFix", "AdaFlipMeteringPatch",
                                  "AmpereMfgUnlock", "AmpereMfgMultiplier", "AmpereMfgDynamic", "AmpereMfgTargetFPS",
                                  "AmpereMfgMaxFrames", "AmpereMfgKernelImage", "AmpereMfgHardwareBilinear" })
-            ini.DeleteKey("DLSSG", key);
+            ini.Delete("DLSSG", key);
         ini.SetValue("FrameGen", "DebugView", GetBoolValue(Instance()->FGDebugView.value_for_config()).c_str());
 
         std::string FGInputString =
