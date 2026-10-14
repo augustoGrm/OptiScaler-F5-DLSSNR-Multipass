@@ -329,6 +329,9 @@
     <ClInclude Include="misc\PathUnder.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="menu\MenuLifetimeRule.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="inputs\FfxApi_Vk.h">
       <Filter>Header Files</Filter>
     </ClInclude>
