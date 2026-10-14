@@ -802,8 +802,9 @@ static void ApplyResolutionTier(Config* config, int& pendingScale, const Resolut
 // Whether a tier's settings are what is currently in effect, for highlighting its button. Derived
 // from the config rather than remembered, so it can never claim a preset the settings have since
 // drifted from, and it survives a restart. The curve is left out: it is the look's (a look picked after a tier keeps
-// the tier green). At most one button can match -- tiers have distinct resolutions and the two rows differ in
-// placement.
+// the tier green). Tiers have distinct resolutions, so one tier at most matches. Its two rows differ in placement, which
+// tells them apart, except with Finished Picture on: placement does not apply there and both rows of that tier match
+// (DlssNr_TierPlacement.h).
 static bool ResolutionTierActive(Config* config, const ResolutionTier& tier, bool beforeSuperResolution)
 {
     return DlssNrTierPlacement::RowMatchesPlacement(
