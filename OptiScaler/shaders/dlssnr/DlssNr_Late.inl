@@ -23,13 +23,22 @@ std::string status = "Waiting for a finished picture.";
 bool reset = true;
 
 // Native input's HDR10 scratch pair (no slot to keep it in): NR's linear scRGB picture and the PQ result in the picture's
-// own format. Recreated when the picture's size or format changes; the pair it replaces is kept a few resizes longer,
-// since the GPU may still be reading it. Released with the NR state (Shutdown).
+// own format. Recreated when the picture's size or format changes. A replaced buffer is kept until the frame number has
+// moved kRetireFrames past the frame it was replaced in: lists recorded before that may still be reading it on the GPU,
+// however many resizes come in between (dragging a window edge resizes every frame). Released with the NR state (Shutdown).
 struct NativeHdr
 {
+    struct Retired
+    {
+        ComPtr<ID3D12Resource> resource;
+        unsigned long long epoch = 0; // the frame it was replaced in
+    };
+
+    // Well past the frames a swap chain keeps in flight (three at most here).
+    static constexpr unsigned long long kRetireFrames = 8;
+
     ComPtr<ID3D12Resource> linear, encoded;
-    std::array<ComPtr<ID3D12Resource>, 4> retired;
-    size_t nextRetired = 0;
+    std::vector<Retired> retired;
 };
 NativeHdr nativeHdr;
 
@@ -51,9 +60,14 @@ bool Finished(const Slot& slot)
                           slot.fence->GetCompletedValue() >= slot.done);
 }
 
-// The pair for a picture of this size and format. False when it could not be made.
-bool EnsureNativeHdr(const D3D12_RESOURCE_DESC& desc)
+// The pair for a picture of this size and format, in frame `epoch` (native::PresentEpoch). False when it could not be made.
+bool EnsureNativeHdr(const D3D12_RESOURCE_DESC& desc, unsigned long long epoch)
 {
+    // Buffers replaced long enough ago that no list still in flight can read them. A frame number that went backwards (a
+    // new frame source) keeps them a while longer, which only costs memory.
+    std::erase_if(nativeHdr.retired, [epoch](const NativeHdr::Retired& old)
+                  { return epoch >= old.epoch && epoch - old.epoch > NativeHdr::kRetireFrames; });
+
     const auto ensure = [&](ComPtr<ID3D12Resource>& resource, DXGI_FORMAT format)
     {
         if (resource)
@@ -63,7 +77,7 @@ bool EnsureNativeHdr(const D3D12_RESOURCE_DESC& desc)
             if (have.Width == desc.Width && have.Height == desc.Height && have.Format == format)
                 return true;
 
-            nativeHdr.retired[nativeHdr.nextRetired++ % nativeHdr.retired.size()] = std::move(resource);
+            nativeHdr.retired.push_back({ std::move(resource), epoch });
         }
 
         resource.Attach(CreateScratch(device.Get(), format, (unsigned) desc.Width, desc.Height));
@@ -682,7 +696,7 @@ static bool ApplyFinishedPictureInput(ID3D12CommandQueue* queue, ID3D12GraphicsC
     }
     // HDR10 goes to NR as linear scRGB and back, through the scratch pair (the same two passes as the game's swap chain
     // path, recorded by the same helpers).
-    if (pq && !Late::EnsureNativeHdr(desc))
+    if (pq && !Late::EnsureNativeHdr(desc, epoch))
     {
         Late::Say("Could not make the HDR10 buffers. Restart the game to retry.");
         return false;

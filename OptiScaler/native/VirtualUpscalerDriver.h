@@ -65,9 +65,11 @@ class VirtualUpscalerDriver
 
     bool Active() const { return _feature != nullptr; }
 
-    // NR runs on the game's picture itself and the backend does not process it: it only feeds frame generation. Read by the menu
-    // thread for the status line.
+    // NR ran on the game's picture itself in the last frame and the backend does not process it: it only feeds frame
+    // generation. Read by the menu thread for the status line.
     bool NrInPlace() const { return _nrInPlace.load(std::memory_order_relaxed); }
+    // The backend's pass ran over the picture in the last frame ([DlssNr] NativeUpscalerPass true). Read by the menu thread.
+    bool BackendPass() const { return _backendPass.load(std::memory_order_relaxed); }
     const std::string& Error() const { return _error; }
     const std::string& BackendName() const { return _backendName; }
 
@@ -116,6 +118,7 @@ class VirtualUpscalerDriver
     uint64_t _evaluations = 0;
     int _routeLogged = -1; // the VuNrRoute the log last said (-1: none yet)
     std::atomic<bool> _nrInPlace { false };
+    std::atomic<bool> _backendPass { false };
     uint32_t _zeroSizeFrames = 0;
     std::string _error;
 };

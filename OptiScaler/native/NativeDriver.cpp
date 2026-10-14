@@ -239,12 +239,21 @@ void NativeDriver::DrawStatus()
     {
         if (_nativeRan && _virtualUpscaler != nullptr && _virtualUpscaler->Active())
         {
+            const char* backend = _virtualUpscaler->BackendName().c_str();
+
             if (_virtualUpscaler->NrInPlace())
                 ImGui::TextDisabled("NR on the game's picture (no upscaler pass); %s gives frame generation its input.",
-                                    _virtualUpscaler->BackendName().c_str());
+                                    backend);
+            else if (_virtualUpscaler->BackendPass())
+                ImGui::TextDisabled("%s is running as a stabiliser on this picture.", backend);
+            else if (!Config::Instance()->DlssNrEnabled.value_or_default())
+                ImGui::TextDisabled("NR is off; %s gives frame generation its input (no upscaler pass).", backend);
             else
-                ImGui::TextDisabled("%s is running as a stabiliser on this picture.",
-                                    _virtualUpscaler->BackendName().c_str());
+            {
+                // NR is on but did not run on this frame: say why, as NR Only mode does.
+                const std::string reason = DlssNr::FinishedPictureStatus();
+                ImGui::TextDisabled("NR is not running: %s", reason.empty() ? "waiting." : reason.c_str());
+            }
         }
         else if (_virtualUpscaler != nullptr && !_virtualUpscaler->Error().empty())
             ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "Stabiliser: %s", _virtualUpscaler->Error().c_str());
