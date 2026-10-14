@@ -306,6 +306,9 @@ struct OutputChoice
 {
     bool available = true;
     const char* why = ""; // the reason when it is not
+    // The reason holds for the whole session (the card, the nvapi, the driver's Reflex): the menu hides the entry
+    // rather than greying it. Greyed stays for what can pass (an output that could not start).
+    bool hidden = false;
 };
 
 // With XeFG: whether the setup has this way of lowering latency. Reflex is the driver's, so it needs the real nvapi on
@@ -343,34 +346,39 @@ inline OutputChoice OutputAvailability(Output output, const OutputInputs& in)
                 return { true, "" };
 
             if (!in.fakenvapiMain && in.nvidiaGpu && in.reflexFailed)
-                return { false, "Reflex could not start" };
+                return { false, "Reflex could not start in this game" };
 
-            return { false, "Needs an NVIDIA card with its own Reflex" };
+            return { false, in.nvidiaGpu ? "Needs the driver's nvapi, not fakenvapi" : "Needs an NVIDIA card", true };
         case Output::AntiLag2:
             if (XefgLatencyAvailable(XefgLatency::AntiLag2, in))
                 return { true, "" };
 
             if (in.fakenvapiMain && in.amdGpu && in.antiLag2Failed)
-                return { false, "Anti-Lag 2 could not start" };
+                return { false, "Anti-Lag 2 could not start in this game" };
 
-            return { false, "Needs an AMD card with fakenvapi as the game's nvapi" };
+            return { false, in.amdGpu ? "Needs fakenvapi as the game's nvapi" : "Needs an AMD card", true };
         default:
-            return { false, "XeFG uses XeLL, Reflex or Anti-Lag 2" };
+            return { false, "XeFG uses XeLL, Reflex or Anti-Lag 2", true };
         }
     }
 
     if (output == Output::Reflex || output == Output::AntiLag2)
-        return { false, "Only with XeFG as the frame generation output" };
+        return { false, "Only with XeFG as the frame generation output", true };
 
     // The driver's Reflex waits at the same point and lowers latency too (OutputRule.h PlanOutput keeps it)
     if ((output == Output::LatencyFlex || output == Output::FrameCapOnly) && in.driverReflex)
-        return { false, "NVIDIA Reflex runs here: it lowers latency and keeps the cap itself" };
+        return { false, "NVIDIA Reflex runs here: it lowers latency and keeps the cap itself", true };
 
     if (output == Output::LatencyFlex && !in.fakenvapiMain)
-        return { false, "Needs fakenvapi as the game's nvapi" };
+        return { false, "Needs fakenvapi as the game's nvapi", true };
 
     return { true, "" };
 }
+
+// The Auto entry's name (without XeFG). Where the driver's Reflex is the output nothing else can be picked for it, so
+// the entry is that method by name; elsewhere "Auto (<what runs>)", as it could read like the forced XeLL or
+// LatencyFlex entry beside it. Null: the caller builds "Auto (...)".
+inline const char* AutoEntryName(const OutputInputs& in) { return in.driverReflex ? "NVIDIA Reflex" : nullptr; }
 
 // What the combo shows: with XeFG its choice if the setup has it, else from the flags it writes (Force XeLL and Force
 // LatencyFlex in [fakenvapi], [Framerate] FrameCapOnly): XeLL wins, as it takes the slot, then Frame cap only, as in
