@@ -1,6 +1,7 @@
-// Populated by PrepareBundledSm86 before resource compilation. The payload's
-// provenance, exact digest and licences live in redist/sm86/manifest.json.
+// PrepareBundledSm86 extracts these two components from the pinned release.
+// Neither upstream proxy is embedded or executed. See redist/sm86/manifest.json.
 #include <winres.h>
 #include "Sm86RuntimePath.h"
 LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
-31010 RCDATA SM86_RUNTIME_FILE
+31011 RCDATA SM86_RUNTIME_FILE
+31012 RCDATA SM86_BACKEND_FILE

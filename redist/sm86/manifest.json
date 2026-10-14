@@ -31,5 +31,26 @@
       "path": "LICENSE-Streamline-headers.txt",
       "sha256": "d42b17119b616c68447c9b89c70139a4baf2b759df170ce16fcec25b9c30abba"
     }
-  ]
+  ],
+  "embedded_components": [
+    {
+      "path": "nvngx_dlssg.dll",
+      "resource_chain": [
+        31000,
+        30001
+      ],
+      "size": 7460976,
+      "sha256": "ff6e90eb78b827927dff5b4ecc6b1c870c2e9bca29ed9f48c7d348cc9e170b82"
+    },
+    {
+      "path": "sm86_backend.dll",
+      "resource_chain": [
+        31000,
+        30002
+      ],
+      "size": 22066176,
+      "sha256": "6cc675209e55bb3ddb6b1ba8008eef93f633d3e2207c3a073df321a6a8ed4e59"
+    }
+  ],
+  "integration": "Embed only the NVIDIA runtime and versioned native backend. Outer universal proxy and inner loader proxy are provenance inputs and must not be loaded at runtime."
 }

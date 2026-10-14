@@ -69,53 +69,13 @@ bool Config::Reload(std::filesystem::path iniPath)
         {
             FGEnabled.set_from_config(readBool("FrameGen", "Enabled"));
             ExternalFrameGeneration.set_from_config(readBool("FrameGen", "External"));
-            FGDLSSGAdaMfgUnlock.set_from_config(readBool("DLSSG", "AdaMfgUnlock"));
-            FGDLSSGAdaBlackwellKernels.set_from_config(readBool("DLSSG", "AdaBlackwellKernels"));
+            // Older builds coupled the SM86 toggle to external FG. Migrate that
+            // automatic handoff; the native backend now uses OptiScaler's pipeline.
+            if (readBool("DLSSG", "AmpereMfgUnlock").value_or(false) && ExternalFrameGeneration.value_or_default())
+                ExternalFrameGeneration.set_from_config(false);
+            FGDLSSGAmpereMfgUnlock.set_from_config(true);
+            FGDLSSGAdaMfgUnlock.set_from_config(false);
 
-            if (auto adaFix = readString("DLSSG", "AdaTemporalFix"); adaFix.has_value())
-            {
-                if (lstrcmpiA(adaFix.value().c_str(), "retarget") == 0)
-                    FGDLSSGAdaTemporalFix.set_from_config("Retarget");
-                else if (lstrcmpiA(adaFix.value().c_str(), "ptx") == 0)
-                    FGDLSSGAdaTemporalFix.set_from_config("Ptx");
-                else
-                    FGDLSSGAdaTemporalFix.set_from_config("Auto");
-            }
-
-            FGDLSSGAdaFlipMeteringPatch.set_from_config(readBool("DLSSG", "AdaFlipMeteringPatch"));
-            FGDLSSGAmpereMfgUnlock.set_from_config(readBool("DLSSG", "AmpereMfgUnlock"));
-            FGDLSSGAmpereMfgMultiplier.set_from_config(readInt("DLSSG", "AmpereMfgMultiplier"));
-            if (FGDLSSGAmpereMfgMultiplier.has_value() && FGDLSSGAmpereMfgMultiplier.value() != 0 &&
-                (FGDLSSGAmpereMfgMultiplier.value() < 2 || FGDLSSGAmpereMfgMultiplier.value() > 6))
-                FGDLSSGAmpereMfgMultiplier.reset();
-            FGDLSSGAmpereMfgDynamic.set_from_config(readBool("DLSSG", "AmpereMfgDynamic"));
-            FGDLSSGAmpereMfgTargetFPS.set_from_config(readInt("DLSSG", "AmpereMfgTargetFPS"));
-            if (FGDLSSGAmpereMfgTargetFPS.has_value() &&
-                (FGDLSSGAmpereMfgTargetFPS.value() < 0 || FGDLSSGAmpereMfgTargetFPS.value() > 1000))
-                FGDLSSGAmpereMfgTargetFPS.reset();
-            FGDLSSGAmpereMfgMaxFrames.set_from_config(readInt("DLSSG", "AmpereMfgMaxFrames"));
-            if (FGDLSSGAmpereMfgMaxFrames.has_value() &&
-                (FGDLSSGAmpereMfgMaxFrames.value() < 0 || FGDLSSGAmpereMfgMaxFrames.value() > 5))
-                FGDLSSGAmpereMfgMaxFrames.reset();
-
-            if (auto ampereKernel = readString("DLSSG", "AmpereMfgKernelImage"); ampereKernel.has_value())
-            {
-                if (lstrcmpiA(ampereKernel.value().c_str(), "ptx") == 0)
-                    FGDLSSGAmpereMfgKernelImage.set_from_config("PTX");
-                else if (lstrcmpiA(ampereKernel.value().c_str(), "cubin") == 0)
-                    FGDLSSGAmpereMfgKernelImage.set_from_config("Cubin");
-                else
-                    FGDLSSGAmpereMfgKernelImage.set_from_config("Auto");
-            }
-            FGDLSSGAmpereMfgHardwareBilinear.set_from_config(readBool("DLSSG", "AmpereMfgHardwareBilinear"));
-
-            if (FGDLSSGAmpereMfgUnlock.value_or_default())
-            {
-                // Migrate the old SM86 option, which persisted External=true.
-                // The built-in adapter owns its controls independently now.
-                ExternalFrameGeneration.set_volatile_value(false);
-                FGDLSSGAdaMfgUnlock.set_from_config(false);
-            }
             FGDebugView.set_from_config(readBool("FrameGen", "DebugView"));
 
             FGInput.set_from_config(readString("FrameGen", "FGInput").transform(CodeToEnum<enum FGInput>));
@@ -1231,34 +1191,14 @@ bool Config::SaveIni()
 
     // Frame Generation
     {
-        bool ampereUnlock = Instance()->FGDLSSGAmpereMfgUnlock.value_for_config_or(false);
-        bool adaUnlock = Instance()->FGDLSSGAdaMfgUnlock.value_for_config_or(false);
-        if (ampereUnlock && adaUnlock)
-            adaUnlock = false;
-
         ini.SetValue("FrameGen", "Enabled", GetBoolValue(Instance()->FGEnabled.value_for_config()).c_str());
-        ini.SetValue(
-            "FrameGen", "External",
-            GetBoolValue(!ampereUnlock && Instance()->ExternalFrameGeneration.value_for_config_or(false)).c_str());
-        ini.SetValue("DLSSG", "AdaMfgUnlock", GetBoolValue(adaUnlock).c_str());
-        ini.SetValue("DLSSG", "AdaBlackwellKernels",
-                     GetBoolValue(Instance()->FGDLSSGAdaBlackwellKernels.value_for_config()).c_str());
-        ini.SetValue("DLSSG", "AdaTemporalFix", Instance()->FGDLSSGAdaTemporalFix.value_for_config_or("auto").c_str());
-        ini.SetValue("DLSSG", "AdaFlipMeteringPatch",
-                     GetBoolValue(Instance()->FGDLSSGAdaFlipMeteringPatch.value_for_config()).c_str());
-        ini.SetValue("DLSSG", "AmpereMfgUnlock", GetBoolValue(ampereUnlock).c_str());
-        ini.SetValue("DLSSG", "AmpereMfgMultiplier",
-                     GetIntValue(Instance()->FGDLSSGAmpereMfgMultiplier.value_for_config()).c_str());
-        ini.SetValue("DLSSG", "AmpereMfgDynamic",
-                     GetBoolValue(Instance()->FGDLSSGAmpereMfgDynamic.value_for_config()).c_str());
-        ini.SetValue("DLSSG", "AmpereMfgTargetFPS",
-                     GetIntValue(Instance()->FGDLSSGAmpereMfgTargetFPS.value_for_config()).c_str());
-        ini.SetValue("DLSSG", "AmpereMfgMaxFrames",
-                     GetIntValue(Instance()->FGDLSSGAmpereMfgMaxFrames.value_for_config()).c_str());
-        ini.SetValue("DLSSG", "AmpereMfgKernelImage",
-                     Instance()->FGDLSSGAmpereMfgKernelImage.value_for_config_or("auto").c_str());
-        ini.SetValue("DLSSG", "AmpereMfgHardwareBilinear",
-                     GetBoolValue(Instance()->FGDLSSGAmpereMfgHardwareBilinear.value_for_config()).c_str());
+        ini.SetValue("FrameGen", "External",
+                     GetBoolValue(Instance()->ExternalFrameGeneration.value_for_config_or(false)).c_str());
+        // Backend policy is automatic; keep only the normal DLSSG controls in the INI.
+        for (const char* key : { "AdaMfgUnlock", "AdaBlackwellKernels", "AdaTemporalFix", "AdaFlipMeteringPatch",
+                                 "AmpereMfgUnlock", "AmpereMfgMultiplier", "AmpereMfgDynamic", "AmpereMfgTargetFPS",
+                                 "AmpereMfgMaxFrames", "AmpereMfgKernelImage", "AmpereMfgHardwareBilinear" })
+            ini.DeleteKey("DLSSG", key);
         ini.SetValue("FrameGen", "DebugView", GetBoolValue(Instance()->FGDebugView.value_for_config()).c_str());
 
         std::string FGInputString =

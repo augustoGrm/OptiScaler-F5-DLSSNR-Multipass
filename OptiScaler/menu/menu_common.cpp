@@ -3,7 +3,6 @@
 #include "MenuPages.h"
 #include <framegen/dlssg/MfgUnlock.h>
 #include <framegen/dlssg/AmpereMfgLoader.h>
-#include <framegen/dlssg/Sm86Menu.h>
 #include <dlssnr/DlssNr_ExposureScan.h>
 
 #include <algorithm>
@@ -33,6 +32,7 @@
 #include <hooks/Reflex_Hooks.h>
 
 #include <BuildInfo.h>
+#include <EmbeddedNotices.h>
 #include <version_check.h>
 
 #include <imgui/imgui_internal.h>
@@ -3796,96 +3796,6 @@ static bool RenderRatioOverrideSlider(const char* label, CustomOptional<int, NoD
     return true;
 }
 
-// Options for the built-in RTX 40 unlock, shown only while it is on and not overridden by another
-// unlocker. Startup settings: they apply when DLSSG loads, so a change needs a restart, and the result of
-// each is shown directly under it.
-static void RenderAdaUnlockOptions(Config* config, const MfgUnlock::Status& status, void (*showHelp)(const char*))
-{
-    if (!ImGui::CollapsingHeader("RTX 40 (Ada) MFG Unlock Options"))
-        return;
-
-    ImGui::Indent();
-
-    // Frame timing fix. Auto is resolved inline, like the RTX 20/30 "Kernel Image" combo below.
-    const auto resolved = MfgUnlock::ConfiguredTemporalMethod();
-    const std::string autoLabel = resolved == MfgUnlock::TemporalMethod::None ? "Auto (off: AdaBlackwellKernels=false)"
-                                                                              : "Auto (reuse Blackwell kernel)";
-    const char* options[] = { autoLabel.c_str(), "Reuse Blackwell kernel", "Rewrite blend weight (PTX)" };
-
-    const std::string chosen = config->FGDLSSGAdaTemporalFix.value_or("Auto");
-    int index = chosen == "Retarget" ? 1 : chosen == "Ptx" ? 2 : 0;
-
-    if (ImGui::Combo("Frame timing fix##ada", &index, options, 3))
-    {
-        const char* stored[] = { "Auto", "Retarget", "Ptx" };
-        config->FGDLSSGAdaTemporalFix = std::string(stored[index]);
-    }
-    showHelp("Above 2X, every generated frame can land at the midpoint between two real frames, so 3X/4X\n"
-             "shows more frames but no smoother motion. This gives each its own time.\n"
-             "Auto / Reuse Blackwell kernel: uses the Blackwell interpolation kernel the DLSSG module\n"
-             "already carries. This is the default.\n"
-             "Rewrite blend weight: edits the Ada kernel's PTX instead. It only works on DLSSG builds\n"
-             "it recognises. Try it only if 3X/4X motion is not smoother.\n"
-             "ini: [DLSSG] AdaTemporalFix. Save Settings and restart to apply.");
-
-    // The result, directly under the control (which method applied, or the specific reason it did not).
-    if (!status.ModuleFound)
-    {
-        ImGui::TextDisabled("Not applied yet: DLSSG has not loaded.");
-    }
-    else if (status.KernelsRewritten > 0)
-    {
-        const bool ptx = status.TemporalAttempted == MfgUnlock::TemporalMethod::Ptx;
-        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "Applied: %s, %u %s",
-                           ptx ? "rewrite blend weight" : "reuse Blackwell kernel", status.KernelsRewritten,
-                           ptx ? "descriptor(s)" : "kernel group(s)");
-    }
-    else
-    {
-        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.20f, 1.0f), "Not applied: %s.",
-                           status.TemporalDetail.empty() ? "no reason recorded" : status.TemporalDetail.c_str());
-    }
-
-    if (status.ModuleFound && status.TemporalAttempted != resolved)
-        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.20f, 1.0f), "Save Settings and restart to apply.");
-
-    ImGui::Spacing();
-
-    // Software frame pacing. Second because it is the rarer need: a freeze above 2X, not a setting every
-    // unlock user wants.
-    bool softwarePacing = config->FGDLSSGAdaFlipMeteringPatch.value_or_default();
-
-    if (ImGui::Checkbox("Software frame pacing (only if 3X+ freezes)##ada", &softwarePacing))
-        config->FGDLSSGAdaFlipMeteringPatch = softwarePacing;
-    showHelp("Asking for more than one generated frame while hardware flip metering is on can freeze the picture.\n"
-             "This edits NVIDIA's Streamline DLSS-G plugin in memory, when it loads, so that it paces in\n"
-             "software instead. It refuses unless the plugin's code is of the shape it recognises.\n"
-             "Use it only if 3X or more freezes. [NvApi] DisableFlipMetering=true (ini only) is milder; try\n"
-             "that first.\n"
-             "ini: [DLSSG] AdaFlipMeteringPatch. Save Settings and restart to apply.");
-
-    const std::string_view pacing = status.FlipMetering;
-
-    if (pacing.empty())
-    {
-        if (softwarePacing)
-            ImGui::TextDisabled("Not applied yet: the Streamline DLSS-G plugin has not loaded.");
-    }
-    else if (pacing == "patched")
-    {
-        ImGui::TextColored(ImVec4(0.4f, 0.9f, 0.5f, 1.0f), "Applied at %u site(s).", status.FlipSites);
-    }
-    else if (pacing != "off")
-    {
-        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.20f, 1.0f), "Not applied: %s.", status.FlipMetering);
-    }
-
-    if (!pacing.empty() && softwarePacing != status.FlipRequested)
-        ImGui::TextColored(ImVec4(0.95f, 0.70f, 0.20f, 1.0f), "Save Settings and restart to apply.");
-
-    ImGui::Unindent();
-}
-
 // One line under "Override DLSSG Ratio". The combo says what was requested; this says whether it
 // happened: what the game asked for, what was sent on after any override, and what Streamline reports it
 // presented at the last check. Nothing is drawn while DLSS-G is off.
@@ -3916,11 +3826,6 @@ static void RenderDlssgTelemetry()
 
     if (result != 0)
         ImGui::TextColored(amber, "slDLSSGSetOptions returned sl::Result %u for that request.", result);
-
-    // Only when the symptom is there: 3X or more sent, fewer presented, and nothing pacing in software.
-    if (result == 0 && sentX > 2 && presented < sentX && MfgUnlock::UnlockedMax() > 0 && !MfgUnlock::SoftwarePacing())
-        ImGui::TextColored(amber,
-                           "If the picture froze: try Software frame pacing under RTX 40 (Ada) MFG Unlock Options.");
 }
 
 void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
@@ -3931,65 +3836,10 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     auto& primaryGpu = *ctx.primaryGpu;
 
     DlssNr::RenderF5LowFrameGenHint(config, ctx.currentFeature == nullptr || !ctx.currentFeature->IsInited());
-    RenderSm86Menu(config, [](const char* text) { ShowHelpMarker(text); });
-    if (!config->FGDLSSGAmpereMfgUnlock.value_or_default())
+    if (state.externalFrameGeneration)
     {
-        bool external = config->ExternalFrameGeneration.value_or_default();
-        if (ImGui::Checkbox("Use external FG (restart)", &external))
-            config->ExternalFrameGeneration = external;
-        ShowHelpMarker("For a separately installed FG provider. Save Settings and restart. Built-in SM86 uses its own "
-                       "controls above.");
-    }
-    bool adaUnlock = config->FGDLSSGAdaMfgUnlock.value_or_default();
-    const bool disableAda = config->FGDLSSGAmpereMfgUnlock.value_or_default() || state.externalFrameGeneration;
-
-    if (disableAda)
-    {
-        ImGui::BeginDisabled();
-        ImGui::Checkbox("Built-in RTX 40 MFG unlock (experimental; restart)", &adaUnlock);
-        ImGui::EndDisabled();
-        if (config->FGDLSSGAmpereMfgUnlock.value_or_default())
-        {
-            ShowHelpMarker("Disabled because the Ampere (RTX 30) SM86 MFG unlock is active.\n"
-                           "Disable AmpereMfgUnlock first, Save Settings and restart.");
-        }
-        else
-        {
-            ShowHelpMarker("Disabled because External frame generation is active.\n"
-                           "Disable External FG first, Save Settings and restart.");
-        }
-    }
-    else
-    {
-        if (ImGui::Checkbox("Built-in RTX 40 MFG unlock (experimental; restart)", &adaUnlock))
-            config->FGDLSSGAdaMfgUnlock = adaUnlock;
-        ShowHelpMarker("Unlocks multi-frame generation on RTX 40. Save and restart to apply. Needs a supported DLSSG "
-                       "runtime and Streamline 2.7.1+. Don't combine with other unlockers. Not tested on RTX 40 "
-                       "here.");
-    }
-    if (adaUnlock && !disableAda)
-    {
-        const auto& status = MfgUnlock::LastStatus();
-        ImGui::TextWrapped("DLSSG %s: capability %s, validation %s, retargeted kernel groups %u, "
-                           "Streamline plugin ceiling %s",
-                           status.SnippetVersion.empty() ? "not patched" : status.SnippetVersion.c_str(),
-                           status.AdvertiseMatched ? "matched" : "not matched",
-                           status.ValidateMatched ? "matched" : "not matched", status.KernelsRewritten,
-                           status.PluginCeiling[0] != '\0' ? status.PluginCeiling : "not seen");
-
-        RenderAdaUnlockOptions(config, status, [](const char* tip) { ShowHelpMarker(tip); });
-    }
-
-    // The bundled runtime owns the game's native Streamline swapchain. Its
-    // settings remain in this menu, through its control API, with one FG engine.
-    if (config->FGDLSSGAmpereMfgUnlock.value_or_default() || state.externalFrameGeneration)
-    {
-        if (config->FGDLSSGAmpereMfgUnlock.value_or_default())
-            ImGui::TextWrapped(
-                "Built-in NVIDIA MFG: select the multiplier above and enable DLSS Frame Generation in the game.");
-        else
-            ImGui::TextWrapped(
-                "External FG is active. Disable FrameGen External and restart to use OptiScaler's FG outputs.");
+        ImGui::TextWrapped("An external frame-generation provider is active. Disable FrameGen External and restart "
+                           "to use OptiScaler's FG outputs.");
         return;
     }
 
@@ -4135,7 +3985,7 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     // clang-format off
 
     nvngxOptions = {
-        { FGNvngxReplacement::None, "None (Real DLSSG)", "Real DLSSG, For RTX 40xx and above"},
+        { FGNvngxReplacement::None, "None (Real DLSSG)", "NVIDIA DLSS Frame Generation\nRTX 20/30: built-in DLSSG backend\nRTX 40 and newer: native DLSSG"},
         { FGNvngxReplacement::Nukems, "Nukem's", "FSR 3 FG" },
         { FGNvngxReplacement::Arturs, "Enabler", "FSR 3 MFG mod" },
         { FGNvngxReplacement::FFX, "FSR 3/4 FG", "FSR 3/4 FG using the FFX upgrade\n\n"
@@ -4197,7 +4047,15 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     if (state.activeFgInput != FGInput::ForceXeLL)
     {
         SectionTitle("Frame Generation");
-        ShowTooltip("Which copium do you choose?");
+        ShowTooltip("Select the game's FG input and the output to use");
+
+        const auto dlssgBackend = AmpereMfgLoader::LastStatus();
+        if (dlssgBackend.Enabled && !dlssgBackend.BackendReady && !dlssgBackend.ErrorMessage.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, toneMapColor(ImVec4(1.0f, 0.35f, 0.25f, 1.0f)));
+            ImGui::TextWrapped("DLSSG unavailable: %s", dlssgBackend.ErrorMessage.c_str());
+            ImGui::PopStyleColor();
+        }
 
         if (ImGui::BeginTable("fgSelection", 1, ImGuiTableFlags_SizingStretchSame))
         {
@@ -8486,6 +8344,42 @@ void MenuCommon::RenderApiAndTextureSettings(RenderMenuContext& ctx)
     }
 }
 
+void MenuCommon::RenderInformationSettings(RenderMenuContext& ctx)
+{
+    SectionTitle("Information");
+
+    if (ImGui::Button("Licenses"))
+        ImGui::OpenPopup("Licenses");
+
+    const auto& io = ctx.io;
+    const float scale = ctx.menuResScale;
+    const ImVec2 maxSize(std::max(io.DisplaySize.x * 0.9f, 1.0f), std::max(io.DisplaySize.y * 0.9f, 1.0f));
+    const ImVec2 minSize(std::min(320.0f * scale, maxSize.x), std::min(240.0f * scale, maxSize.y));
+    ImGui::SetNextWindowSizeConstraints(minSize, maxSize);
+    ImGui::SetNextWindowSize(ImVec2(std::min(780.0f * scale, maxSize.x), std::min(560.0f * scale, maxSize.y)),
+                             ImGuiCond_FirstUseEver);
+
+    bool open = true;
+    if (ImGui::BeginPopupModal("Licenses", &open, ImGuiWindowFlags_NoSavedSettings))
+    {
+        const auto notices = EmbeddedNotices::Text();
+        if (ImGui::BeginChild("##LicenseText", ImVec2(0.0f, -ImGui::GetFrameHeightWithSpacing()),
+                              ImGuiChildFlags_Borders, ImGuiWindowFlags_HorizontalScrollbar))
+        {
+            if (notices.empty())
+                ImGui::TextUnformatted("License notices are unavailable in this build.");
+            else
+                ImGui::TextUnformatted(notices.data(), notices.data() + notices.size());
+        }
+        ImGui::EndChild();
+
+        if (ImGui::Button("Close"))
+            ImGui::CloseCurrentPopup();
+
+        ImGui::EndPopup();
+    }
+}
+
 void MenuCommon::RenderKeybindSettings(RenderMenuContext& ctx)
 {
     auto config = ctx.config;
@@ -8698,6 +8592,7 @@ void MenuCommon::RenderMainMenuPages(RenderMenuContext& ctx)
             section(RenderAdvancedSettings, true);
             section(RenderLoggingSettings, true);
             section(RenderApiAndTextureSettings, true);
+            section(RenderInformationSettings);
             break;
         case Page::NrF5Low:
         case Page::NrStatus:
@@ -9333,6 +9228,7 @@ const MenuCommon::MenuBox* MenuCommon::GetMenuBoxes(size_t& count)
         { "status_hooks", "Help / Status", "Hooks / Config", nullptr, RenderStatusInfo },
         { "status_init", "Help / Status", "Init Flags (active)", nullptr, RenderStatusInfo },
         { "logging", "Help / Status", "Logging", [](RenderMenuContext& c) { RenderCard(c, RenderLoggingSettings); } },
+        { "information", "Help / Status", "Information", [](RenderMenuContext& c) { RenderCard(c, RenderInformationSettings); } },
     };
     // clang-format on
 
@@ -10399,7 +10295,6 @@ void RenderExposureScanIndicator(float alpha)
 
 bool MenuCommon::RenderMenu()
 {
-    AmpereMfgLoader::UpdateControls();
     if (!_isInited)
         return false;
 

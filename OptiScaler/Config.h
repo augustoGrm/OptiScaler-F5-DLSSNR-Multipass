@@ -1120,8 +1120,8 @@ class Config
     CustomOptional<bool, NoDefault> FGDLSSGAdaBlackwellKernels;
     CustomOptional<std::string, NoDefault> FGDLSSGAdaTemporalFix; // Auto / Retarget / Ptx
     CustomOptional<bool> FGDLSSGAdaFlipMeteringPatch { false };   // pin sl.dlss_g to software frame pacing
-    // Ampere/Turing (SM86/SM75) MFG unlocker — sideloads the dlssg_for_sm86 proxy
-    CustomOptional<bool> FGDLSSGAmpereMfgUnlock { false };
+    // Legacy fields retained for source compatibility; the native backend is automatic.
+    CustomOptional<bool> FGDLSSGAmpereMfgUnlock { true };
     CustomOptional<int> FGDLSSGAmpereMfgMaxFrames { 5 };  // 1..5 generated frames, up to X6
     CustomOptional<int> FGDLSSGAmpereMfgMultiplier { 0 }; // 0 follows game, 2..6 fixed factor
     CustomOptional<bool> FGDLSSGAmpereMfgDynamic { false };
@@ -1133,7 +1133,7 @@ class Config
     // Keeps Streamline from picking up the driver's OTA/downloaded plugins; only files in
     // OptiScaler/streamline are used for sl.* plugins and nvngx_dlssg.dll
     CustomOptional<bool> FGStreamlineIgnoreOTA { false };
-    CustomOptional<FGNvngxReplacement> FGNvngxReplacement { FGNvngxReplacement::Nukems };
+    CustomOptional<FGNvngxReplacement> FGNvngxReplacement { FGNvngxReplacement::None };
     CustomOptional<bool> FGDrawUIOverFG { false };
     CustomOptional<bool> FGUIPremultipliedAlpha { true };
     CustomOptional<bool> FGDisableHudless { false };

@@ -3,6 +3,7 @@
 #include "DlssNrFeature_Vk.h"
 #include "DlssNrFeature_Dx12.h"
 #include "PassProfiles.h"
+#include "DlssNrBundle.h"
 
 #include <Config.h>
 #include <State.h>
@@ -561,10 +562,7 @@ bool LoadForwarder()
     if (g_vk.forwarder != nullptr)
         return g_vk.init != nullptr && g_vk.create != nullptr && g_vk.evaluate != nullptr;
 
-    auto path = Util::FindFilePath(Util::DllPath().remove_filename(), "nvngx.dll_dlssnr.dll");
-
-    if (!path.has_value())
-        path = Util::FindFilePath(Util::ExePath().remove_filename(), "nvngx.dll_dlssnr.dll");
+    auto path = DlssNrBundle::GetForwarder();
 
     if (!path.has_value())
     {
@@ -669,15 +667,7 @@ unsigned int GameCreateFlags(NVSDK_NGX_Parameter* params)
     return flags;
 }
 
-std::optional<std::filesystem::path> FindSnippet()
-{
-    auto snippet = Util::FindFilePath(Util::DllPath().remove_filename(), "nvngx_dlssnr.dll");
-
-    if (!snippet.has_value())
-        snippet = Util::FindFilePath(Util::ExePath().remove_filename(), "nvngx_dlssnr.dll");
-
-    return snippet;
-}
+std::optional<std::filesystem::path> FindSnippet() { return DlssNrBundle::GetModel(); }
 
 #include "DlssNr_ExposureCalibrate_Vk.inl"
 #include "DlssNr_DetailReuse_Vk.inl"

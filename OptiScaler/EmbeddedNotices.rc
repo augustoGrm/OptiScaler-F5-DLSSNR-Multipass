@@ -1,0 +1,6 @@
+// Generated before ResourceCompile from the complete project and SDK notices.
+#pragma code_page(65001)
+#include <winres.h>
+#include "EmbeddedNoticesPath.h"
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+31110 RCDATA EMBEDDED_NOTICES_FILE

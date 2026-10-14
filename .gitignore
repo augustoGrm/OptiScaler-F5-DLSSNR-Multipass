@@ -455,3 +455,14 @@ dlssg_for_sm86/
 # Verified build input downloaded by get_sm86_runtime.ps1
 /redist/sm86/version.dll
 /OptiScaler/framegen/dlssg/Sm86RuntimePath.h
+
+# Generated, verified runtime resources and embedded license text.
+/redist/sm86/nvngx_dlssg.dll
+/redist/sm86/sm86_backend.dll
+/OptiScaler/dlssnr/NrRuntimePath.h
+/OptiScaler/EmbeddedNoticesPath.h
+/OptiScaler/EmbeddedNotices.txt
+/redist/nr/nvngx_dlssnr.dll
+
+# The supplied small forwarder is a tracked source input; the model is in chunks.
+!/redist/nr/nvngx.dll_dlssnr.dll

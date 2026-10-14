@@ -5,16 +5,25 @@
 #include <string>
 #include <optional>
 #include "Sm86Control.h"
+#ifdef _WIN32
+#include <windows.h>
+#else
+using HMODULE = void*;
+#endif
 
 namespace AmpereMfgLoader
 {
 struct Status
 {
-    bool Enabled = false;    // Config says to use it
-    bool DllFound = false;   // dlssg_sm86.dll found in OptiScaler/dlssg_sm86/
-    bool IniWritten = false; // dlssg_sm86.ini generated and written
-    bool DllLoaded = false;  // LoadLibrary succeeded
+    bool Enabled = false;    // Automatically selected on a supported NVIDIA GPU
+    bool DllFound = false;   // Both pinned backend components verified
+    bool IniWritten = false; // Legacy status only; the direct backend writes no INI
+    bool DllLoaded = false;  // Backend and NVIDIA runtime mapped
     bool Embedded = false;
+    bool BackendReady = false;
+    bool PluginBound = false;
+    uint32_t MaxGeneratedFrames = 0;
+    std::string BackendName;
     bool ControlReady = false;
     bool ControlAccepted = false;
     std::optional<Control::RuntimeStatus> Runtime;
@@ -23,11 +32,20 @@ struct Status
 
 Status LastStatus();
 
-/// Called after DLL initialization, once GPU/environment information is available.
-void TrySetup();
+// Call outside DllMain, before OptiScaler initializes its Streamline instance.
+// Hardware discovery happens before the adapter mutex. An unknown GPU remains
+// pending so a later call can retry after discovery has completed.
+bool EnsureSetup();
+bool IsReady();
+HMODULE RuntimeModule();
 
-// Applies the menu's request through the pinned runtime API. Retry until its
-// asynchronous initialization finishes; accepted requests are not resent.
+// Bind only the DLSS-G plugin owned by OptiScaler. This supplies its capability
+// ceiling to the backend; enable/disable/ratio/dynamic options remain in OptiScaler.
+bool ConfigurePlugin(HMODULE plugin);
+
+// Compatibility entry points for older callers. There is no companion control
+// loop: OptiScaler's native DLSSG_Dx12 path is the only source of frame options.
+void TrySetup();
 void UpdateControls();
 
 /// Formats dlssg_sm86.ini content with Native 0.2.3 specification and strict clamping.

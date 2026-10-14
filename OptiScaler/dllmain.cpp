@@ -1481,6 +1481,10 @@ DWORD WINAPI getGpuInfo(LPVOID hModuleVoid)
 
     auto primaryGpu = IdentifyGpu::getPrimaryGpu();
 
+    // This worker runs after DLL_PROCESS_ATTACH. Prepare native DLSSG before
+    // capability probes can initialize OptiScaler's Streamline instance.
+    AmpereMfgLoader::EnsureSetup();
+
     // We don't yet know if the GPU supports FSR 4 so hook any AMD
     if (primaryGpu.vendorId == VendorId::AMD)
         Amdxc64Hooks::Init();
@@ -1502,20 +1506,6 @@ DWORD WINAPI getGpuInfo(LPVOID hModuleVoid)
     // If DX12 already loaded then grab the full GPU info right away
     if (hModuleVoid)
         IdentifyGpu::updateD3d12Capabilities();
-
-    // This existing worker runs after DLL_PROCESS_ATTACH has returned. GPU
-    // enumeration and loading another graphics proxy must not run in DllMain.
-    AmpereMfgLoader::TrySetup();
-    // The embedded proxy initializes asynchronously. Apply saved controls as soon
-    // as its API is ready, even when the user never opens the menu.
-    for (unsigned attempt = 0; attempt < 250; ++attempt)
-    {
-        AmpereMfgLoader::UpdateControls();
-        const auto status = AmpereMfgLoader::LastStatus();
-        if (!status.DllLoaded || status.ControlReady)
-            break;
-        Sleep(20);
-    }
 
     return 0;
 }
@@ -1623,8 +1613,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
 #endif
 
         // Initial state of FG
-        State::Instance().externalFrameGeneration = Config::Instance()->ExternalFrameGeneration.value_or_default() ||
-                                                    Config::Instance()->FGDLSSGAmpereMfgUnlock.value_or_default();
+        State::Instance().externalFrameGeneration = Config::Instance()->ExternalFrameGeneration.value_or_default();
         if (State::Instance().externalFrameGeneration)
         {
             // Only runtime overrides: preserve the user's OptiFG configuration for the next
@@ -1637,7 +1626,7 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD ul_reason_for_call, LPVOID lpReserv
             cfg->ForceXeLL.set_volatile_value(false);
             cfg->UseFakenvapi.set_volatile_value(false);
             cfg->FN_ForceReflex.set_volatile_value(ForceReflex::InGame);
-            LOG_INFO("External frame generation: leaving Streamline/Reflex and MFG control to the game or unlocker; "
+            LOG_INFO("External frame generation: leaving Streamline/Reflex and MFG control to the external provider; "
                      "NR/SR remain available");
         }
 

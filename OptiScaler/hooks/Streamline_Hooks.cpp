@@ -11,6 +11,7 @@
 #include <misc/IdentifyGpu.h>
 #include <framegen/nvngx/Nvngx_FG.h>
 #include <framegen/dlssg/MfgUnlock.h>
+#include <framegen/dlssg/AmpereMfgLoader.h>
 #include <framegen/xefg/XeFG_Dx12.h>
 #include <proxies/KernelBase_Proxy.h>
 #include <proxies/Streamline_Proxy.h>
@@ -1334,7 +1335,18 @@ bool StreamlineHooks::hklocal_dlssg_slOnPluginLoad(sl::param::IParameters* param
     // TODO: do it better than "static" and hoping for the best
     static std::string config;
 
-    bool shouldSpoofArch = Config::Instance()->StreamlineSpoofing.value_or_default();
+    const bool builtInSm86 = AmpereMfgLoader::IsReady();
+    if (builtInSm86 && !AmpereMfgLoader::ConfigurePlugin(Util::GetCallerModule((void*) o_local_dlssg_slOnPluginLoad)))
+    {
+        LOG_ERROR("Could not configure the SM86 backend for OptiScaler's DLSSG plugin");
+        if (pluginJSON != nullptr)
+            *pluginJSON = nullptr;
+        return false;
+    }
+
+    // Only this DLSSG plugin sees the supported architecture during its capability
+    // check. Keep the real architecture for DLSS/DLSSD and the rest of the game.
+    const bool shouldSpoofArch = builtInSm86 || Config::Instance()->StreamlineSpoofing.value_or_default();
 
     uint32_t currentArch = 0;
     SystemCaps* localSystemCaps = nullptr;
@@ -1883,7 +1895,8 @@ void* StreamlineHooks::hklocal_dlssg_slGetPluginFunction(PFN_slGetPluginFunction
 {
     // LOG_DEBUG("{}", functionName);
 
-    if (strcmp(functionName, "slOnPluginLoad") == 0 && State::Instance().activeFgNvngx != FGNvngxReplacement::None)
+    if (strcmp(functionName, "slOnPluginLoad") == 0 &&
+        (State::Instance().activeFgNvngx != FGNvngxReplacement::None || AmpereMfgLoader::IsReady()))
     {
         o_local_dlssg_slOnPluginLoad = (PFN_slOnPluginLoad) original(functionName);
         return &hklocal_dlssg_slOnPluginLoad;

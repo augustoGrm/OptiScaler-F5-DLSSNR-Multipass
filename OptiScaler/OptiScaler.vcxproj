@@ -2,6 +2,7 @@
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <PropertyGroup>
     <BundleSm86Runtime Condition="'$(BundleSm86Runtime)'==''">true</BundleSm86Runtime>
+    <BundleNrRuntime Condition="'$(BundleNrRuntime)'==''">true</BundleNrRuntime>
   </PropertyGroup>
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="ReleaseDebug|x64">
@@ -137,35 +138,19 @@
     <PostBuildEvent>
       <Command>md $(SolutionDir)x64\Release\a\
 move $(SolutionDir)x64\Release\$(TargetFileName) $(SolutionDir)x64\Release\a\
-copy "$(SolutionDir)LICENSE" "$(SolutionDir)x64\Release\a\LICENSE" /Y
-md $(SolutionDir)x64\Release\a\Licenses
-del /Q $(SolutionDir)x64\Release\a\Licenses\*.*
-copy $(SolutionDir)external\xess\LICENSE.txt $(SolutionDir)x64\Release\a\Licenses\XeSS_LICENSE.txt /Y
 copy "$(SolutionDir)READ ME - DLSS Neural Rendering.txt" $(SolutionDir)x64\Release\a\ /Y
-copy "$(SolutionDir)Licenses\RenoDX_ATTRIBUTION.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
-copy "$(SolutionDir)Licenses\MFGUnlock_LICENSE.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
-copy "$(SolutionDir)Licenses\ReShade_GenericDepth_LICENSE.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
-copy "$(SolutionDir)Licenses\DLSS5Feeder_LICENSE.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
-copy "$(SolutionDir)Licenses\Inter_OFL.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
-copy "$(SolutionDir)Licenses\PeripheralWarp_LICENSE.txt" $(SolutionDir)x64\Release\a\Licenses\ /Y
 md $(SolutionDir)x64\Release\a\OptiScaler
-md $(SolutionDir)x64\Release\a\OptiScaler\Licenses
 copy $(SolutionDir)external\xess\bin\*.dll $(SolutionDir)x64\Release\a\OptiScaler\ /Y
-copy $(SolutionDir)external\FidelityFX-SDK\docs\license.md $(SolutionDir)x64\Release\a\OptiScaler\Licenses\FidelityFX_v1_LICENSE.md /Y
 copy $(SolutionDir)external\FidelityFX-SDK\PrebuiltSignedDLL\amd_fidelityfx_vk.dll $(SolutionDir)x64\Release\a\OptiScaler\ /Y
 copy $(SolutionDir)external\FidelityFX-SDK-v2\Kits\FidelityFX\signedbin\amd_fidelityfx_loader_dx12.dll $(SolutionDir)x64\Release\a\OptiScaler\ /Y
 copy $(SolutionDir)external\FidelityFX-SDK-v2\Kits\FidelityFX\signedbin\amd_fidelityfx_upscaler_dx12.dll $(SolutionDir)x64\Release\a\OptiScaler\ /Y
 copy $(SolutionDir)external\FidelityFX-SDK-v2\Kits\FidelityFX\signedbin\amd_fidelityfx_framegeneration_dx12.dll $(SolutionDir)x64\Release\a\OptiScaler\ /Y
-copy $(SolutionDir)external\FidelityFX-SDK-v2\docs\license.md $(SolutionDir)x64\Release\a\Licenses\FidelityFX_v2_LICENSE.md /Y
 md $(SolutionDir)x64\Release\a\OptiScaler\LUTs
 copy "$(SolutionDir)LUTs\*.*" $(SolutionDir)x64\Release\a\OptiScaler\LUTs\ /Y
 copy $(SolutionDir)OptiScaler.ini $(SolutionDir)x64\Release\a\ /Y
 copy $(SolutionDir)setup_windows.bat $(SolutionDir)x64\Release\a\ /Y
-copy $(SolutionDir)setup_linux.sh $(SolutionDir)x64\Release\a\ /Y
 md $(SolutionDir)x64\Release\a\OptiScaler\D3D12_OptiScaler\
-copy "$(SolutionDir)external\directx_agility_sdk\lib\*.dll" $(SolutionDir)x64\Release\a\OptiScaler\D3D12_OptiScaler\ /Y
-copy "$(SolutionDir)external\directx_agility_sdk\LICENSE.txt" $(SolutionDir)x64\Release\a\Licenses\DirectX_LICENSE.txt /Y
-copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y</Command>
+copy "$(SolutionDir)external\directx_agility_sdk\lib\*.dll" "$(SolutionDir)x64\Release\a\OptiScaler\D3D12_OptiScaler\" /Y</Command>
     </PostBuildEvent>
     <PreBuildEvent>
       <Command>powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $date = Get-Date -Format 'yyyyMMdd_HHmmss'; $commit = (git -C '$(SolutionDir)' rev-parse --short HEAD 2&gt;$null); if (-not $commit) { $commit = 'unknown' }; function Write-Retry([string]$path, [string]$value) { for ($i = 0; $i -lt 30; $i++) { try { [System.IO.File]::WriteAllText($path, $value + [Environment]::NewLine, [System.Text.Encoding]::ASCII); return } catch [System.IO.IOException] { if ($i -eq 29) { throw }; Start-Sleep -Milliseconds 100 } } }; Write-Retry '$(ProjectDir)resource_build_date.h' ('#define VER_BUILD_DATE \"' + $date + '\"'); Write-Retry '$(ProjectDir)resource_build_commit.h' ('#define VER_BUILD_COMMIT \"' + $commit + '\"');"</Command>
@@ -232,6 +217,9 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="framegen\dlssg\MfgUnlockFlip.h" />
     <ClInclude Include="framegen\dlssg\AmpereMfgLoader.h" />
     <ClInclude Include="framegen\dlssg\Sm86Control.h" />
+    <ClInclude Include="framegen\dlssg\Sm86BackendAbi.h" />
+    <ClInclude Include="dlssnr\DlssNrBundle.h" />
+    <ClInclude Include="EmbeddedNotices.h" />
     <ClInclude Include="framegen\dlssg\Sm86Menu.h" />
     <ClInclude Include="dlssnr\PassProfiles.h" />
     <ClInclude Include="framegen\ffx\FSRFG_Dx12.h" />
@@ -639,6 +627,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="framegen\dlssg\Kcd2Hdr.cpp" />
     <ClCompile Include="framegen\dlssg\MfgUnlock.cpp" />
     <ClCompile Include="framegen\dlssg\AmpereMfgLoader.cpp" />
+    <ClCompile Include="dlssnr\DlssNrBundle.cpp" />
+    <ClCompile Include="EmbeddedNotices.cpp" />
     <ClCompile Include="framegen\ffx\FSRFG_Dx12.cpp" />
     <ClCompile Include="framegen\ffx\FSRFG_Vk.cpp" />
     <ClCompile Include="framegen\IFGFeature.cpp" />
@@ -992,6 +982,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="framegen\dlssg\Sm86Runtime.rc" Condition="'$(BundleSm86Runtime)'=='true'" />
+    <ResourceCompile Include="dlssnr\NrRuntime.rc" Condition="'$(BundleNrRuntime)'=='true'" />
+    <ResourceCompile Include="EmbeddedNotices.rc" />
     <ResourceCompile Include="OptiScaler.rc">
       <PreprocessorDefinitions>OPTISCALER_BUILD_METADATA;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ResourceCompile>
@@ -1003,11 +995,11 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
   <Target Name="PrepareBundledSm86" BeforeTargets="ResourceCompile" Condition="'$(BundleSm86Runtime)'=='true'">
     <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\get_sm86_runtime.ps1&quot;" />
   </Target>
-  <Target Name="CopyBundledSm86Notices" AfterTargets="Build" Condition="'$(BundleSm86Runtime)'=='true'">
-    <ItemGroup>
-      <Sm86Notices Include="$(ProjectDir)..\redist\sm86\*.txt;$(ProjectDir)..\redist\sm86\manifest.json" />
-    </ItemGroup>
-    <Copy SourceFiles="@(Sm86Notices)" DestinationFolder="$(SolutionDir)x64\$(Configuration)\a\Licenses\sm86" />
+  <Target Name="PrepareBundledNrRuntime" BeforeTargets="ResourceCompile" Condition="'$(BundleNrRuntime)'=='true'">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\get_nr_runtime.ps1&quot;" />
+  </Target>
+  <Target Name="PrepareEmbeddedNotices" BeforeTargets="ResourceCompile" DependsOnTargets="PrepareBundledSm86;PrepareBundledNrRuntime">
+    <Exec Command="powershell -NoProfile -ExecutionPolicy Bypass -File &quot;$(ProjectDir)..\build_embedded_notices.ps1&quot;" />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

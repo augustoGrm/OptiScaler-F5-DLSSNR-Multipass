@@ -1,0 +1,61 @@
+{
+  "version": "310.8.0.0-cross-generation",
+  "source": "Exact DLL attachments supplied by the repository owner. The model hash also matches INSTALL-DLSSNR.md.",
+  "bundle_id": "bc5a4c3f9f92213b7440cfd7153949811221aed162baa16441eca9db51846124",
+  "notes": [
+    "The forwarder must keep its original filename because the model validates its caller module.",
+    "The cross-generation model is modified; its NVIDIA Authenticode signature is not valid.",
+    "The original binaries are preserved byte for byte, including vendor/build metadata.",
+    "The model is stored as six verified build-input parts; get_nr_runtime.ps1 reconstructs the original DLL before resource compilation."
+  ],
+  "files": [
+    {
+      "path": "nvngx.dll_dlssnr.dll",
+      "role": "forwarder",
+      "size": 152064,
+      "sha256": "89766bcb38a9caea9a2e3f767923e6cda8b9b51a6a66ca14ac9473d734e12efa",
+      "resource_id": 31101,
+      "resource_macro": "NR_FORWARDER_FILE"
+    },
+    {
+      "path": "nvngx_dlssnr.dll",
+      "role": "model",
+      "size": 165840496,
+      "sha256": "e67dee209320cdafe0e93e45675d7aa34323a53acc57a72b2e40a181581c989a",
+      "resource_id": 31102,
+      "resource_macro": "NR_MODEL_FILE",
+      "parts": [
+        {
+          "path": "model/part001",
+          "size": 31457280,
+          "sha256": "06e1045aa9cbb5735d0c89d3f907b9e7fb5f598b73cad0d2892aeee33887588b"
+        },
+        {
+          "path": "model/part002",
+          "size": 31457280,
+          "sha256": "3bb00e43774e05034cfd67145682dfa2e132f83cdfa9cf32f4c4110dde836fdd"
+        },
+        {
+          "path": "model/part003",
+          "size": 31457280,
+          "sha256": "321b16fb079c285bd1aac7c099f6d7369cd3829b9b3d0df842d99aa38f3f7f80"
+        },
+        {
+          "path": "model/part004",
+          "size": 31457280,
+          "sha256": "4cc8df515fc3d71b72b7d9943304282b952ae6e18b08d50def1e656c3e625387"
+        },
+        {
+          "path": "model/part005",
+          "size": 31457280,
+          "sha256": "54d995bcb944dfa856770e10a1d5bddd32db025e291f4776cb5415af8b584314"
+        },
+        {
+          "path": "model/part006",
+          "size": 8554096,
+          "sha256": "f0cbc387bc7ba0fa8f744cbbb87c7c7af095b314797af68235648b58fb374ac5"
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,6 @@
+// Original, hash-pinned user inputs. The loader verifies both before use.
+#include <winres.h>
+#include "NrRuntimePath.h"
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+31101 RCDATA NR_FORWARDER_FILE
+31102 RCDATA NR_MODEL_FILE

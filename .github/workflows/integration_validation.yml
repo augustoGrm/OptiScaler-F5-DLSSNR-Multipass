@@ -25,10 +25,16 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
+      - name: Prepare native Frame Generation runtime and notices
+        shell: pwsh
+        run: ./get_streamline.ps1 -Destination .dependencies/streamline/verified/streamline -AcceptNvidiaLicenses
       - name: Verify embedded runtime input
         shell: pwsh
         run: |
           ./get_sm86_runtime.ps1
+          ./get_nr_runtime.ps1
+          python tests/nr_runtime_contract.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tests/sm86_runtime_contract.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build x64 solution with embedded SM86
@@ -39,17 +45,25 @@ jobs:
       - name: Check SM86 controls and NR host rules
         shell: pwsh
         run: |
-          $tests = @('sm86_control_smoke', 'menu_pages_smoke', 'nr_native_low_latency_smoke', 'nr_vk_copy_rule_smoke', 'nr_vk_hidden_surface_rule_smoke', 'nr_retry_request_smoke')
+          $tests = @('sm86_backend_abi_smoke', 'menu_pages_smoke', 'nr_native_low_latency_smoke', 'nr_vk_copy_rule_smoke', 'nr_vk_hidden_surface_rule_smoke', 'nr_retry_request_smoke')
           foreach ($test in $tests) {
             cl /nologo /std:c++20 /EHsc /W4 /Iexternal\vulkan\include "tests\$test.cpp" "/Fe:$env:RUNNER_TEMP\$test.exe"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             & "$env:RUNNER_TEMP\$test.exe"
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+      - name: Check Windows installation and maintenance
+        if: matrix.configuration == 'Release'
+        shell: pwsh
+        run: ./tests/windows_install_smoke.ps1
+      - name: Assemble clean Windows package
+        if: matrix.configuration == 'Release'
+        shell: pwsh
+        run: ./package_release.ps1 -Version "v0.1.30-ci-${{ github.run_id }}" -PackageOutputsOnly -IncludeDlssFrameGeneration -AcceptNvidiaLicenses -AcceptAmpereMfgLicenses
       - name: Upload Release build
         if: matrix.configuration == 'Release'
         uses: actions/upload-artifact@v4
         with:
           name: OptiScaler-F5-master-SM86-Release-${{ github.sha }}
-          path: x64/Release/a/
+          path: release/*.zip
           if-no-files-found: error

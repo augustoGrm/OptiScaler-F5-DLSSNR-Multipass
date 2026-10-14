@@ -1,4 +1,5 @@
 #pragma once
+#include <dlssnr/DlssNrBundle.h>
 
 #include "SysUtils.h"
 #include "Util.h"
@@ -616,6 +617,16 @@ class NVNGXProxy
 
     static void GetFeatureCommonInfo(NVSDK_NGX_FeatureCommonInfo* fcInfo)
     {
+        // NGX caches the initial provider list. Make the embedded NR model
+        // available before the first SR/FG initialization can lock that list.
+        if (const auto model = DlssNrBundle::GetModel())
+        {
+            const auto directory = model->parent_path().wstring();
+            auto& paths = State::Instance().NVNGX_FeatureInfo_Paths;
+            if (std::find(paths.begin(), paths.end(), directory) == paths.end())
+                paths.push_back(directory);
+        }
+
         if (State::Instance().NVNGX_DLSS_Path.has_value())
         {
             std::filesystem::path dlssPath(State::Instance().NVNGX_DLSS_Path.value());

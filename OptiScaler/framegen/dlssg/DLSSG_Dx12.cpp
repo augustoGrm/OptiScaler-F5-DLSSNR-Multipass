@@ -2,6 +2,7 @@
 
 #include "DLSSG_Dx12.h"
 #include "Kcd2Hdr.h"
+#include "AmpereMfgLoader.h"
 
 #include <hudfix/Hudfix_Dx12.h>
 #include <hudfix/Hudfix_Dx11.h>
@@ -33,6 +34,41 @@ feature_version DLSSG_Dx12::Version()
 }
 
 HWND DLSSG_Dx12::Hwnd() { return _hwnd; }
+
+void DLSSG_Dx12::UpdateCapabilities(bool force)
+{
+    if (!force && !AmpereMfgLoader::IsReady())
+        return;
+
+    const auto now = std::chrono::steady_clock::now();
+    if (!force && now < _nextCapabilitiesPoll)
+        return;
+    _nextCapabilitiesPoll = now + std::chrono::milliseconds(250);
+
+    const auto getState = StreamlineProxy::DLSSGGetState();
+    if (getState == nullptr)
+        return;
+
+    sl::DLSSGState dlssgState {};
+    sl::DLSSGOptions dlssgOptions {};
+    if (getState(viewport, dlssgState, &dlssgOptions) != sl::Result::eOk)
+        return;
+
+    // The built-in backend may finish configuring the plugin after swapchain
+    // creation. Publish only capabilities reported by the active plugin, and
+    // poll again so an early 2X-only answer does not stick for the whole session.
+    const auto maxCount = std::max(dlssgState.numFramesToGenerateMax, MfgUnlock::UnlockedMax());
+    if (maxCount > 0)
+    {
+        const auto supported =
+            static_cast<int>(std::min(maxCount, static_cast<unsigned int>(std::numeric_limits<int>::max())));
+        if (_maxInterpolationCount != supported)
+            LOG_INFO("Max supported DLSSG interpolations: {}", supported);
+        _maxInterpolationCount = supported;
+        State::Instance().dlssgMfgMax = maxCount;
+    }
+    _supportsDMFG = dlssgState.bIsDynamicMFGSupported == sl::Boolean::eTrue;
+}
 
 bool DLSSG_Dx12::CreateSwapchainInternal(IDXGIFactory* factory, ID3D12CommandQueue* cmdQueue,
                                          DXGI_SWAP_CHAIN_DESC* desc, IDXGISwapChain** swapChain)
@@ -91,16 +127,7 @@ bool DLSSG_Dx12::CreateSwapchainInternal(IDXGIFactory* factory, ID3D12CommandQue
         return false;
     }
 
-    sl::DLSSGState dlssgState {};
-    sl::DLSSGOptions dlssgOptions {};
-    if (StreamlineProxy::DLSSGGetState()(viewport, dlssgState, &dlssgOptions) == sl::Result::eOk)
-    {
-        State::Instance().dlssgMfgMax = std::max(dlssgState.numFramesToGenerateMax, MfgUnlock::UnlockedMax());
-        _maxInterpolationCount = State::Instance().dlssgMfgMax.value();
-        LOG_INFO("Max supported interpolations: {}", dlssgState.numFramesToGenerateMax);
-
-        _supportsDMFG = dlssgState.bIsDynamicMFGSupported == sl::Boolean::eTrue;
-    }
+    UpdateCapabilities(true);
 
     _gameCommandQueue = cmdQueue;
     _swapChain = *swapChain;
@@ -170,16 +197,7 @@ bool DLSSG_Dx12::CreateSwapchain1Internal(IDXGIFactory* factory, ID3D12CommandQu
         }
     }
 
-    sl::DLSSGState dlssgState {};
-    sl::DLSSGOptions dlssgOptions {};
-    if (StreamlineProxy::DLSSGGetState()(viewport, dlssgState, &dlssgOptions) == sl::Result::eOk)
-    {
-        State::Instance().dlssgMfgMax = std::max(dlssgState.numFramesToGenerateMax, MfgUnlock::UnlockedMax());
-        _maxInterpolationCount = State::Instance().dlssgMfgMax.value();
-        LOG_INFO("Max supported interpolations: {}", dlssgState.numFramesToGenerateMax);
-
-        _supportsDMFG = dlssgState.bIsDynamicMFGSupported == sl::Boolean::eTrue;
-    }
+    UpdateCapabilities(true);
 
     _gameCommandQueue = cmdQueue;
     _swapChain = *swapChain;
@@ -287,13 +305,8 @@ bool DLSSG_Dx12::Dispatch()
 
     auto& state = State::Instance();
 
-    if (Config::Instance()->FGDLSSGInterpolationCount.value_or_default() > _maxInterpolationCount)
-    {
-        Config::Instance()->FGDLSSGInterpolationCount = _maxInterpolationCount;
-        LOG_WARN("Requested interpolation count is higher than max supported, setting to max: {}",
-                 _maxInterpolationCount);
-    }
-
+    // Clamp this dispatch to the active plugin's capabilities without overwriting
+    // a saved multiplier while the built-in backend is still preparing it.
     const int targetCount = std::clamp(
         Config::Instance()->FGInterpolationCount(Config::Instance()->FGDLSSGInterpolationCount.value_or_default()), 1,
         std::max(_maxInterpolationCount, 1));
@@ -544,6 +557,7 @@ void DLSSG_Dx12::EvaluateState(ID3D12Device* device, FG_Constants& fgConstants)
     }
 
     _constants = fgConstants;
+    UpdateCapabilities();
 
     // If FG Enabled from menu
     if (Config::Instance()->IsFGEnabled())

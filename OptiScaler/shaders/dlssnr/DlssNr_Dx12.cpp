@@ -7,6 +7,7 @@
 #include <resource_tracking/ResTrack_Dx12.h>
 
 #include <dlssnr/DlssNr.h>
+#include <dlssnr/DlssNrBundle.h>
 #include <dlssnr/DlssNrNative.h>
 #include <dlssnr/ResidualFg.h>
 #include <dlssnr/DlssNrDetailReuse.h>
@@ -689,13 +690,7 @@ std::filesystem::path g_dllDir;
 
 const char* SelectedModelFile() { return "nvngx_dlssnr.dll"; }
 
-std::optional<std::filesystem::path> FindSelectedModel()
-{
-    auto path = Util::FindFilePath(g_dllDir, SelectedModelFile());
-    if (!path.has_value())
-        path = Util::FindFilePath(Util::ExePath().remove_filename(), SelectedModelFile());
-    return path;
-}
+std::optional<std::filesystem::path> FindSelectedModel() { return DlssNrBundle::GetModel(); }
 
 // Loads the forwarder that owns the calls into the snippet.
 bool EnsureForwarder()
@@ -706,12 +701,9 @@ bool EnsureForwarder()
     if (g_dllDir.empty())
         g_dllDir = Util::DllPath().remove_filename();
 
-    // Beside OptiScaler first, then beside the executable: someone dropping this into a game folder may
-    // reasonably put it in either place.
-    auto found = Util::FindFilePath(g_dllDir, "nvngx.dll_dlssnr.dll");
-
-    if (!found.has_value())
-        found = Util::FindFilePath(Util::ExePath().remove_filename(), "nvngx.dll_dlssnr.dll");
+    // A bundled build always uses its verified pair; external-only builds keep the
+    // original OptiScaler/executable search through the shared resolver.
+    auto found = DlssNrBundle::GetForwarder();
 
     if (!found.has_value())
     {
@@ -815,10 +807,7 @@ void ReportScalingRatios()
     if (g_nr.queryRatio == nullptr || g_nr.capabilityParams == nullptr)
         return;
 
-    auto snippet = Util::FindFilePath(g_dllDir, "nvngx_dlssnr.dll");
-
-    if (!snippet.has_value())
-        snippet = Util::FindFilePath(Util::ExePath().remove_filename(), "nvngx_dlssnr.dll");
+    auto snippet = FindSelectedModel();
 
     if (!snippet.has_value())
         return;
@@ -5932,10 +5921,7 @@ void ProbeD3D11(void* d3d11Device)
         return;
     }
 
-    auto snippet = Util::FindFilePath(g_dllDir, "nvngx_dlssnr.dll");
-
-    if (!snippet.has_value())
-        snippet = Util::FindFilePath(Util::ExePath().remove_filename(), "nvngx_dlssnr.dll");
+    auto snippet = FindSelectedModel();
 
     if (!snippet.has_value())
         return;

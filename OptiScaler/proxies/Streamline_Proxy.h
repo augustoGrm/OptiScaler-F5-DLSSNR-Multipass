@@ -8,6 +8,8 @@
 #include <proxies/Ntdll_Proxy.h>
 #include <proxies/KernelBase_Proxy.h>
 #include <hooks/Streamline_Hooks.h>
+#include <framegen/dlssg/AmpereMfgLoader.h>
+#include <dlssnr/DlssNrBundle.h>
 
 #include <sl.h>
 #include <sl_pcl.h>
@@ -69,6 +71,22 @@ class StreamlineProxy
         if (_dll != nullptr)
             return true;
 
+        // Prepare the compute backend before loading our Streamline instance.
+        // No proxy/companion owns the game's swapchain or overrides its options.
+        const bool nativeDlssg = State::Instance().activeFgOutput == FGOutput::DLSSG &&
+                                 State::Instance().activeFgNvngx == FGNvngxReplacement::None &&
+                                 !State::Instance().externalFrameGeneration;
+        if (nativeDlssg)
+        {
+            AmpereMfgLoader::EnsureSetup();
+            const auto backend = AmpereMfgLoader::LastStatus();
+            if (backend.Enabled && !backend.BackendReady)
+            {
+                LOG_ERROR("DLSSG backend initialization failed: {}", backend.ErrorMessage);
+                return false;
+            }
+        }
+
         auto owner = State::GetOwner();
         if (State::Instance().activeFgOutput == FGOutput::DLSSG)
         {
@@ -93,8 +111,13 @@ class StreamlineProxy
             State::Instance().optiSlInterposer = _dll;
             auto slCommonPath = localSlPath / L"sl.common.dll";
             State::Instance().optiSlCommon = NtdllProxy::LoadLibraryExW_Ldr(slCommonPath.c_str(), NULL, NULL);
-            auto dlssgPath = localSlPath / L"nvngx_dlssg.dll"; // TODO: maybe some search?
-            State::Instance().optiDLSSG = NtdllProxy::LoadLibraryExW_Ldr(dlssgPath.c_str(), NULL, NULL);
+            if (nativeDlssg && AmpereMfgLoader::IsReady())
+                State::Instance().optiDLSSG = AmpereMfgLoader::RuntimeModule();
+            else
+            {
+                auto dlssgPath = localSlPath / L"nvngx_dlssg.dll";
+                State::Instance().optiDLSSG = NtdllProxy::LoadLibraryExW_Ldr(dlssgPath.c_str(), NULL, NULL);
+            }
 
             return HookStreamline(_dll);
         }
@@ -361,12 +384,21 @@ class StreamlineProxy
         auto nvngxDlssPath = Util::FindFilePath(exePath, "nvngx_dlss.dll");
         auto nvngxDlssDPath = Util::FindFilePath(exePath, "nvngx_dlssd.dll");
         auto nvngxDlssGPath = Util::FindFilePath(exePath, "nvngx_dlssg.dll");
-        auto nvngxDlssNrPath = Util::FindFilePath(exePath, "nvngx_dlssnr.dll");
+        auto nvngxDlssNrPath = DlssNrBundle::GetModel();
 
         std::vector<std::wstring> pathStorage;
 
         std::filesystem::path mainDllPath(Config::Instance()->MainDllPath.value());
         mainDllPath = mainDllPath / L"streamline";
+        if (auto runtime = AmpereMfgLoader::RuntimeModule();
+            runtime != nullptr && State::Instance().activeFgNvngx == FGNvngxReplacement::None)
+        {
+            // NGX must find the exact installed/patched provider before the game's
+            // own runtime or any OTA copy with the same filename.
+            wchar_t path[MAX_PATH] {};
+            if (GetModuleFileNameW(runtime, path, MAX_PATH) != 0)
+                pathStorage.push_back(std::filesystem::path(path).parent_path().wstring());
+        }
         pathStorage.push_back(mainDllPath.wstring());
 
         if (nvngxDlssGPath.has_value())
@@ -410,24 +442,15 @@ class StreamlineProxy
         auto initResult = StreamlineProxy::Init()(pref, sl::kSDKVersion);
 
         sl::AdapterInfo adapterInfo {};
-        if (StreamlineProxy::IsFeatureSupported()(sl::kFeatureDLSS_G, adapterInfo) != sl::Result::eOk)
+        const auto supportResult = StreamlineProxy::IsFeatureSupported()(sl::kFeatureDLSS_G, adapterInfo);
+        if (supportResult != sl::Result::eOk)
         {
-            if (State::Instance().activeFgNvngx == FGNvngxReplacement::None)
-            {
-                Config::Instance()->FGNvngxReplacement = FGNvngxReplacement::Nukems;
-                Config::Instance()->SaveIni();
-
-                MessageBoxW(NULL,
-                            L"You've tried to use real DLSSG, but it's not supported\n"
-                            "Opti will try to use a replacement, restart the game",
-                            L"No DLSSG Support", MB_ICONWARNING | MB_OK);
-
-                std::exit(1);
-            }
-            else
-            {
-                LOG_ERROR("FG Nvngx replacement was selected but SL failed to init DLSSG");
-            }
+            LOG_ERROR("DLSSG is unavailable from the initialized Streamline plugin (result {:X}); "
+                      "keeping the selected FG configuration",
+                      (UINT) supportResult);
+            State::EnableChecks(owner);
+            _isD3D12Requested = false;
+            return false;
         }
 
         State::EnableChecks(owner);

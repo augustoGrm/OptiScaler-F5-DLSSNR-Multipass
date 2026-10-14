@@ -1968,4 +1968,28 @@
     </None>
     <None Include="shaders\magnifier\precompile\Magnifier_Shader_Vk.spv" />
   </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="EmbeddedNotices.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="dlssnr\DlssNrBundle.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="framegen\dlssg\Sm86BackendAbi.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="EmbeddedNotices.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="dlssnr\DlssNrBundle.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ResourceCompile Include="framegen\dlssg\Sm86Runtime.rc" />
+    <ResourceCompile Include="dlssnr\NrRuntime.rc" />
+    <ResourceCompile Include="EmbeddedNotices.rc" />
+  </ItemGroup>
 </Project>
