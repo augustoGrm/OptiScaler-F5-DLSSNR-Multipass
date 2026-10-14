@@ -545,6 +545,23 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
 
     state.currentFeature = _feature.get();
 
+    // NR off: the call is here for frame generation, which takes motion and depth from it, not for an upscale. The
+    // picture is already full size and antialiased, so the backend's pass (1.5-3 ms at 1440p-4K on a mid-range card,
+    // more with FSR 4 or XeSS off Intel) is skipped and the picture goes on as the game made it. The HUD fix still
+    // reads Output as its HUD-less picture (UpscaleEnd, recorded before the backend's pass would run): the picture is
+    // copied there for it.
+    const bool passThrough = !cfg.DlssNrEnabled.value_or_default();
+
+    if (passThrough && cfg.FGHUDFix.value_or_default())
+    {
+        const auto colorNow = color == _input ? inColor : pictureNow;
+        Transition(cmd, color, colorNow, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Transition(cmd, _output, fgOutput, D3D12_RESOURCE_STATE_COPY_DEST);
+        cmd->CopyResource(_output, color);
+        Transition(cmd, _output, D3D12_RESOURCE_STATE_COPY_DEST, fgOutput);
+        Transition(cmd, color, D3D12_RESOURCE_STATE_COPY_SOURCE, colorNow);
+    }
+
     UpscalerInputsDx12::UpscaleStart(cmd, _params, _feature.get());
     UpscalerInputsDx12::UpscaleEnd(cmd, _params, _feature.get());
 
@@ -553,6 +570,13 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     Transition(cmd, _output, fgOutput, inOutput);
 
     bool evaluated = false;
+
+    if (passThrough)
+    {
+        // FSR frame generation waits for the feature's first counted frame
+        _feature->CountFrame();
+    }
+    else
     {
         ScopedSkipHeapCapture skip {};
         try
@@ -571,10 +595,23 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
     if (evaluated)
         DlssNr::EvaluateAfterUpscale(cmd, _params);
 
+    if (passThrough != _passThroughLogged || _evaluations == 0)
+    {
+        _passThroughLogged = passThrough;
+        LOG_INFO("Virtual upscaler: {}", passThrough
+                                             ? "Neural Rendering is off: the picture goes to frame generation as "
+                                               "it is, no upscaler pass"
+                                             : "upscaler pass on");
+    }
+
     if (_evaluations < 8 || _evaluations % 300 == 0)
         LOG_INFO("Virtual upscaler: Evaluate {} -> {}, {} {}x{}, colour format {}{}, reset {}, depth reversed {}",
-                 _evaluations, evaluated, _backendName, key.width, key.height, (int) key.format,
-                 copyIn ? " (copied)" : "", frame.reset, _featureKey.depthReversed);
+                 _evaluations,
+                 passThrough ? "pass-through"
+                 : evaluated ? "true"
+                             : "false",
+                 _backendName, key.width, key.height, (int) key.format, copyIn ? " (copied)" : "", frame.reset,
+                 _featureKey.depthReversed);
 
     ++_evaluations;
 
@@ -599,7 +636,7 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
         Transition(cmd, _output, inOutput, kWrite);
     }
 
-    return evaluated;
+    return evaluated || passThrough;
 }
 
 } // namespace native

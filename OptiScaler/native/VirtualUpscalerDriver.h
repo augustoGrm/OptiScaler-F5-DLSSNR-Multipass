@@ -104,6 +104,7 @@ class VirtualUpscalerDriver
     ID3D12DescriptorHeap* _rtvHeap = nullptr;
 
     uint64_t _evaluations = 0;
+    bool _passThroughLogged = false; // the pass-through state the log last said (NR off: no upscaler pass)
     uint32_t _zeroSizeFrames = 0;
     std::string _error;
 };
