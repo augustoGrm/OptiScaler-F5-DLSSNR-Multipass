@@ -229,7 +229,9 @@ struct GameCapInputs
     bool splitLimiterKeepsCap = false; // native::lowlatency::SplitLimiterKeepsCap
     bool xellHoldsCap = false;         // native::xefgreflex::XellHoldsCap (Force Disable, idle XeLL)
     bool fsrFgOutput = false;          // FSR FG is the frame generation output
-    bool fgActive = false;             // frame generation shows a generated frame now (FSR FG halving)
+    // OptiScaler's frame generation generates frames (IFGFeature::IsGenerating): steady over a frame's presents. A
+    // per-present value (generated or real) would hand the cap back and forth every frame.
+    bool fgActive = false;
     bool blocked = false;              // Input Off
     uint32_t xefgShownPerRendered = 1; // native::lowlatency::XefgShownPerRendered
     uint8_t dlssgFramesToGenerate = 0; // the game's DLSS FG, seen from its async markers
@@ -267,8 +269,9 @@ constexpr GameCap CapForGame(const GameCapInputs& in)
     }
     else if (in.gameSetSleepMode)
     {
-        // Real Reflex markers with FSR FG and Reflex off: huge input latency, the limiter keeps it
-        out.outputHoldsCap = !in.realNvapi || !in.fgActive || in.gameLowLatencyOn;
+        // Real Reflex markers with FSR FG and Reflex off: huge input latency, the limiter keeps it. Not for
+        // OptiScaler's DLSS FG output: its Streamline sets low latency on itself and carries the cap (StreamlineCapUs).
+        out.outputHoldsCap = !in.realNvapi || !in.fsrFgOutput || !in.fgActive || in.gameLowLatencyOn;
         out.showWarning = in.fsrFgOutput && in.realNvapi && in.fgActive && in.gameLowLatencyOn;
     }
 

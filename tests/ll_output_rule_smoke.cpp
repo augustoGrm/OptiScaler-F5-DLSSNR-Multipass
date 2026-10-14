@@ -236,8 +236,14 @@ int main()
         in.gameLowLatencyOn = false;
         c = CapForGame(in);
         CHECK(!c.outputHoldsCap && !c.showWarning);
+
+        // ... but OptiScaler's DLSS FG output generating next to the game's Reflex off: Reflex keeps it (its Streamline
+        // carries the cap), not handed to the limiter
         in.fsrFgOutput = false;
+        c = CapForGame(in);
+        CHECK(c.outputHoldsCap && c.fps == 75.0f && !c.showWarning);
         in.fgActive = false;
+        CHECK(CapForGame(in).outputHoldsCap); // the same answer on every present
 
         // A game that never set a sleep mode, no XeFG: the limiter
         GameCapInputs markersOnly = in;

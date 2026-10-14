@@ -1315,7 +1315,7 @@ void InputCommon::apply_xefg_xell_mode(const LowLatencyTech* output)
 
 // Once per present, from the present thread only (wrapped swap chain's LocalPresent through ReflexHooks::update): the
 // static locals below rely on that
-void InputCommon::update(bool fgActive)
+void InputCommon::update()
 {
     auto& state = State::Instance();
     auto config = Config::Instance();
@@ -1422,7 +1422,7 @@ void InputCommon::update(bool fgActive)
             forceDisabled || blocked || side != lloutput::XefgLatency::XeLL, intelGpu,
             native::lowlatency::XefgGenerating(), state.fgPresentVsync.load(std::memory_order_relaxed));
         in.fsrFgOutput = state.activeFgOutput == FGOutput::FSRFG;
-        in.fgActive = fgActive;
+        in.fgActive = state.currentFG != nullptr && state.currentFG->IsGenerating();
         in.blocked = blocked;
         in.xefgShownPerRendered = native::lowlatency::XefgShownPerRendered();
         in.dlssgFramesToGenerate = ReflexHooks::dlssgFrameCountToGenerate();

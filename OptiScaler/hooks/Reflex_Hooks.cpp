@@ -1125,7 +1125,7 @@ void ReflexHooks::update(bool fgActive, bool isVulkan)
     // output included; Force State reaches its output whatever owns frame generation. The rest is for Vulkan games.
     if (!isVulkan)
     {
-        InputCommon::update(fgActive);
+        InputCommon::update();
         return;
     }
 

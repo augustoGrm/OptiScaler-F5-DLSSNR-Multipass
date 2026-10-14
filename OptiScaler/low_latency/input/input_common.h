@@ -215,8 +215,8 @@ class InputCommon
     static void stop_output(bool release = true);
 
     // Every present of a D3D game (ReflexHooks::update): Force State, and who keeps OptiScaler's frame cap
-    // (OutputRule.h CapForGame) with the rate it goes in at. `fgActive`: frame generation shows a generated frame now.
-    static void update(bool fgActive = false);
+    // (OutputRule.h CapForGame) with the rate it goes in at.
+    static void update();
 
     // Around each of OptiScaler's XeFG's presents (wrapped swap chain): next to a Reflex or AntiLag 2 output, out of
     // band present markers with the frame id of the batch XeFG marked, as DLSSG sends them; AntiLag 2 takes the frame
