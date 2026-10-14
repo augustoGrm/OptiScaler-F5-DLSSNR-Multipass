@@ -122,6 +122,13 @@ int main()
         CHECK(ResolveFinished(kAuto, true, Screen::Sdr, false, true).choice.automatic);
         CHECK(std::strcmp(ResolveFinished(kAuto, true, Screen::Pq, false, true).choice.reason,
                           "screen colour space HDR10") == 0);
+        // An HDR10 picture is R10G10B10A2_UNORM (native input decodes it to scRGB itself, so the shared pass converts
+        // nothing); an FP16 buffer reported as HDR10 stays refused.
+        {
+            const auto hdr10 = ResolveFinished(kAuto, true, Screen::Pq, false, true);
+            CHECK(hdr10.supported && hdr10.screen == Screen::Pq && hdr10.shaderConversion == 0);
+            CHECK(!ResolveFinished(kAuto, true, Screen::Pq, true, false).supported);
+        }
 
         // Forced sRGB / gamma 2.2 on an FP16 buffer: the case Auto refuses, now taken as SDR.
         const auto srgbOnFp16 = ResolveFinished(2, true, Screen::Scrgb, true, false);
