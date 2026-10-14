@@ -384,15 +384,13 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         }
     }
 
-    // On the Vulkan bridge (native/VkPresentBridge.h) this is frame generation's D3D12 swapchain for a Vulkan game: the
-    // game's own Vulkan present runs the frame's low latency update (OutputRule.h RunsLowLatencyUpdate). A dxvk game's
-    // runs here, on the game's thread.
-    const bool vulkanBridge = State::Instance().swapchainInteropApi == SwapchainInteropApi::VkwDx12;
+    // The game's own present runs the frame's low latency update (OutputRule.h RunsLowLatencyUpdate), a dxvk game's on
+    // the game's thread. On the Vulkan bridge (native/VkPresentBridge.h) a D3D12 present here is frame generation's for
+    // a Vulkan game, whose own Vulkan present runs it.
+    const bool bridgeOutput = State::Instance().swapchainInteropApi == SwapchainInteropApi::VkwDx12 && !isD3D11;
     auto fg = State::Instance().currentFG;
 
-    if (lloutput::RunsLowLatencyUpdate(lloutput::PresentSite::Dxgi, IdentifyGpu::getPrimaryGpu().usesDxvk,
-                                       vulkanBridge))
-        ReflexHooks::update();
+    ReflexHooks::presentUpdate(lloutput::PresentSite::Dxgi, bridgeOutput);
 
     XellHooks::update();
 

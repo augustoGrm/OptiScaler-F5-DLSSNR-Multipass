@@ -29,6 +29,7 @@
 #include <hooks/Reflex_Hooks.h>
 
 #include <deque>
+#include <set>
 
 static bool marker_supported(InputMarkerMode mode, MarkerType type)
 {
@@ -74,6 +75,7 @@ bool InputCommon::deinit_current_tech()
     // currently_active_tech becomes nullptr
     // but we need to wait for all users of the old one to release
     auto old_tech = currently_active_tech.exchange(nullptr);
+    reflex_vk_stale = false;
 
     if (old_tech)
     {
@@ -97,9 +99,18 @@ bool InputCommon::deinit_current_tech()
     return false;
 }
 
-// The driver's Reflex on a Vulkan device (OutputRule.h ChooseReflexVk): VK_NV_low_latency2 where the device has it,
-// else NvAPI_Vulkan's. nvapi is only asked when VK_NV_low_latency2 can't run.
-static std::shared_ptr<LowLatencyTech> MakeReflexVk(VkDevice device)
+// Devices whose VK_NV_low_latency2 sleep never signalled (ReflexVk::gave_up_sleeping), until they go
+static std::mutex g_lowLatency2FailedMutex;
+static std::set<VkDevice> g_lowLatency2Failed;
+
+static bool LowLatency2Failed(VkDevice device)
+{
+    std::scoped_lock lock(g_lowLatency2FailedMutex);
+    return g_lowLatency2Failed.contains(device);
+}
+
+// What the device has for the driver's Reflex now, without asking nvapi
+static lloutput::ReflexVkInputs ReflexVkInputsOf(VkDevice device)
 {
     const auto swapchain = VulkanHooks::LatencySwapchainOf(device);
 
@@ -107,6 +118,15 @@ static std::shared_ptr<LowLatencyTech> MakeReflexVk(VkDevice device)
     in.lowLatency2Device = VulkanHooks::LowLatency2On(device);
     in.swapchainKnown = swapchain.swapchain != VK_NULL_HANDLE;
     in.swapchainLatencyMode = swapchain.latencyMode;
+    in.lowLatency2Failed = LowLatency2Failed(device);
+    return in;
+}
+
+// The driver's Reflex on a Vulkan device (OutputRule.h ChooseReflexVk): VK_NV_low_latency2 where the device has it,
+// else NvAPI_Vulkan's. nvapi is only asked when VK_NV_low_latency2 can't run.
+static std::shared_ptr<LowLatencyTech> MakeReflexVk(VkDevice device)
+{
+    auto in = ReflexVkInputsOf(device);
 
     if (lloutput::ChooseReflexVk(in) != lloutput::ReflexVkSurface::LowLatency2)
     {
@@ -191,13 +211,18 @@ bool InputCommon::init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMo
     {
         failed_output = desiredMode;
         failed_time = std::chrono::steady_clock::now().time_since_epoch().count();
+        failed_device = pDevice;
 
-        // With XeFG the output is XeFG's choice: no stand-in next to its XeLL. Anti-Lag 2 that can't start hands the
-        // split back to XeLL (native::lowlatency::XefgSide).
+        // With XeFG the output is XeFG's choice: no stand-in next to its XeLL. Anti-Lag 2 or Reflex that can't start
+        // hands the split back to XeLL (native::lowlatency::XefgSide): on Vulkan the game's device may have neither
+        // VK_NV_low_latency2 nor NVIDIA's NvAPI Vulkan Reflex.
         if (plan.xefgOwnXell)
         {
             if (desiredMode == LowLatencyMode::AntiLag2 && !antilag2_failed.exchange(true))
                 LOG_WARN("Anti-Lag 2 could not start next to XeFG's XeLL, XeLL lowers latency");
+
+            if (desiredMode == LowLatencyMode::Reflex && !reflex_failed.exchange(true))
+                LOG_WARN("Reflex could not start next to XeFG's XeLL, XeLL lowers latency");
 
             return false;
         }
@@ -250,15 +275,18 @@ LowLatencyMode InputCommon::to_mode(lloutput::Tech tech)
     }
 }
 
-lloutput::OutputPlan InputCommon::plan_output(API api)
+lloutput::OutputPlan InputCommon::plan_output(API api, IUnknown* pDevice)
 {
     auto& state = State::Instance();
 
     // Once: getPrimaryGpu copies the GPU list, and the primary GPU does not change while the game runs
     static const bool nvidiaGpu = IdentifyGpu::getPrimaryGpu().vendorId == VendorId::Nvidia;
 
+    // VK_NV_low_latency2 is the driver's Reflex without nvapi: a Vulkan device with it has Reflex under fakenvapi too
+    const bool lowLatency2 = api == API::Vulkan && VulkanHooks::LowLatency2On((VkDevice) pDevice);
+
     lloutput::OutputInputs in;
-    in.realNvapi = nvidiaGpu && !fakenvapi::isUsingAsMainNvapi();
+    in.realNvapi = nvidiaGpu && (!fakenvapi::isUsingAsMainNvapi() || lowLatency2);
     in.vulkan = api == API::Vulkan;
     in.xefgOutput = state.activeFgOutput == FGOutput::XeFG;
     in.side = native::lowlatency::XefgSide();
@@ -272,6 +300,7 @@ lloutput::OutputPlan InputCommon::plan_output(API api)
 void InputCommon::use_output(std::shared_ptr<LowLatencyTech> tech)
 {
     auto old_tech = currently_active_tech.exchange(tech);
+    reflex_vk_stale = false;
 
     if (old_tech != nullptr && old_tech != xefg_xell.load())
     {
@@ -547,7 +576,7 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
     }
 
     // OptiScaler's rules decide the output (OutputRule.h PlanOutput)
-    const auto plan = plan_output(api);
+    const auto plan = plan_output(api, pDevice);
     auto desiredMode = mode.has_value() ? *mode : to_mode(plan.first());
 
     if (desiredMode == LowLatencyMode::None)
@@ -576,15 +605,18 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
     if (api == API::Vulkan)
         desiredMode = for_api(desiredMode, api);
 
-    // An output that couldn't start keeps its fallback instead of being retried every call
+    // An output that couldn't start keeps its fallback instead of being retried every call; on a Vulkan device never
+    // again (its extensions and the driver's NvAPI Vulkan Reflex don't come later), elsewhere after 10 s
     const auto failedAt = std::chrono::steady_clock::time_point(std::chrono::steady_clock::duration(failed_time.load()));
+    const bool failedHere = desiredMode == failed_output && (api != API::Vulkan || failed_device.load() == pDevice);
     const bool failedRecently =
-        desiredMode == failed_output && std::chrono::steady_clock::now() - failedAt < std::chrono::seconds(10);
+        failedHere && (api == API::Vulkan || std::chrono::steady_clock::now() - failedAt < std::chrono::seconds(10));
 
     if (failedRecently && (currently_active_tech.load() != nullptr || plan.xefgOwnXell))
         return true;
 
-    if (activeOutput == desiredMode && api == output_api)
+    // A VK_NV_low_latency2 output that can't go on is made again on what its device has now
+    if (activeOutput == desiredMode && api == output_api && !reflex_vk_stale.load(std::memory_order_relaxed))
     {
         delay_deinit = 0;
         return true;
@@ -709,6 +741,7 @@ void InputCommon::stop_output(bool release)
     std::scoped_lock lock(create_tech_mutex);
 
     auto old_tech = currently_active_tech.exchange(nullptr);
+    reflex_vk_stale = false;
 
     if (old_tech == nullptr)
         return;
@@ -849,7 +882,11 @@ InputResult InputCommon::set_async_marker(const InputContext& inputContext, ID3D
 InputResult InputCommon::set_sleep_mode(const InputContext& inputContext, IUnknown* pDevice, SleepMode* sleep_mode)
 {
     // Kept even without an output yet, and for an input that is not the active one: AntiLag 2 and XeLL only send it
-    // when it changes, and an input that becomes the active one brings its mode along
+    // when it changes, and an input that becomes the active one brings its mode along. OptiScaler's carries a cap
+    // planned for XeFG's side of now.
+    if (inputContext.caller == LowLatencyInput::OptiScaler)
+        optiscaler_mode_side = native::lowlatency::XefgSide();
+
     set_sleep_copy(inputContext.caller, *sleep_mode);
     sleep_modes_set.fetch_or(1u << static_cast<uint32_t>(inputContext.caller), std::memory_order_relaxed);
 
@@ -1329,6 +1366,7 @@ SleepMode InputCommon::shaped_sleep_mode(lloutput::Role role)
     in.forceDisabled = Config::Instance()->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable;
     in.blocked = input == LowLatencyInput::Reflex && native::lowlatency::GameLowLatencyBlocked();
     in.inputSetMode = (sleep_modes_set.load(std::memory_order_relaxed) & (1u << static_cast<uint32_t>(input))) != 0;
+    in.modeForOtherSide = input == LowLatencyInput::OptiScaler && optiscaler_mode_side.load() != in.side;
 
     native::xefgreflex::SleepMode rule;
     rule.lowLatency = copy.low_latency_enabled;
@@ -1364,7 +1402,7 @@ void InputCommon::apply_xefg_xell_mode(const LowLatencyTech* output)
     }
 }
 
-// Once per frame, on one thread (ReflexHooks::update from the present OutputRule.h RunsLowLatencyUpdate picks): the
+// Once per frame, on one thread (ReflexHooks::presentUpdate, the present OutputRule.h RunsLowLatencyUpdate picks): the
 // static locals below rely on that
 void InputCommon::update()
 {
@@ -1406,6 +1444,25 @@ void InputCommon::update()
 
         if (std::exchange(lastXefgPaced, xefgPaced) != xefgPaced || overrideChanged)
             apply_sleep_mode(current_tech.get());
+    }
+
+    // A VK_NV_low_latency2 output whose swapchain was made again without the latency mode, or whose sleep never
+    // signals (OutputRule.h ChooseReflexVk): the next call makes the output again on what the device has
+    if (auto reflexVk = std::dynamic_pointer_cast<ReflexVk>(current_tech))
+    {
+        const auto device = (VkDevice) reflexVk->get_tech_context();
+
+        if (reflexVk->gave_up_sleeping())
+        {
+            std::scoped_lock lock(g_lowLatency2FailedMutex);
+            g_lowLatency2Failed.insert(device);
+        }
+
+        if (lloutput::ChooseReflexVk(ReflexVkInputsOf(device)) != lloutput::ReflexVkSurface::LowLatency2 &&
+            !reflex_vk_stale.exchange(true))
+        {
+            LOG_INFO("Reflex Vulkan: VK_NV_low_latency2 can't go on on this device, the output is made again");
+        }
     }
 
     // fakenvapi as the nvapi: with more than one generated DLSS FG frame its methods fall apart (the plan picks
@@ -1478,6 +1535,7 @@ void InputCommon::update()
         in.xefgShownPerRendered = native::lowlatency::XefgShownPerRendered();
         in.dlssgFramesToGenerate = ReflexHooks::dlssgFrameCountToGenerate();
         in.outputIsXell = activeOutput == LowLatencyMode::XeLL;
+        in.outputRunning = current_tech != nullptr;
         cap = lloutput::CapForGame(in);
     }
 
@@ -1563,6 +1621,11 @@ InputResult InputCommon::mark_present_start(IUnknown* pDevice)
 std::shared_ptr<ReflexVk> InputCommon::reflex_vk_output()
 {
     return std::dynamic_pointer_cast<ReflexVk>(currently_active_tech.load());
+}
+
+std::shared_ptr<ReflexNvApiVk> InputCommon::reflex_nvapi_vk_output()
+{
+    return std::dynamic_pointer_cast<ReflexNvApiVk>(currently_active_tech.load());
 }
 
 xell_context_handle_t InputCommon::xell_output_context()
@@ -1653,8 +1716,9 @@ void InputCommon::release_xefg_xell()
     xefg_frame_id = 0;
     reset_xefg_batches();
 
-    // A new XeFG (another device, a driver update) tries Anti-Lag 2 again
+    // A new XeFG (another device, a driver update) tries Anti-Lag 2 and Reflex again
     antilag2_failed = false;
+    reflex_failed = false;
 
     if (auto queue = xefg_present_queue.exchange(nullptr))
         queue->Release();
@@ -1670,6 +1734,13 @@ void InputCommon::device_released(IUnknown* pDevice, bool alive)
 {
     if (pDevice != nullptr && output_device.load() == pDevice)
         stop_output(alive);
+
+    // A new device at the same address starts over
+    if (pDevice != nullptr && failed_device.load() == pDevice)
+        failed_device = nullptr;
+
+    std::scoped_lock lock(g_lowLatency2FailedMutex);
+    g_lowLatency2Failed.erase((VkDevice) pDevice);
 }
 
 void* InputCommon::output_context()

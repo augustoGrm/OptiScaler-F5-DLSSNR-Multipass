@@ -34,6 +34,7 @@
 #include "Hook_Utils.h"
 
 #include <low_latency/input/OutputRule.h>
+#include <low_latency/input/VkLatencyMode.h>
 #include <low_latency/input/input_antilag_vk.h>
 #include <low_latency/input/input_reflex.h>
 #include <low_latency/input/input_reflex_vk.h>
@@ -100,10 +101,11 @@ static VkResult hkvkReleaseFullScreenExclusiveModeEXT(VkDevice device, VkSwapcha
 }
 
 // dxvk, vkd3d-proton and an nvapi call Vulkan's low latency for a D3D game's own Reflex, which is its D3D input
-// already: a D3D runtime or nvapi module that calls Vulkan is one of those (the system's own never do)
+// already: a D3D runtime or nvapi module that calls Vulkan is one of those (the system's own never do). Never
+// OptiScaler itself, which may be named dxgi.dll.
 static bool D3DOnVulkanModule(HMODULE module)
 {
-    if (module == nullptr)
+    if (module == nullptr || module == dllModule)
         return false;
 
     static std::mutex cacheMutex;
@@ -189,11 +191,18 @@ static bool TimelineFeatureOn(const void* chain)
     return false;
 }
 
-// Devices made with VK_NV_low_latency2 and timeline semaphores, not for a D3D device (VulkanHooks::LowLatency2On), and
-// each device's newest swapchain (LatencySwapchainOf)
+// Devices made with VK_NV_low_latency2 and timeline semaphores, not for a D3D device (VulkanHooks::LowLatency2On)
 static std::mutex _lowLatencyMutex;
 static std::set<VkDevice> _lowLatency2Devices;
+// Each device's newest swapchain (LatencySwapchainOf): LatencySwapchainMutex, shared for a read or a call on it
+// (VulkanHooks::LatencySwapchainUse), alone to change it (vkDestroySwapchainKHR waits for a call under way)
 static std::map<VkDevice, VulkanHooks::LatencySwapchain> _latencySwapchains;
+
+static std::shared_mutex& LatencySwapchainMutex()
+{
+    static std::shared_mutex mutex;
+    return mutex;
+}
 
 bool VulkanHooks::LowLatency2On(VkDevice device)
 {
@@ -203,9 +212,15 @@ bool VulkanHooks::LowLatency2On(VkDevice device)
 
 VulkanHooks::LatencySwapchain VulkanHooks::LatencySwapchainOf(VkDevice device)
 {
-    std::lock_guard lock(_lowLatencyMutex);
+    std::shared_lock lock(LatencySwapchainMutex());
     auto it = _latencySwapchains.find(device);
     return it != _latencySwapchains.end() ? it->second : LatencySwapchain {};
+}
+
+VulkanHooks::LatencySwapchainUse::LatencySwapchainUse(VkDevice device) : _lock(LatencySwapchainMutex())
+{
+    if (auto it = _latencySwapchains.find(device); it != _latencySwapchains.end() && it->second.latencyMode)
+        swapchain = it->second.swapchain;
 }
 
 void VulkanHooks::NoteLatencySwapchain(VkDevice device, VkSwapchainKHR swapchain)
@@ -213,7 +228,11 @@ void VulkanHooks::NoteLatencySwapchain(VkDevice device, VkSwapchainKHR swapchain
     if (device == VK_NULL_HANDLE || swapchain == VK_NULL_HANDLE)
         return;
 
-    std::lock_guard lock(_lowLatencyMutex);
+    // Every call of the game's names it: the exclusive lock only when it is news
+    if (auto known = LatencySwapchainOf(device); known.swapchain == swapchain && known.latencyMode)
+        return;
+
+    std::unique_lock lock(LatencySwapchainMutex());
     _latencySwapchains[device] = { swapchain, true };
 }
 
@@ -222,26 +241,10 @@ PFN_vkVoidFunction VulkanHooks::GetDeviceProcAddr(VkDevice device, const char* n
     return o_vkGetDeviceProcAddr != nullptr ? o_vkGetDeviceProcAddr(device, name) : nullptr;
 }
 
-// A swapchain on a device with VK_NV_low_latency2 is made with its latency mode, which InputCommon's Reflex output
-// needs (ll_reflex_vk.h); a choice the game chained itself stays. `latency` must outlive the create call. Whether the
-// swapchain will have the mode.
+// A swapchain on a device with VK_NV_low_latency2 is made with its latency mode (low_latency/input/VkLatencyMode.h)
 static bool ChainLatencyMode(VkDevice device, VkSwapchainCreateInfoKHR& info, VkSwapchainLatencyCreateInfoNV& latency)
 {
-    if (!VulkanHooks::LowLatency2On(device))
-        return false;
-
-    for (auto* node = static_cast<const VkBaseInStructure*>(info.pNext); node != nullptr; node = node->pNext)
-    {
-        if (node->sType == VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV)
-            return reinterpret_cast<const VkSwapchainLatencyCreateInfoNV*>(node)->latencyModeEnable != VK_FALSE;
-    }
-
-    latency = {};
-    latency.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV;
-    latency.pNext = info.pNext;
-    latency.latencyModeEnable = VK_TRUE;
-    info.pNext = &latency;
-    return true;
+    return lloutput::ChainLatencyMode(VulkanHooks::LowLatency2On(device), info, latency);
 }
 
 bool VulkanHooks::TimelineSemaphoresOn(VkDevice device)
@@ -250,22 +253,32 @@ bool VulkanHooks::TimelineSemaphoresOn(VkDevice device)
     return _timelineDevices.contains(device);
 }
 
+// A device function past our hooks (the core name, else the KHR one), cached for the device asked last: the function
+// and the device it was looked up on go together (any thread). One cache per function type.
+template <typename PFN> static PFN CachedDeviceFunction(VkDevice device, const char* name, const char* khrName)
+{
+    static std::mutex cacheMutex;
+    static PFN cached = nullptr;
+    static VkDevice cachedDevice = VK_NULL_HANDLE;
+
+    std::lock_guard lock(cacheMutex);
+
+    if ((cached == nullptr || cachedDevice != device) && o_vkGetDeviceProcAddr != nullptr)
+    {
+        cached = reinterpret_cast<PFN>(o_vkGetDeviceProcAddr(device, name));
+
+        if (cached == nullptr)
+            cached = reinterpret_cast<PFN>(o_vkGetDeviceProcAddr(device, khrName));
+
+        cachedDevice = device;
+    }
+
+    return cached;
+}
+
 bool VulkanHooks::WaitTimelineSemaphore(VkDevice device, VkSemaphore semaphore, uint64_t value, uint64_t timeoutNs)
 {
-    static PFN_vkWaitSemaphores wait = nullptr;
-    static VkDevice waitDevice = VK_NULL_HANDLE;
-
-    if (wait == nullptr || waitDevice != device)
-    {
-        wait = o_vkGetDeviceProcAddr != nullptr
-                   ? reinterpret_cast<PFN_vkWaitSemaphores>(o_vkGetDeviceProcAddr(device, "vkWaitSemaphores"))
-                   : nullptr;
-
-        if (wait == nullptr && o_vkGetDeviceProcAddr != nullptr)
-            wait = reinterpret_cast<PFN_vkWaitSemaphores>(o_vkGetDeviceProcAddr(device, "vkWaitSemaphoresKHR"));
-
-        waitDevice = device;
-    }
+    const auto wait = CachedDeviceFunction<PFN_vkWaitSemaphores>(device, "vkWaitSemaphores", "vkWaitSemaphoresKHR");
 
     if (wait == nullptr || semaphore == VK_NULL_HANDLE)
         return false;
@@ -279,34 +292,15 @@ bool VulkanHooks::WaitTimelineSemaphore(VkDevice device, VkSemaphore semaphore, 
     return wait(device, &info, timeoutNs) == VK_SUCCESS;
 }
 
+bool VulkanHooks::CanSignalTimelineSemaphore(VkDevice device)
+{
+    return CachedDeviceFunction<PFN_vkSignalSemaphore>(device, "vkSignalSemaphore", "vkSignalSemaphoreKHR") != nullptr;
+}
+
 bool VulkanHooks::SignalTimelineSemaphore(VkDevice device, VkSemaphore semaphore, uint64_t value)
 {
-    // The function and the device it was looked up on go together (any thread)
-    static std::mutex cacheMutex;
-    static PFN_vkSignalSemaphore cachedSignal = nullptr;
-    static VkDevice cachedDevice = VK_NULL_HANDLE;
-
-    PFN_vkSignalSemaphore signal = nullptr;
-    {
-        std::lock_guard lock(cacheMutex);
-
-        if (cachedSignal == nullptr || cachedDevice != device)
-        {
-            cachedSignal = o_vkGetDeviceProcAddr != nullptr ? reinterpret_cast<PFN_vkSignalSemaphore>(
-                                                                  o_vkGetDeviceProcAddr(device, "vkSignalSemaphore"))
-                                                            : nullptr;
-
-            if (cachedSignal == nullptr && o_vkGetDeviceProcAddr != nullptr)
-            {
-                cachedSignal =
-                    reinterpret_cast<PFN_vkSignalSemaphore>(o_vkGetDeviceProcAddr(device, "vkSignalSemaphoreKHR"));
-            }
-
-            cachedDevice = device;
-        }
-
-        signal = cachedSignal;
-    }
+    const auto signal =
+        CachedDeviceFunction<PFN_vkSignalSemaphore>(device, "vkSignalSemaphore", "vkSignalSemaphoreKHR");
 
     if (signal == nullptr || semaphore == VK_NULL_HANDLE)
         return false;
@@ -1018,7 +1012,7 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
 
     // ??? TODO: if we are hooking dxvk's vulkan calls then this present call could be either coming from dxvk or from a
     // native vk game
-    if (!IdentifyGpu::getPrimaryGpu().usesDxvk)
+    if (!VkPresentBridge::DxvkGame())
         State::Instance().swapchainApi = Vulkan;
 
     // Tick feature to let it know if it's frozen
@@ -1062,8 +1056,7 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
         return VK_ERROR_OUT_OF_DATE_KHR;
     }
 
-    if (lloutput::RunsLowLatencyUpdate(lloutput::PresentSite::Vulkan, IdentifyGpu::getPrimaryGpu().usesDxvk, bridged))
-        ReflexHooks::update();
+    ReflexHooks::presentUpdate(lloutput::PresentSite::Vulkan, false);
 
     // Optical F5Low's low latency (native/NativeLowLatency.h): Reflex markers around the game's present. This call is the
     // game's own present whether or not the frame-generation bridge is up -- bridged, it is on the hidden window
@@ -1081,21 +1074,20 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
         native::lowlatency::PresentTarget(true, bridged, presentDevice,
                                           bridged ? static_cast<IUnknown*>(VkPresentBridge::Device()) : nullptr,
                                           splitOnVulkan);
-    // dxvk calls this present from its own thread, not the game's, so a Sleep here only paces dxvk and the game runs ahead
-    // until dxvk's frame latency limit stops it. By default (NativeLowLatencyDxvkGameThread) the game's own D3D11 Present
-    // runs the pair instead (wrapped/wrapped_swapchain.cpp), and says so in this frame's ledger entry: `pairHere` is false
-    // for those frames. It is this frame's own entry, not the current setting, that decides: a frame the game's Present
-    // already paired is never paired again here, and a frame it left to this present is never left unpaired.
-    // Unverified, to check in a game: with the pair at the game's Present, PRESENT_START/END (and Anti-Lag Vk's present
-    // stage call) no longer bracket the real vkQueuePresentKHR, which dxvk makes up to its frame latency later on its own
-    // thread, so the driver's Reflex report and the AMD pairing may read differently.
-    // Both sites only call the NVAPI entry points that take the device (NvAPI_D3D_* on the bridge's D3D12 device,
-    // NvAPI_Vulkan_SetLatencyMarker / Sleep on the VkDevice) and vkWaitSemaphores on the VkDevice's sleep semaphore.
-    // None of them takes a swapchain, and the Vulkan specification lists no externally synchronised parameter for
-    // vkWaitSemaphores, so none has to stay on dxvk's thread. The VK_NV_low_latency2 calls that do take the swapchain
-    // (vkLatencySleepNV, vkSetLatencyMarkerNV, externally synchronised in that extension) are not part of our pair.
-    const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().usesDxvk || dxvkBridged) &&
-                            lowLatencyTarget.device != nullptr && pairHere;
+    // dxvk calls this present from its own thread, not the game's, so a Sleep here only paces dxvk and the game runs
+    // ahead until dxvk's frame latency limit stops it. By default (NativeLowLatencyDxvkGameThread) the game's own D3D11
+    // Present runs the pair instead (wrapped/wrapped_swapchain.cpp), and says so in this frame's ledger entry:
+    // `pairHere` is false for those frames. It is this frame's own entry, not the current setting, that decides: a
+    // frame the game's Present already paired is never paired again here, and a frame it left to this present is never
+    // left unpaired. Unverified, to check in a game: with the pair at the game's Present, PRESENT_START/END (and
+    // Anti-Lag Vk's present stage call) no longer bracket the real vkQueuePresentKHR, which dxvk makes up to its frame
+    // latency later on its own thread, so the driver's Reflex report and the AMD pairing may read differently. Both
+    // sites go through InputCommon's output: NvAPI_D3D_* on the bridge's D3D12 device, NvAPI_Vulkan_* and
+    // vkWaitSemaphores on the VkDevice, or VK_NV_low_latency2 on the device's swapchain with latency mode. The Vulkan
+    // registry (vk.xml) marks no parameter of any of them externally synchronised, so none has to stay on dxvk's
+    // thread; the swapchain's destroy waits for a VK_NV_low_latency2 call under way (VulkanHooks::LatencySwapchainUse).
+    const bool lowLatency =
+        (!VkPresentBridge::DxvkGame() || dxvkBridged) && lowLatencyTarget.device != nullptr && pairHere;
 
     const auto lowLatencyBegin = [&]
     {
@@ -1274,7 +1266,7 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
     {
         native::VkFrameSource::NoteSwapchain(device, *pSwapchain, localCreateInfo);
 
-        std::lock_guard lock(_lowLatencyMutex);
+        std::unique_lock lock(LatencySwapchainMutex());
         _latencySwapchains[device] = { *pSwapchain, latencyMode };
     }
 
@@ -1347,10 +1339,11 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
 VALIDATE_HOOK(hkvkDestroySwapchainKHR, PFN_vkDestroySwapchainKHR)
 static void hkvkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator)
 {
-    // Before it goes: InputCommon's Reflex output stops using it
+    // Before it goes: InputCommon's Reflex output stops using it, after a call of it that is under way
+    // (VulkanHooks::LatencySwapchainUse)
     if (swapchain != VK_NULL_HANDLE)
     {
-        std::lock_guard lock(_lowLatencyMutex);
+        std::unique_lock lock(LatencySwapchainMutex());
 
         if (auto it = _latencySwapchains.find(device);
             it != _latencySwapchains.end() && it->second.swapchain == swapchain)
@@ -1401,8 +1394,12 @@ static void hkvkDestroyDevice(VkDevice device, const VkAllocationCallbacks* pAll
             _timelineDevices.erase(device);
         }
 
-        std::lock_guard lock(_lowLatencyMutex);
-        _lowLatency2Devices.erase(device);
+        {
+            std::lock_guard lock(_lowLatencyMutex);
+            _lowLatency2Devices.erase(device);
+        }
+
+        std::unique_lock lock(LatencySwapchainMutex());
         _latencySwapchains.erase(device);
     }
 

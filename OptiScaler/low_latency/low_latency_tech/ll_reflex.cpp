@@ -9,9 +9,13 @@ bool ReflexDriverReady()
     if (NvApiHooks::o_NvAPI_QueryInterface == nullptr)
         LibraryLoadHooks::LoadNvApi();
 
-    // fakenvapi's Reflex is a translation of its own, only the driver's is Reflex
-    if (NvApiHooks::o_NvAPI_QueryInterface == nullptr || fakenvapi::isUsingAsMainNvapi())
+    // fakenvapi's Reflex is a translation of its own, only the driver's is Reflex. UseFakenvapi's fallback query is
+    // fakenvapi's without it being the main nvapi.
+    if (NvApiHooks::o_NvAPI_QueryInterface == nullptr || fakenvapi::isUsingAsMainNvapi() ||
+        NvApiHooks::o_NvAPI_QueryInterface == (PFN_NvApi_QueryInterface) fakenvapi::queryInterface)
+    {
         return false;
+    }
 
     auto queryInterface = NvApiHooks::o_NvAPI_QueryInterface;
 
@@ -19,9 +23,15 @@ bool ReflexDriverReady()
     if (!ReflexHooks::ensureTable(queryInterface))
         return false;
 
-    // NvAPI_Initialize is counted: ours is harmless next to the game's
+    // NvAPI_Initialize is counted: once is enough next to the game's
+    static std::atomic_bool initialized = false;
+
+    if (initialized.load())
+        return true;
+
     auto initialize = GET_INTERFACE(NvAPI_Initialize, queryInterface);
-    return initialize != nullptr && initialize() == NVAPI_OK;
+    initialized = initialize != nullptr && initialize() == NVAPI_OK;
+    return initialized.load();
 }
 
 bool Reflex::init(IUnknown* pDevice)

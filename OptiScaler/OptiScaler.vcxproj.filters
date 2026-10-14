@@ -1079,6 +1079,9 @@
     <ClInclude Include="low_latency\input\OutputRule.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="low_latency\input\VkLatencyMode.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
     <ClInclude Include="menu\input\input_system.h">
       <Filter>Header Files</Filter>
     </ClInclude>

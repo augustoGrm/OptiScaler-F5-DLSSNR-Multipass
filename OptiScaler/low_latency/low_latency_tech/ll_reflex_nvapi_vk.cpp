@@ -6,7 +6,9 @@
 #include <hooks/Reflex_Hooks.h>
 #include <hooks/Vulkan_Hooks.h>
 
+#include <atomic>
 #include <map>
+#include <memory>
 #include <mutex>
 
 namespace
@@ -16,9 +18,31 @@ using native::lowlatency::VkSleepState;
 using native::lowlatency::VkSleepSync;
 using native::lowlatency::VkSleepWhy;
 
-// Per device, kept across outputs (forget_device)
-std::mutex g_syncMutex;
-std::map<VkDevice, VkSleepSync> g_syncs;
+// Per device, kept across outputs (forget_device). Each its own lock: a sleep (the driver's and the wait for its value)
+// holds only its device's, the map's lock only finds it.
+struct DeviceSync
+{
+    std::mutex mutex;
+    VkSleepSync sync;
+};
+
+std::mutex g_syncsMutex;
+std::map<VkDevice, std::shared_ptr<DeviceSync>> g_syncs;
+
+std::shared_ptr<DeviceSync> SyncOf(VkDevice device, bool create)
+{
+    std::scoped_lock lock(g_syncsMutex);
+
+    if (auto it = g_syncs.find(device); it != g_syncs.end())
+        return it->second;
+
+    if (!create)
+        return nullptr;
+
+    auto sync = std::make_shared<DeviceSync>();
+    g_syncs[device] = sync;
+    return sync;
+}
 
 VkSleepCalls SleepCalls(VkDevice device)
 {
@@ -69,13 +93,13 @@ bool ReflexNvApiVk::init(IUnknown* pDevice)
         return false;
     }
 
-    std::scoped_lock lock(g_syncMutex);
-    auto& sync = g_syncs[vkDevice];
+    auto entry = SyncOf(vkDevice, true);
+    std::scoped_lock lock(entry->mutex);
 
-    if (!native::lowlatency::VkSleepReady(sync, SleepCalls(vkDevice)))
+    if (!native::lowlatency::VkSleepReady(entry->sync, SleepCalls(vkDevice)))
     {
-        LOG_INFO("Reflex Vulkan (NvAPI) can't start on this device: {} (NvAPI status {})", WhyText(sync.why),
-                 sync.initStatus);
+        LOG_INFO("Reflex Vulkan (NvAPI) can't start on this device: {} (NvAPI status {})", WhyText(entry->sync.why),
+                 entry->sync.initStatus);
         return false;
     }
 
@@ -100,8 +124,25 @@ void ReflexNvApiVk::deinit()
 
 void ReflexNvApiVk::forget_device(VkDevice device)
 {
-    std::scoped_lock lock(g_syncMutex);
-    g_syncs.erase(device);
+    std::shared_ptr<DeviceSync> entry;
+    {
+        std::scoped_lock lock(g_syncsMutex);
+
+        if (auto it = g_syncs.find(device); it != g_syncs.end())
+        {
+            entry = std::move(it->second);
+            g_syncs.erase(it);
+        }
+    }
+
+    if (entry == nullptr)
+        return;
+
+    // After a sleep under way; the driver's low latency state goes before the device (NVAPI's order)
+    std::scoped_lock lock(entry->mutex);
+
+    if (entry->sync.state == VkSleepState::Ready)
+        ReflexHooks::nvapiVkDestroyLowLatencyDevice(reinterpret_cast<HANDLE>(device));
 }
 
 bool ReflexNvApiVk::is_enabled()
@@ -164,14 +205,14 @@ void ReflexNvApiVk::sleep(std::optional<uint32_t> frame_id)
     if (sleep_mode_known && is_enabled() != applied_enabled)
         apply_sleep_mode();
 
-    std::scoped_lock lock(g_syncMutex);
+    auto entry = SyncOf(device, false);
 
-    auto it = g_syncs.find(device);
-
-    if (it == g_syncs.end())
+    if (entry == nullptr)
         return;
 
-    auto& sync = it->second;
+    std::scoped_lock lock(entry->mutex);
+
+    auto& sync = entry->sync;
     bool firstTimeout = false;
     native::lowlatency::VkSleepFrame(sync, SleepCalls(device), &firstTimeout);
 
@@ -182,13 +223,10 @@ void ReflexNvApiVk::sleep(std::optional<uint32_t> frame_id)
     }
 
     // A driver that never signals: no more sleeps on this device (NativeLowLatencyVkSync.h), once said
-    static VkDevice unavailableLogged = VK_NULL_HANDLE;
+    static std::atomic<VkDevice> unavailableLogged = VK_NULL_HANDLE;
 
-    if (sync.state == VkSleepState::Unavailable && unavailableLogged != device)
-    {
-        unavailableLogged = device;
+    if (sync.state == VkSleepState::Unavailable && unavailableLogged.exchange(device) != device)
         LOG_WARN("Reflex Vulkan (NvAPI): no more sleeps on this device ({})", WhyText(sync.why));
-    }
 }
 
 void ReflexNvApiVk::set_marker(IUnknown* pDevice, const MarkerParams& marker_params)
@@ -216,4 +254,10 @@ NvAPI_Status ReflexNvApiVk::get_latency(NV_VULKAN_LATENCY_RESULT_PARAMS* latency
         return NVAPI_INVALID_ARGUMENT;
 
     return ReflexHooks::nvapiVkGetLatency(reinterpret_cast<HANDLE>(device), latency_params);
+}
+
+void ReflexNvApiVk::notify_out_of_band(HANDLE queue, NV_VULKAN_OUT_OF_BAND_QUEUE_TYPE queue_type) const
+{
+    if (device != VK_NULL_HANDLE && queue != nullptr)
+        ReflexHooks::nvapiVkNotifyOutOfBandVkQueue(reinterpret_cast<HANDLE>(device), queue, queue_type);
 }

@@ -38,11 +38,40 @@ enum class Table
 std::atomic<bool> g_running = false;    // markers are being sent
 std::atomic<bool> g_submitSent = false; // this frame's SIMULATION_END / RENDERSUBMIT_START went out
 // `device` is a D3D11/D3D12 device (the game's, or the Vulkan bridge's private D3D12 device) or -- Api::Vulkan -- the
-// game's VkDevice reinterpreted as the same pointer-sized token: never dereferenced as a COM interface here, only passed
-// back to the Reflex calls of its own API. Every call carries its Api; nothing is remembered between calls but the Api
-// each stored device was seen with (for the callers that bring no device: the first submit, the status line).
-std::atomic<Api> g_deviceApi = Api::D3D;
-std::atomic<IUnknown*> g_device = nullptr;
+// game's VkDevice reinterpreted as the same pointer-sized token: never dereferenced as a COM interface here, only
+// passed back to the Reflex calls of its own API. Every call carries its Api; nothing is remembered between calls but
+// the Api each stored device was seen with (for the callers that bring no device: the first submit, the status line).
+// The two go together under one lock: those callers run on other threads, and a VkDevice read with Api::D3D would be
+// asked for COM interfaces.
+struct DeviceRef
+{
+    Api api = Api::D3D;
+    IUnknown* device = nullptr;
+};
+
+std::mutex g_deviceMutex;
+DeviceRef g_deviceRef;
+
+void SetDevice(Api api, IUnknown* device)
+{
+    std::lock_guard lock(g_deviceMutex);
+    g_deviceRef = { api, device };
+}
+
+DeviceRef CurrentDevice()
+{
+    std::lock_guard lock(g_deviceMutex);
+    return g_deviceRef;
+}
+
+void ForgetDevice(IUnknown* device)
+{
+    std::lock_guard lock(g_deviceMutex);
+
+    if (g_deviceRef.device == device)
+        g_deviceRef.device = nullptr;
+}
+
 std::atomic<Api> g_sleepModeApi = Api::D3D;
 std::atomic<IUnknown*> g_sleepModeDevice = nullptr;   // the device our Reflex mode was set on
 std::atomic<const void*> g_gameQueue = nullptr;       // the queue the game's frame is submitted to (D3D12)
@@ -158,7 +187,7 @@ bool ForceReflexDisabled()
     return Config::Instance()->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable;
 }
 
-Inputs GatherInputs(bool deviceAvailable)
+Inputs GatherInputs()
 {
     auto config = Config::Instance();
     auto& state = State::Instance();
@@ -190,13 +219,12 @@ Inputs GatherInputs(bool deviceAvailable)
     in.forceXell = config->ForceXeLL.value_or_default() || state.activeFgInput == FGInput::ForceXeLL;
     in.otherFrameGenerationOwner = FrameGenerationNeedsReflex();
     in.apiAvailable = g_table != Table::Missing;
-    in.deviceAvailable = deviceAvailable;
     return in;
 }
 
 Decision Evaluate(Api api, IUnknown* device)
 {
-    const auto inputs = GatherInputs(true);
+    const auto inputs = GatherInputs();
     auto decision = Decide(inputs);
     // Run for frame generation alone (no Optical F5Low mode): the menu and log say so
     g_runsFor = RunReason(inputs);
@@ -208,7 +236,7 @@ Decision Evaluate(Api api, IUnknown* device)
         if (g_table == Table::Missing)
             LOG_WARN("Optical F5Low low latency: no Reflex or fakenvapi interface found, it stays off");
 
-        decision = Decide(GatherInputs(true));
+        decision = Decide(GatherInputs());
     }
 
     return decision;
@@ -397,8 +425,7 @@ void PresentBegin(Api api, IUnknown* device, PresentSource source)
         return;
     }
 
-    g_deviceApi = api;
-    g_device = device;
+    SetDevice(api, device);
 
     // No submit hook fired (D3D12 sees it only where the queue hook is installed): the frame's work is all behind us
     if (!g_submitSent.exchange(true))
@@ -477,8 +504,9 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
     // XeFG makes a new XeLL context (and sets its sleep mode, with no limit) when its swap chain is made again; in the
     // split that one has to be told low latency off again
     call.xellGeneration = CarriesXefgFrameIds(method) ? InputCommon::xefg_xell_generation() : 0;
-    // A changed Output sends the mode again, to the new side
-    call.side = CarriesXefgFrameIds(method) ? (uint32_t) XefgSide() : 0;
+    // A changed Output sends the mode again, to the new side: InputCommon gives the new side no interval and no Boost
+    // until it comes (OutputRule.h ShapeInputs::modeForOtherSide)
+    call.side = (uint32_t) XefgSide();
 
     const auto now = Util::MillisecondsNow();
 
@@ -543,8 +571,7 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
         Marker(api, device, PRESENT_END);
 
     g_presentStarted = false;
-    g_deviceApi = api;
-    g_device = device;
+    SetDevice(api, device);
     g_gameQueue = GameQueue();
 
     if (api != Api::Vulkan)
@@ -798,8 +825,10 @@ void OnFirstSubmit(const void* queue)
     if (!g_running.load(std::memory_order_relaxed) || g_submitSent.load(std::memory_order_relaxed))
         return;
 
+    const auto current = CurrentDevice();
+
     // A D3D12 queue submit or D3D11 draw says nothing about a frame being paced on the Vulkan surface
-    if (g_deviceApi.load(std::memory_order_relaxed) != Api::D3D)
+    if (current.api != Api::D3D)
         return;
 
     // OptiScaler's own queues and frame generation's do not start the game's frame
@@ -812,7 +841,7 @@ void OnFirstSubmit(const void* queue)
     if (g_submitSent.exchange(true))
         return;
 
-    auto device = g_device.load();
+    auto device = current.device;
 
     if (device == nullptr || ReflexHooks::gameCalledReflex())
         return;
@@ -826,11 +855,10 @@ void OnDeviceReleased(IUnknown* device)
     if (device == nullptr)
         return;
 
-    auto expected = device;
-    g_device.compare_exchange_strong(expected, nullptr);
+    ForgetDevice(device);
 
     // The next present on a new device sets our Reflex mode again (OnPresentEnd)
-    expected = device;
+    auto expected = device;
     g_sleepModeDevice.compare_exchange_strong(expected, nullptr);
 
     // dxvk: the game's Present must not run the pair on it either
@@ -851,10 +879,9 @@ void OnDeviceReleasedVulkan(VkDevice device)
         return;
 
     auto* token = reinterpret_cast<IUnknown*>(device);
-    auto expected = token;
-    g_device.compare_exchange_strong(expected, nullptr);
+    ForgetDevice(token);
 
-    expected = token;
+    auto expected = token;
     g_sleepModeDevice.compare_exchange_strong(expected, nullptr);
 
     {
@@ -978,6 +1005,7 @@ OutputInputs CurrentOutputInputs()
     in.amdGpu = vendor == VendorId::AMD;
     in.nvidiaGpu = vendor == VendorId::Nvidia;
     in.antiLag2Failed = InputCommon::antilag2_could_not_start();
+    in.reflexFailed = InputCommon::reflex_could_not_start();
     in.xefgLatency = Config::Instance()->FGXeFGLowLatencyOutput.value_or_default();
     return in;
 }
@@ -1003,7 +1031,8 @@ Status GetStatus()
     // In the split XeLL only keeps XeFG running: the game's Reflex lowers latency on the other side
     status.gameReflexFeedsXell = ReflexHooks::gameReflexFeedsXell() && status.xefgSide == XefgLatency::XeLL;
     status.forceReflexDisabled = ForceReflexDisabled();
-    status.output = OutputText(g_deviceApi.load());
+    const auto current = CurrentDevice();
+    status.output = OutputText(current.api);
     status.offKeptForFrameGeneration =
         Config::Instance()->FramerateLowLatencyInput.value_or_default() == Input::Off && FrameGenerationNeedsReflex();
 
@@ -1014,10 +1043,10 @@ Status GetStatus()
     status.runsFor = g_runsFor.load();
     status.xellIdle = g_xellIdle.load();
 
-    const auto api = g_deviceApi.load();
+    const auto api = current.api;
     status.path = PathText(api);
 
-    auto device = g_device.load();
+    auto device = current.device;
 
     if (device == nullptr)
         return status;

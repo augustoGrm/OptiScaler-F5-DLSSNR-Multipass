@@ -259,21 +259,6 @@ int main()
         CHECK(t.api == Api::Vulkan && t.device == &vkDevice);
     }
 
-    // A device that cannot do the Vulkan pair: its own reason, after the reasons the player can change and before nothing
-    {
-        Inputs d;
-        d.f5lowRunning = true;
-        d.deviceAvailable = false;
-        CHECK(Decide(d) == Decision::DeviceUnavailable);
-        CHECK(DecisionText(Decision::DeviceUnavailable)[0] != '\0');
-        CHECK(strcmp(StatusLabel(Decision::DeviceUnavailable), "Off") == 0);
-        d.setting = Setting::Off;
-        CHECK(Decide(d) == Decision::SettingOff);
-        d.setting = Setting::Auto;
-        d.gameCallsReflex = true;
-        CHECK(Decide(d) == Decision::GameRunsReflex);
-    }
-
     // The Vulkan Sleep pair (NativeLowLatencyVkSync.h): init once, strictly rising values from 1, a wait on each value
     {
         int initCalls = 0, sleepCalls = 0, waitCalls = 0;
@@ -1051,6 +1036,21 @@ int main()
             CHECK(OutputLocked(failed));
             // ... the other reasons keep their own words
             CHECK(std::strstr(OutputAvailability(Output::AntiLag2, nvidia).why, "could not start") == nullptr);
+        }
+
+        // Reflex that failed to start (a Vulkan device with neither VK_NV_low_latency2 nor NVIDIA's NvAPI Vulkan
+        // Reflex): the same, XeFG goes back to XeLL
+        {
+            OutputInputs failed = nvidia;
+            failed.xefgLatency = XefgLatency::Reflex;
+            failed.reflexFailed = true;
+            CHECK(!XefgLatencyAvailable(XefgLatency::Reflex, failed));
+            CHECK(!OutputAvailability(Output::Reflex, failed).available);
+            CHECK(std::strstr(OutputAvailability(Output::Reflex, failed).why, "could not start") != nullptr);
+            CHECK(OutputShown(failed, false, false) == Output::XeLL);
+            CHECK(EffectiveXefgLatency(failed, false, false) == XefgLatency::XeLL);
+            CHECK(OutputLocked(failed));
+            CHECK(std::strstr(OutputAvailability(Output::Reflex, amd).why, "could not start") == nullptr);
         }
 
         // Without XeFG the two are not offered

@@ -254,7 +254,6 @@ class State
     bool reflexLimitsFps = false;
     bool reflexShowWarning = false;
     bool rtssReflexInjection = false;
-    bool fakenvapiReloadLowLatency = false;
     UINT64 reflexFrameId = 0;
     // XeFG's last Present Id and whether it was the frame markers' ID (the FPS overlay's Reflex timings show both)
     // Written on XeFG's present thread, read by the menu

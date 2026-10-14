@@ -8,6 +8,11 @@
 #include "low_latency/ll_util.h"
 #include <native/XefgReflexRule.h>
 
+namespace lloutput
+{
+enum class PresentSite : uint8_t; // low_latency/input/OutputRule.h
+}
+
 enum TimingType : uint32_t
 {
     TimeRange, // in ns, value stored in length
@@ -47,7 +52,7 @@ class ReflexHooks
 
     // The marker bookkeeping every marker does: the frame IDs XeFG follows (gameXellFrameId) and the menu read.
     // `countsAsGame`: the game sending markers (gameIsSendingMarkers), not one of ours
-    static void noteMarker(uint64_t frameId, uint32_t markerType, IUnknown* device, bool countsAsGame);
+    static void noteMarker(uint64_t frameId, uint32_t markerType, bool countsAsGame);
 
     inline static std::atomic<bool> _gameCalledReflex = false;
     inline static std::atomic<bool> _timingEstimated = false;
@@ -78,6 +83,11 @@ class ReflexHooks
     inline static decltype(&NvAPI_Vulkan_Sleep) o_NvAPI_Vulkan_Sleep = nullptr;
     inline static decltype(&NvAPI_Vulkan_GetLatency) o_NvAPI_Vulkan_GetLatency = nullptr;
     inline static decltype(&NvAPI_Vulkan_InitLowLatencyDevice) o_NvAPI_Vulkan_InitLowLatencyDevice = nullptr;
+    inline static decltype(&NvAPI_Vulkan_DestroyLowLatencyDevice) o_NvAPI_Vulkan_DestroyLowLatencyDevice = nullptr;
+    inline static decltype(&NvAPI_Vulkan_NotifyOutOfBandVkQueue) o_NvAPI_Vulkan_NotifyOutOfBandVkQueue = nullptr;
+    // The table's Vulkan entries are the driver's, not OptiScaler's own fakenvapi (UseFakenvapi's fallback query): its
+    // NvAPI_Vulkan_* hand the calls to InputCommon, which would call them again
+    inline static bool _vulkanTableIsDriver = false;
 
     VALIDATE_MEMBER_HOOK(hkNvAPI_D3D_SetSleepMode, decltype(&NvAPI_D3D_SetSleepMode))
     VALIDATE_MEMBER_HOOK(hkNvAPI_D3D_Sleep, decltype(&NvAPI_D3D_Sleep))
@@ -162,11 +172,12 @@ class ReflexHooks
         return o_NvAPI_D3D_GetLatency != nullptr ? o_NvAPI_D3D_GetLatency(pDev, pParams) : NVAPI_NO_IMPLEMENTATION;
     }
 
-    // The nvapi's own Vulkan Reflex, past every hook: InputCommon's NvAPI Vulkan Reflex output
-    // (low_latency_tech/ll_reflex_nvapi_vk.h). Ready when every call it makes is there.
+    // The driver's own Vulkan Reflex, past every hook: InputCommon's NvAPI Vulkan Reflex output
+    // (low_latency_tech/ll_reflex_nvapi_vk.h), and a game's device the driver made a low latency one before our hooks.
+    // Ready when every call it makes is there, and they are the driver's (never fakenvapi's).
     static bool nvapiVulkanReady()
     {
-        return o_NvAPI_Vulkan_SetSleepMode != nullptr && o_NvAPI_Vulkan_Sleep != nullptr &&
+        return _vulkanTableIsDriver && o_NvAPI_Vulkan_SetSleepMode != nullptr && o_NvAPI_Vulkan_Sleep != nullptr &&
                o_NvAPI_Vulkan_SetLatencyMarker != nullptr && o_NvAPI_Vulkan_GetLatency != nullptr &&
                o_NvAPI_Vulkan_InitLowLatencyDevice != nullptr;
     }
@@ -174,6 +185,18 @@ class ReflexHooks
     {
         return o_NvAPI_Vulkan_InitLowLatencyDevice != nullptr
                    ? o_NvAPI_Vulkan_InitLowLatencyDevice(vkDevice, signalSemaphore)
+                   : NVAPI_NO_IMPLEMENTATION;
+    }
+    static NvAPI_Status nvapiVkDestroyLowLatencyDevice(HANDLE vkDevice)
+    {
+        return o_NvAPI_Vulkan_DestroyLowLatencyDevice != nullptr ? o_NvAPI_Vulkan_DestroyLowLatencyDevice(vkDevice)
+                                                                 : NVAPI_NO_IMPLEMENTATION;
+    }
+    static NvAPI_Status nvapiVkNotifyOutOfBandVkQueue(HANDLE vkDevice, HANDLE queue,
+                                                      NV_VULKAN_OUT_OF_BAND_QUEUE_TYPE queueType)
+    {
+        return o_NvAPI_Vulkan_NotifyOutOfBandVkQueue != nullptr
+                   ? o_NvAPI_Vulkan_NotifyOutOfBandVkQueue(vkDevice, queue, queueType)
                    : NVAPI_NO_IMPLEMENTATION;
     }
     static NvAPI_Status nvapiVkSetSleepMode(HANDLE vkDevice, NV_VULKAN_SET_SLEEP_MODE_PARAMS* pParams)
@@ -221,7 +244,7 @@ class ReflexHooks
     // and the low latency's log say so
     static bool gameReflexFeedsXell();
 
-    // The device is gone: its stored sleep mode and the markers' devices go with it
+    // The device is gone: its stored sleep mode goes with it
     static void forgetSleepDevice(IUnknown* pDev);
     static void forgetSleepDeviceVulkan(HANDLE vkDevice);
 
@@ -234,7 +257,11 @@ class ReflexHooks
     static bool gameCalledReflex() { return _gameCalledReflex.load(std::memory_order_relaxed); }
     static bool gameCalledSetSleepMode() { return _gameCalledSetSleepMode.load(std::memory_order_relaxed); }
 
-    // Once per frame (OutputRule.h RunsLowLatencyUpdate): markers' freshness, then InputCommon::update (Force State,
-    // who keeps the frame cap)
+    // Every present of the game's (a DXGI one, `bridgeOutput`: the Vulkan bridge's own D3D12 swapchain's) and every
+    // Vulkan present: once per frame, from the present OutputRule.h RunsLowLatencyUpdate picks, the markers' freshness
+    // and InputCommon::update (Force State, who keeps the frame cap)
+    static void presentUpdate(lloutput::PresentSite site, bool bridgeOutput);
+
+  private:
     static void update();
 };

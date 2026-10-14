@@ -21,8 +21,6 @@
 
 // Written on the marker's thread, read by XeFG on the threads that tag its frames
 static inline std::atomic<uint64_t> _lastFrameId[20] = {};
-// Not a reference: dropped by forgetSleepDevice when the device goes
-static inline std::atomic<IUnknown*> _lastDev[20] = {};
 
 // #define LOG_REFLEX_CALLS
 
@@ -33,21 +31,36 @@ static bool s_streamlineMarking[20] = {};
 
 std::optional<TimingEntry> ReflexHooks::timingData[TimingType::TimingTypeCOUNT] {};
 
-void ReflexHooks::noteMarker(uint64_t frameId, uint32_t markerType, IUnknown* device, bool countsAsGame)
+void ReflexHooks::noteMarker(uint64_t frameId, uint32_t markerType, bool countsAsGame)
 {
     // TODO: reflexFrameId gets constantly changed, up and down depending on the marker
     State::Instance().reflexFrameId = frameId;
 
     // if (markerType == PRESENT_END)
     if (markerType < std::size(_lastFrameId))
-    {
         _lastFrameId[markerType] = frameId;
-        _lastDev[markerType] = device;
-    }
 
     // Our own markers (Optical F5Low's low latency) are not the game sending markers
     if (markerType == SIMULATION_START && countsAsGame)
         _lastMarkerFrame = State::Instance().fgLastFrame;
+}
+
+// RTSS's Reflex injection marks its markers' frame IDs in the high bits (its Vulkan ones too)
+static void NoteRtssMarker(uint64_t frameId)
+{
+    if ((frameId >> 32) == 0)
+        return;
+
+    if (!State::Instance().rtssReflexInjection && State::Instance().activeFgOutput == FGOutput::XeFG)
+    {
+        ImGuiToast notification { ImGuiToastType::Warning, 10000 };
+        notification.setTitle("RTSS + XeFG detected");
+        notification.setContent(
+            "RTSS Reflex Injection is known to cause issues.\nEspecially when using XeFG.\nPlease disable it.");
+        ImGui::InsertNotification(notification);
+    }
+
+    State::Instance().rtssReflexInjection = true;
 }
 
 ID3D12Device* ReflexHooks::bridgedXellDevice()
@@ -198,22 +211,9 @@ NvAPI_Status ReflexHooks::hkNvAPI_D3D_SetLatencyMarker(IUnknown* pDev,
         _FgNumFramesToGenerate = 0;
     }
 
-    // RTSS reflex markers have a frameid marker in the high bits
-    if (pSetLatencyMarkerParams->frameID >> 32)
-    {
-        if (!State::Instance().rtssReflexInjection && State::Instance().activeFgOutput == FGOutput::XeFG)
-        {
-            ImGuiToast notification { ImGuiToastType::Warning, 10000 };
-            notification.setTitle("RTSS + XeFG detected");
-            notification.setContent(
-                "RTSS Reflex Injection is known to cause issues.\nEspecially when using XeFG.\nPlease disable it.");
-            ImGui::InsertNotification(notification);
-        }
+    NoteRtssMarker(pSetLatencyMarkerParams->frameID);
 
-        State::Instance().rtssReflexInjection = true;
-    }
-
-    noteMarker(pSetLatencyMarkerParams->frameID, pSetLatencyMarkerParams->markerType, pDev, true);
+    noteMarker(pSetLatencyMarkerParams->frameID, pSetLatencyMarkerParams->markerType, true);
 
     auto& skip = s_streamlineMarking;
 
@@ -452,6 +452,13 @@ void ReflexHooks::hookReflex(PFN_NvApi_QueryInterface& queryInterface)
         o_NvAPI_Vulkan_Sleep = GET_INTERFACE(NvAPI_Vulkan_Sleep, queryInterface);
         o_NvAPI_Vulkan_GetLatency = GET_INTERFACE(NvAPI_Vulkan_GetLatency, queryInterface);
         o_NvAPI_Vulkan_InitLowLatencyDevice = GET_INTERFACE(NvAPI_Vulkan_InitLowLatencyDevice, queryInterface);
+        o_NvAPI_Vulkan_DestroyLowLatencyDevice = GET_INTERFACE(NvAPI_Vulkan_DestroyLowLatencyDevice, queryInterface);
+        o_NvAPI_Vulkan_NotifyOutOfBandVkQueue = GET_INTERFACE(NvAPI_Vulkan_NotifyOutOfBandVkQueue, queryInterface);
+
+        // OptiScaler's own fakenvapi lives in this module (UseFakenvapi's fallback hands its query here without
+        // making it the main nvapi): its Vulkan entries are InputCommon's inputs, never an output
+        _vulkanTableIsDriver = o_NvAPI_Vulkan_Sleep != nullptr && !fakenvapi::isUsingAsMainNvapi() &&
+                               Util::GetCallerModule((void*) o_NvAPI_Vulkan_Sleep) != dllModule;
 
         _inited = o_NvAPI_D3D_SetSleepMode && o_NvAPI_D3D_Sleep && o_NvAPI_D3D_GetLatency &&
                   o_NvAPI_D3D_SetLatencyMarker && o_NvAPI_D3D12_SetAsyncFrameMarker;
@@ -609,6 +616,21 @@ bool ReflexHooks::updateTimingData()
     return noData("no Reflex device: no low latency output, no Streamline sleep device");
 }
 
+void ReflexHooks::presentUpdate(lloutput::PresentSite site, bool bridgeOutput)
+{
+    // The game's own last DXGI present (a D3D game's, dxvk's too): a Vulkan present soon after it is dxvk's
+    static std::atomic<double> lastD3dGamePresentMs = -1.0;
+    const double now = Util::MillisecondsNow();
+
+    if (site == lloutput::PresentSite::Dxgi && !bridgeOutput)
+        lastD3dGamePresentMs.store(now, std::memory_order_relaxed);
+
+    const double last = lastD3dGamePresentMs.load(std::memory_order_relaxed);
+
+    if (lloutput::RunsLowLatencyUpdate(site, bridgeOutput, last < 0.0 ? -1.0 : now - last))
+        update();
+}
+
 void ReflexHooks::update()
 {
     // We can still use just the markers to limit the fps with Reflex disabled
@@ -699,14 +721,6 @@ void ReflexHooks::forgetSleepDevice(IUnknown* pDev)
 
     if (pDev != nullptr && _ownSleepDev == pDev)
         _ownSleepDev = nullptr;
-
-    // The markers' devices too: nothing may fall back to a gone one (the next marker
-    // puts a live one back)
-    for (auto& dev : _lastDev)
-    {
-        if (auto* expected = pDev; expected != nullptr)
-            dev.compare_exchange_strong(expected, nullptr);
-    }
 }
 
 // ---- D3D Reflex through InputCommon: what the hooks do before it delivers a call ----
@@ -843,22 +857,9 @@ ReflexHooks::Pre ReflexHooks::preMarker(IUnknown* pDev, NV_LATENCY_MARKER_PARAMS
     if (_lastAsyncMarkerFrameId + 10 < params->frameID)
         _FgNumFramesToGenerate = 0;
 
-    // RTSS reflex markers have a frameid marker in the high bits
-    if (params->frameID >> 32)
-    {
-        if (!State::Instance().rtssReflexInjection && State::Instance().activeFgOutput == FGOutput::XeFG)
-        {
-            ImGuiToast notification { ImGuiToastType::Warning, 10000 };
-            notification.setTitle("RTSS + XeFG detected");
-            notification.setContent(
-                "RTSS Reflex Injection is known to cause issues.\nEspecially when using XeFG.\nPlease disable it.");
-            ImGui::InsertNotification(notification);
-        }
+    NoteRtssMarker(params->frameID);
 
-        State::Instance().rtssReflexInjection = true;
-    }
-
-    noteMarker(params->frameID, params->markerType, pDev, game);
+    noteMarker(params->frameID, params->markerType, game);
 
     *result = NVAPI_OK;
 
@@ -1006,12 +1007,6 @@ void ReflexHooks::forgetSleepDeviceVulkan(HANDLE vkDevice)
 
     if (vkDevice != nullptr && _gameVkSleepDev == vkDevice)
         _gameVkSleepDev = nullptr;
-
-    for (auto& dev : _lastDev)
-    {
-        if (auto* expected = reinterpret_cast<IUnknown*>(vkDevice); expected != nullptr)
-            dev.compare_exchange_strong(expected, nullptr);
-    }
 }
 
 // ---- Vulkan Reflex through InputCommon: what the hooks do before it delivers a call ----
@@ -1055,5 +1050,6 @@ void ReflexHooks::preVkMarker(HANDLE vkDevice, uint64_t frameId, uint32_t marker
     if (game)
         _gameCalledReflex = true;
 
-    noteMarker(frameId, markerType, reinterpret_cast<IUnknown*>(vkDevice), game);
+    NoteRtssMarker(frameId);
+    noteMarker(frameId, markerType, game);
 }

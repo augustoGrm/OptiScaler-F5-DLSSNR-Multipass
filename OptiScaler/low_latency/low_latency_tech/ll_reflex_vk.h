@@ -3,6 +3,7 @@
 #include "low_latency_tech.h"
 
 #include <low_latency/input/OutputRule.h>
+#include <native/NativeLowLatencyVkSync.h>
 
 #include <vulkan/vulkan.h>
 
@@ -38,11 +39,16 @@ class ReflexVk : public LowLatencyTech
     bool applied_enabled = false;
     VkSwapchainKHR applied_swapchain = VK_NULL_HANDLE; // Sleep mode is per swapchain
 
+    // Waits in a row that timed out, whether one ever reached its value, and given up on a driver that never signals
+    // (the same policy as native/NativeLowLatencyVkSync.h)
+    uint32_t timeouts = 0;
+    bool ever_signalled = false;
+    bool gave_up = false;
+
     PFN_vkWaitSemaphores o_WaitSemaphores = nullptr;
     PFN_vkDestroySemaphore o_DestroySemaphore = nullptr;
 
-    // The swapchain the calls go to, VK_NULL_HANDLE until there is one with low latency mode
-    VkSwapchainKHR swapchain();
+    // On the device's swapchain with latency mode (VulkanHooks::LatencySwapchainUse holds it)
     void apply_sleep_mode(VkSwapchainKHR swapchain);
 
   public:
@@ -68,6 +74,9 @@ class ReflexVk : public LowLatencyTech
     void sleep(std::optional<uint32_t> frame_id) override;
     void set_marker(IUnknown* pDevice, const MarkerParams& marker_params) override;
     void set_async_marker(IUnknown* pCommandQueue, const MarkerParams& marker_params) override;
+
+    // Its sleep never signalled: the device's VK_NV_low_latency2 doesn't work (OutputRule.h ChooseReflexVk)
+    bool gave_up_sleeping() const { return gave_up; }
 
     // For passthrough
     VkResult get_latency(VkGetLatencyMarkerInfoNV* latency_info);

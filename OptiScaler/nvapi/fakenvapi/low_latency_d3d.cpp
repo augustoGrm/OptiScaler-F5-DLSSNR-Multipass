@@ -82,12 +82,6 @@ bool LowLatency::update_low_latency_tech(IUnknown* pDevice)
     if (forced_low_latency_tech != LowLatencyMode::None)
         return true;
 
-    if (State::Instance().fakenvapiReloadLowLatency)
-    {
-        change_detected = true;
-        State::Instance().fakenvapiReloadLowLatency = false;
-    }
-
     auto try_reinit = [&]() -> bool
     {
         if (!deinit_current_tech())

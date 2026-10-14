@@ -5757,8 +5757,9 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
     auto config = ctx.config;
 
     SeparatorWithHelpMarker("Low latency", "Keeps the game's render queue short, so what you do shows up sooner.\n"
-                                           "Reflex on NVIDIA; Anti-Lag 2, XeLL or LatencyFlex through fakenvapi "
-                                           "elsewhere; with XeFG: XeLL, or Reflex or Anti-Lag 2 beside it.");
+                                           "Reflex on NVIDIA; Anti-Lag 2 (Anti-Lag Vk on Vulkan), XeLL or "
+                                           "LatencyFlex elsewhere; with XeFG: XeLL, or Reflex or Anti-Lag 2 beside "
+                                           "it.");
 
     const auto status = GetStatus();
     const auto input = config->FramerateLowLatencyInput.value_or_default();
@@ -5823,7 +5824,7 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         {
             outputOptions = {
                 { Output::Auto, autoLabel,
-                    "What the setup has: NVIDIA Reflex, or Anti-Lag 2 / XeLL through fakenvapi." },
+                    "What the setup has: NVIDIA Reflex, or Anti-Lag 2 / XeLL / LatencyFlex on other cards." },
                 { Output::XeLL, "XeLL",
                     "Force XeLL. Works without frame generation on non-Intel cards.\n"
                     "Takes the frame generation slot (disables FG). Needs a restart." },
@@ -5848,8 +5849,10 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
             ShowTooltip("Nothing to lower while the Input is Off.");
         else if (outputLocked)
         {
-            ShowTooltip(outputInputs.antiLag2Failed
-                            ? "XeFG uses XeLL here: Anti-Lag 2 could not start."
+            ShowTooltip(outputInputs.antiLag2Failed ? "XeFG uses XeLL here: Anti-Lag 2 could not start."
+                        : outputInputs.reflexFailed
+                            ? "XeFG uses XeLL here: Reflex could not start (on Vulkan: the game's device has neither "
+                              "VK_NV_low_latency2 nor NVIDIA's NvAPI Vulkan Reflex)."
                             : "XeFG uses XeLL here. Reflex needs an NVIDIA card on its own nvapi (not fakenvapi), "
                               "Anti-Lag 2 an AMD card with fakenvapi as the nvapi.");
         }

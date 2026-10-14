@@ -46,8 +46,11 @@ class ReflexNvApiVk : public LowLatencyTech
 
     // The driver's report
     NvAPI_Status get_latency(NV_VULKAN_LATENCY_RESULT_PARAMS* latency_params) const;
+    // The game's out of band queue (its NvAPI_Vulkan_NotifyOutOfBandVkQueue)
+    void notify_out_of_band(HANDLE queue, NV_VULKAN_OUT_OF_BAND_QUEUE_TYPE queue_type) const;
 
-    // The device is gone: its low latency state (the driver's semaphore and the last value) goes with it. A device
-    // keeps it across outputs otherwise: the driver makes a device a low latency one once, and the values only go up.
+    // The device is about to go (before vkDestroyDevice): the driver's low latency state on it is destroyed, ours (the
+    // semaphore, the last value) forgotten. A device keeps it across outputs otherwise: the driver makes a device a low
+    // latency one once, and the values only go up.
     static void forget_device(VkDevice device);
 };

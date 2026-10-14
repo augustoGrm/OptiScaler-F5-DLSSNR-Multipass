@@ -55,13 +55,32 @@ VkResult VKAPI_CALL InputReflexVk::LatencySleep(VkDevice device, VkSwapchainKHR 
     VulkanHooks::NoteLatencySwapchain(device, swapchain);
     ReflexHooks::preVkSleep((HANDLE) device, ReflexHooks::isGameCall(_ReturnAddress()));
 
+    // The game waits for its semaphore whatever the output does. Without vkSignalSemaphore on the device only the
+    // driver's own sleep can signal it: that one alone then, one sleeper per frame.
+    if (!VulkanHooks::CanSignalTimelineSemaphore(device) && VulkanHooks::o_vkLatencySleepNV != nullptr)
+    {
+        static std::atomic_bool logged = false;
+
+        if (!logged.exchange(true))
+            LOG_WARN(
+                "Vulkan Reflex: the device has no vkSignalSemaphore, the game's sleep goes to the driver as it is");
+
+        return VulkanHooks::o_vkLatencySleepNV(device, swapchain, pSleepInfo);
+    }
+
     LogResult(InputCommon::sleep(inputContext, (IUnknown*) device), "sleep");
 
-    // The game waits for it whatever the output did; the Reflex output's sleep has a semaphore of its own
+    // The Reflex output's sleep has a semaphore of its own
     if (!VulkanHooks::SignalTimelineSemaphore(device, pSleepInfo->signalSemaphore, pSleepInfo->value) &&
         VulkanHooks::o_vkLatencySleepNV != nullptr)
     {
-        // It must never wait for a value that does not come: the driver's own sleep signals it then
+        // It must never wait for a value that does not come (a value below the semaphore's): the driver's sleep
+        // signals it, a second sleep this frame rather than a game that hangs
+        static std::atomic_bool logged = false;
+
+        if (!logged.exchange(true))
+            LOG_WARN("Vulkan Reflex: the game's sleep semaphore could not be signalled, the driver's sleep signals it");
+
         return VulkanHooks::o_vkLatencySleepNV(device, swapchain, pSleepInfo);
     }
 

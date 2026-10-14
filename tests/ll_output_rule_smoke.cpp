@@ -1,6 +1,7 @@
 // Host check of OutputRule.h: InputCommon's outputs on OptiScaler's terms. No GPU and no game needed.
 // cl /std:c++20 /EHsc /W4 /I external/vulkan/include tests/ll_output_rule_smoke.cpp
 #include "../OptiScaler/low_latency/input/OutputRule.h"
+#include "../OptiScaler/low_latency/input/VkLatencyMode.h"
 
 #include <cstdio>
 
@@ -139,21 +140,84 @@ int main()
         CHECK(ChooseReflexVk(nvapi) == ReflexVkSurface::NvApi);
         nvapi.lowLatency2Device = true;
         CHECK(ChooseReflexVk(nvapi) == ReflexVkSurface::LowLatency2); // VK_NV_low_latency2 first
+
+        // ... unless its sleep never signalled there: NVIDIA's NvAPI Vulkan Reflex, else none
+        nvapi.lowLatency2Failed = true;
+        CHECK(ChooseReflexVk(nvapi) == ReflexVkSurface::NvApi);
+        nvapi.nvapiVulkan = false;
+        CHECK(ChooseReflexVk(nvapi) == ReflexVkSurface::None);
+
+        // A running VK_NV_low_latency2 output asks it again: its swapchain made again without the latency mode
+        ReflexVkInputs running;
+        running.lowLatency2Device = running.swapchainKnown = running.swapchainLatencyMode = true;
+        CHECK(ChooseReflexVk(running) == ReflexVkSurface::LowLatency2);
+        running.swapchainLatencyMode = false;
+        CHECK(ChooseReflexVk(running) != ReflexVkSurface::LowLatency2);
+    }
+
+    // ---- RouteGameVkReflex ----
+    {
+        // A device with our semaphore: InputCommon, whatever the driver has
+        CHECK(RouteGameVkReflex(true, true) == GameVkReflexRoute::InputCommon);
+        CHECK(RouteGameVkReflex(true, false) == GameVkReflexRoute::InputCommon);
+
+        // Set up with the driver before our hooks: the driver as it is; no driver either (fakenvapi): nothing to signal
+        CHECK(RouteGameVkReflex(false, true) == GameVkReflexRoute::Driver);
+        CHECK(RouteGameVkReflex(false, false) == GameVkReflexRoute::NoSemaphore);
+    }
+
+    // ---- ChainLatencyMode ----
+    {
+        VkSwapchainCreateInfoKHR info {};
+        info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        VkSwapchainLatencyCreateInfoNV ours {};
+
+        // A device without VK_NV_low_latency2: untouched
+        CHECK(!ChainLatencyMode(false, info, ours) && info.pNext == nullptr);
+
+        // With it: ours at the head of the chain, the rest behind it
+        VkImageFormatListCreateInfo other {};
+        other.sType = VK_STRUCTURE_TYPE_IMAGE_FORMAT_LIST_CREATE_INFO;
+        info.pNext = &other;
+        CHECK(ChainLatencyMode(true, info, ours));
+        CHECK(info.pNext == &ours && ours.pNext == &other && ours.latencyModeEnable == VK_TRUE);
+        CHECK(ours.sType == VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV);
+
+        // Again on the bridge's fallback path, from the game's own info: chained once more, not twice
+        VkSwapchainCreateInfoKHR again {};
+        again.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        again.pNext = &other;
+        CHECK(ChainLatencyMode(true, again, ours) && again.pNext == &ours && ours.pNext == &other);
+
+        // The game's own choice stays, on or off, and nothing is added
+        VkSwapchainLatencyCreateInfoNV game {};
+        game.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_LATENCY_CREATE_INFO_NV;
+        game.pNext = &other;
+        game.latencyModeEnable = VK_FALSE;
+        VkSwapchainCreateInfoKHR gameInfo {};
+        gameInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+        gameInfo.pNext = &game;
+        VkSwapchainLatencyCreateInfoNV unused {};
+        CHECK(!ChainLatencyMode(true, gameInfo, unused) && gameInfo.pNext == &game);
+        game.latencyModeEnable = VK_TRUE;
+        CHECK(ChainLatencyMode(true, gameInfo, unused) && gameInfo.pNext == &game);
     }
 
     // ---- RunsLowLatencyUpdate ----
     {
-        // A native Vulkan game: its Vulkan present, not the bridge's D3D12 one
-        CHECK(RunsLowLatencyUpdate(PresentSite::Vulkan, false, false));
-        CHECK(RunsLowLatencyUpdate(PresentSite::Vulkan, false, true));
-        CHECK(!RunsLowLatencyUpdate(PresentSite::Dxgi, false, true));
+        // A D3D game's own DXGI present, dxvk's too; never the Vulkan bridge's D3D12 output
+        CHECK(RunsLowLatencyUpdate(PresentSite::Dxgi, false, -1.0));
+        CHECK(!RunsLowLatencyUpdate(PresentSite::Dxgi, true, -1.0));
 
-        // A D3D game: its DXGI present; on dxvk too (dxvk's Vulkan present is on dxvk's thread), bridged or not
-        CHECK(RunsLowLatencyUpdate(PresentSite::Dxgi, false, false));
-        CHECK(RunsLowLatencyUpdate(PresentSite::Dxgi, true, false));
-        CHECK(RunsLowLatencyUpdate(PresentSite::Dxgi, true, true));
-        CHECK(!RunsLowLatencyUpdate(PresentSite::Vulkan, true, false));
-        CHECK(!RunsLowLatencyUpdate(PresentSite::Vulkan, true, true));
+        // A native Vulkan game (also under Proton, where every DXGI adapter is dxvk's): no game DXGI present ever
+        CHECK(RunsLowLatencyUpdate(PresentSite::Vulkan, false, -1.0));
+
+        // dxvk's Vulkan presents of a D3D game's frames: its DXGI present ran the update just before
+        CHECK(!RunsLowLatencyUpdate(PresentSite::Vulkan, false, 5.0));
+        CHECK(!RunsLowLatencyUpdate(PresentSite::Vulkan, false, kD3dGamePresentGapMs));
+
+        // A game that stopped presenting through DXGI (a launcher's or a video's swapchain): its Vulkan present again
+        CHECK(RunsLowLatencyUpdate(PresentSite::Vulkan, false, kD3dGamePresentGapMs + 1.0));
     }
 
     // ---- MarkerFromVulkanNV / MarkerToVulkanNV ----
@@ -311,6 +375,19 @@ int main()
         in.side = XefgLatency::AntiLag2;
         CHECK(Same(SleepModeFor(Mode(false, false, 0, false), Role::Output, in), Mode(true, false, 13333, false)));
         CHECK(Same(SleepModeFor(Mode(false, false, 0, false), Role::XefgXell, in), Mode(false, false, 0, false)));
+
+        // OptiScaler's own mode planned for XeFG's other side (its cap counts that side's frames): low latency stays,
+        // no interval and no Boost until it sends one for this side
+        ShapeInputs own;
+        own.xefgOutput = true;
+        own.modeForOtherSide = true;
+        const auto ownMode = Mode(true, true, 34483);
+        CHECK(Same(SleepModeFor(ownMode, Role::Output, own), Mode(true, false, 0)));
+        own.side = XefgLatency::Reflex;
+        CHECK(Same(SleepModeFor(ownMode, Role::Output, own), Mode(true, false, 0)));
+        CHECK(Same(SleepModeFor(ownMode, Role::XefgXell, own), Mode(false, false, 0)));
+        own.modeForOtherSide = false;
+        CHECK(Same(SleepModeFor(ownMode, Role::Output, own), ownMode));
     }
 
     // ---- CapForGame ----
@@ -416,6 +493,16 @@ int main()
         fake.gameLowLatencyOn = false;
         fake.fgActive = true;
         CHECK(CapForGame(fake).outputHoldsCap);
+
+        // No output running (not started yet, or it could not start): nothing would sleep with it, the limiter keeps it
+        fake.outputRunning = false;
+        CHECK(!CapForGame(fake).outputHoldsCap);
+        in.side = XefgLatency::Reflex;
+        in.gameLowLatencyOn = true;
+        in.xefgShownPerRendered = 2;
+        CHECK(CapForGame(in).outputHoldsCap);
+        in.outputRunning = false;
+        CHECK(!CapForGame(in).outputHoldsCap);
     }
 
     static_assert(IntervalUs(75.0f) == 13333);
