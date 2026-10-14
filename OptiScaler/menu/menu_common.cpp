@@ -7594,6 +7594,10 @@ void MenuCommon::RenderThemeSettings(RenderMenuContext& ctx)
         ShowHelpMarker("Rounder layout with section cards and the Inter font. The performance overlay keeps its "
                        "fixed-width font.");
 
+        bool menuBlur = config->MenuBlur.value_or_default();
+        if (ImGui::Checkbox("Blur game behind menu", &menuBlur))
+            config->MenuBlur = menuBlur;
+
         ImGui::SeparatorText("Accent Colour");
 
         ImGui::Text("Presets:");
@@ -10224,6 +10228,21 @@ void MenuCommon::RenderMainMenuWindow(RenderMenuContext& ctx)
 
         // Navigation pane and the selected page.
         RenderMainMenuPages(ctx);
+
+        // Blurred game image behind the window, the semi transparent window background tints it
+        if (_bgBlurTexture != ImTextureID_Invalid && config->MenuBlur.value_or_default() &&
+            ImGui::GetStyleColorVec4(ImGuiCol_WindowBg).w < 1.0f)
+        {
+            const ImVec2 blurMin = ImGui::GetWindowPos();
+            const ImVec2 blurMax = ImVec2(blurMin.x + ImGui::GetWindowWidth(), blurMin.y + ImGui::GetWindowHeight());
+            const ImVec2 uvMul = ImVec2(_bgBlurUVScale.x / io.DisplaySize.x, _bgBlurUVScale.y / io.DisplaySize.y);
+
+            ImGui::GetBackgroundDrawList()->AddImageRounded(
+                _bgBlurTexture, blurMin, blurMax, ImVec2(blurMin.x * uvMul.x, blurMin.y * uvMul.y),
+                ImVec2(blurMax.x * uvMul.x, blurMax.y * uvMul.y), IM_COL32_WHITE, ImGui::GetStyle().WindowRounding);
+
+            _bgBlurUsed = true;
+        }
 
         // Diagnostics and footer actions below the page, full width.
         const float footerTop = ImGui::GetCursorPosY();
