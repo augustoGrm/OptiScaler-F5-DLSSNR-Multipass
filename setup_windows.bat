@@ -2,11 +2,11 @@
 setlocal
 set "OPTISCALER_SCRIPT=%~f0"
 cd /d "%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$text=[IO.File]::ReadAllText($env:OPTISCALER_SCRIPT); $marker=[char]35+' OPTISCALER_POWERSHELL_START'; & ([scriptblock]::Create($text.Substring($text.LastIndexOf($marker)+$marker.Length))) -ScriptPath $env:OPTISCALER_SCRIPT"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$text=[IO.File]::ReadAllText($env:OPTISCALER_SCRIPT); $marker=[char]35+' OPTISCALER_POWERSHELL_START'; & ([scriptblock]::Create($text.Substring($text.LastIndexOf($marker)+$marker.Length))) -ScriptPath $env:OPTISCALER_SCRIPT; exit $LASTEXITCODE"
 set "optiExit=%errorlevel%"
 if "%optiExit%"=="10" (
-    del /q "%~f0"
-    exit /b 0
+    rem Leave the batch context before deleting its file, so cmd never reads it again.
+    (goto) 2>nul & powershell -NoProfile -Command "Remove-Item -LiteralPath $env:OPTISCALER_SCRIPT -ErrorAction Stop"
 )
 if not defined CI pause
 exit /b %optiExit%
