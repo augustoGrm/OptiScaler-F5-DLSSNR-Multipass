@@ -83,6 +83,9 @@ bool XeFG_Dx12::CreateSwapchainContext(ID3D12Device* device)
             if (result != XEFG_SWAPCHAIN_RESULT_SUCCESS)
             {
                 LOG_ERROR("SetLatencyReduction error: {} ({})", magic_enum::enum_name(result), (UINT) result);
+
+                // No XeFG paces with it: it must not stay the output
+                InputCommon::release_xefg_xell();
                 return false;
             }
         }

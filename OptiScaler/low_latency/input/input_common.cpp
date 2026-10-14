@@ -46,6 +46,26 @@ static bool marker_supported(InputMarkerMode mode, MarkerType type)
     }
 }
 
+// create_tech_mutex
+void InputCommon::retire(std::shared_ptr<LowLatencyTech> tech)
+{
+    if (tech == nullptr)
+        return;
+
+    if (tech->get_mode() != LowLatencyMode::AntiLag2 || State::Instance().activeFgOutput != FGOutput::FSRFG)
+    {
+        tech->deinit();
+        return;
+    }
+
+    // One at a time: an older one FSR FG no longer has goes now
+    if (retired_antilag2 != nullptr)
+        retired_antilag2->deinit();
+
+    retired_antilag2 = std::move(tech);
+    retired_presents = 3;
+}
+
 // private
 bool InputCommon::deinit_current_tech()
 {
@@ -63,7 +83,7 @@ bool InputCommon::deinit_current_tech()
             while (old_tech.use_count() > 1)
                 std::this_thread::yield();
 
-            old_tech->deinit();
+            retire(std::move(old_tech));
         }
 
         output_device = nullptr;
@@ -211,7 +231,7 @@ void InputCommon::use_output(std::shared_ptr<LowLatencyTech> tech)
         while (old_tech.use_count() > 1)
             std::this_thread::yield();
 
-        old_tech->deinit();
+        retire(std::move(old_tech));
     }
 
     activeOutput = tech->get_mode();
@@ -448,7 +468,14 @@ std::optional<LowLatencyInput> InputCommon::forced_input()
 
 bool InputCommon::update_for_call(const InputContext& inputContext, IUnknown* pDevice, bool query)
 {
-    return update_low_latency_tech(pDevice, register_call(inputContext, pDevice, query));
+    const auto api = register_call(inputContext, pDevice, query);
+
+    // A query only reads what runs: it starts, switches or stops no output (the menu asks from its own thread), and
+    // doesn't count down the Anti-Lag 2 delay
+    if (query)
+        return true;
+
+    return update_low_latency_tech(pDevice, api);
 }
 
 bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optional<LowLatencyMode> mode)
@@ -529,6 +556,11 @@ bool InputCommon::update_low_latency_tech(IUnknown* pDevice, API api, std::optio
     std::scoped_lock lock(create_tech_mutex);
 
     if (init_tech(pDevice, api, desiredMode, plan))
+        return true;
+
+    // Next to XeFG an output that can't start is no error to the game's call (some games turn their Reflex off on one):
+    // XeFG keeps its XeLL, and Anti-Lag 2 that can't start hands the split back to XeLL (native::lowlatency::XefgSide)
+    if (plan.xefgOwnXell && currently_active_tech.load() == nullptr)
         return true;
 
     auto try_reinit = [&]() -> bool
@@ -649,7 +681,7 @@ void InputCommon::stop_output(bool release)
             std::this_thread::yield();
 
         if (release)
-            old_tech->deinit();
+            retire(std::move(old_tech));
     }
 
     LOG_INFO("Low latency output {} stopped{}", magic_enum::enum_name(activeOutput.load()),
@@ -1396,12 +1428,26 @@ void InputCommon::apply_xefg_xell_mode(const LowLatencyTech* output)
     }
 }
 
+// Once per present, from the present thread only (wrapped swap chain's LocalPresent through ReflexHooks::update): the
+// static locals below rely on that
 void InputCommon::update(bool fgActive)
 {
     auto& state = State::Instance();
     auto config = Config::Instance();
     auto current_tech = currently_active_tech.load();
     ++present_count;
+
+    // A stopped Anti-Lag 2 output FSR FG had: gone once reportFGPresent handed FSR the new context (retire)
+    if (retired_presents.load() != 0)
+    {
+        std::scoped_lock lock(create_tech_mutex);
+
+        if (retired_presents != 0 && --retired_presents == 0 && retired_antilag2 != nullptr)
+        {
+            retired_antilag2->deinit();
+            retired_antilag2.reset();
+        }
+    }
 
     // Force State can change at any time, XeLL takes a changed state through its sleep mode
     if (current_tech != nullptr)
@@ -1428,17 +1474,31 @@ void InputCommon::update(bool fgActive)
 
     // fakenvapi as the nvapi: with more than one generated DLSS FG frame its methods fall apart (the plan picks
     // LatencyFlex), and it was told Force Disable for them unless the player forced Reflex on. Never real Reflex.
+    // Undone when it ends, unless the player changed Force State meanwhile.
+    if (!state.externalFrameGeneration)
     {
         static uint8_t lastFrames = 0;
+        static bool toldForceDisable = false;
         const auto frames = ReflexHooks::dlssgFrameCountToGenerate();
+        const bool multiFrame = state.dlssgLastSetMode == sl::DLSSGMode::eDynamic || frames > 1;
 
         if (std::exchange(lastFrames, frames) != frames && fakenvapi::isUsingAsMainNvapi() &&
             state.activeFgOutput != FGOutput::XeFG &&
-            config->FN_ForceReflex.value_or_default() != ForceReflex::ForceEnable &&
-            (state.dlssgLastSetMode == sl::DLSSGMode::eDynamic || frames > 1))
+            config->FN_ForceReflex.value_or_default() != ForceReflex::ForceEnable && multiFrame)
         {
             LOG_INFO("Multi frame generation, fakenvapi's low latency is told Force Disable");
             config->FN_ForceReflex.set_volatile_value(ForceReflex::ForceDisable);
+            toldForceDisable = true;
+        }
+        else if (toldForceDisable && !multiFrame)
+        {
+            toldForceDisable = false;
+
+            if (config->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable)
+            {
+                LOG_INFO("Multi frame generation ended, fakenvapi's low latency goes back to its Force State");
+                config->FN_ForceReflex = config->FN_ForceReflex.value_for_config();
+            }
         }
     }
 
@@ -1661,6 +1721,9 @@ void InputCommon::release_xefg_xell()
 
     xefg_frame_id = 0;
     reset_xefg_batches();
+
+    // A new XeFG (another device, a driver update) tries Anti-Lag 2 again
+    antilag2_failed = false;
 
     if (auto queue = xefg_present_queue.exchange(nullptr))
         queue->Release();

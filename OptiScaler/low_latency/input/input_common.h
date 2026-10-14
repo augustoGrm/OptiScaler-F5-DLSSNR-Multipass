@@ -133,6 +133,12 @@ class InputCommon
     // Anti-Lag 2 could not start next to XeFG's XeLL: XeLL keeps lowering latency (native::lowlatency::XefgSide)
     inline static std::atomic_bool antilag2_failed = false;
 
+    // An Anti-Lag 2 output FSR FG may still use: fakenvapi::reportFGPresent hands its context to FSR through the swap
+    // chain on every present, so it is deinited a few presents after it stopped (retire, update). create_tech_mutex.
+    inline static std::shared_ptr<LowLatencyTech> retired_antilag2 {};
+    inline static std::atomic_uint32_t retired_presents = 0;
+    static void retire(std::shared_ptr<LowLatencyTech> tech);
+
     static bool deinit_current_tech();
     static bool init_tech(IUnknown* pDevice, API api, LowLatencyMode desiredMode, const lloutput::OutputPlan& plan);
     static LowLatencyMode to_mode(lloutput::Tech tech);

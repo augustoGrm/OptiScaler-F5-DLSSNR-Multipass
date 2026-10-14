@@ -1116,21 +1116,23 @@ bool ReflexHooks::updateTimingData()
 // For updating information about Reflex hooks
 void ReflexHooks::update(bool fgActive, bool isVulkan)
 {
-    if (State::Instance().externalFrameGeneration)
-    {
-        State::Instance().reflexLimitsFps = false;
-        State::Instance().reflexShowWarning = false;
-        return;
-    }
     // We can still use just the markers to limit the fps with Reflex disabled
     // But need to fallback in case a game stops sending them for some reason
     _updatesWithoutMarker++;
 
     // A D3D game: InputCommon delivers the game's Reflex and ours and keeps the frame cap's rule (OutputRule.h
-    // CapForGame), the Streamline of OptiScaler's DLSS FG output included. The rest is for Vulkan games.
+    // CapForGame, which hands no cap to an external frame generation's Reflex), the Streamline of OptiScaler's DLSS FG
+    // output included; Force State reaches its output whatever owns frame generation. The rest is for Vulkan games.
     if (!isVulkan)
     {
         InputCommon::update(fgActive);
+        return;
+    }
+
+    if (State::Instance().externalFrameGeneration)
+    {
+        State::Instance().reflexLimitsFps = false;
+        State::Instance().reflexShowWarning = false;
         return;
     }
 
