@@ -67,6 +67,22 @@ template <typename T> void DelayedDestroy(std::unique_ptr<T> ptr)
     std::thread([p = std::move(ptr)]() mutable { std::this_thread::sleep_for(std::chrono::seconds(2)); }).detach();
 }
 
+// Releases a COM object (a texture, a heap) once the GPU can no longer be using it, by the same delay
+struct ReleaseLater
+{
+    explicit ReleaseLater(IUnknown* object) : object(object) {}
+    ~ReleaseLater() { object->Release(); }
+    ReleaseLater(const ReleaseLater&) = delete;
+    ReleaseLater& operator=(const ReleaseLater&) = delete;
+    IUnknown* object;
+};
+
+inline void DelayedRelease(IUnknown* object)
+{
+    if (object != nullptr)
+        DelayedDestroy(std::make_unique<ReleaseLater>(object));
+}
+
 }; // namespace Util
 
 inline void ThrowIfFailed(HRESULT hr)

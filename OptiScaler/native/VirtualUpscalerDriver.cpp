@@ -27,21 +27,9 @@ std::atomic<const void*> g_virtualFeature { nullptr };
 constexpr UINT kVirtualHandleId = 0x4E524631; // 'NRF1'
 
 // Releases a texture once the GPU can no longer be using it, by the same delay Util::DelayedDestroy gives features.
-struct ReleaseLater
-{
-    explicit ReleaseLater(ID3D12Resource* resource) : resource(resource) {}
-    ~ReleaseLater() { resource->Release(); }
-    ReleaseLater(const ReleaseLater&) = delete;
-    ReleaseLater& operator=(const ReleaseLater&) = delete;
-    ID3D12Resource* resource;
-};
-
 void ReleaseTexture(ID3D12Resource*& texture)
 {
-    if (texture == nullptr)
-        return;
-
-    Util::DelayedDestroy(std::make_unique<ReleaseLater>(texture));
+    Util::DelayedRelease(texture);
     texture = nullptr;
 }
 

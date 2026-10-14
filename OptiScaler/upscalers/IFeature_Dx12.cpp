@@ -5,6 +5,7 @@
 
 #include "IFeature_Dx12.h"
 #include "State.h"
+#include <menu/MenuLifetimeRule.h>
 #include <resource_tracking/GenericDepth_Dx12.h>
 
 void IFeature_Dx12::ResourceBarrier(ID3D12GraphicsCommandList* InCommandList, ID3D12Resource* InResource,
@@ -35,7 +36,7 @@ bool IFeature_Dx12::Init(ID3D12Device* InDevice, ID3D12GraphicsCommandList* InCo
         {
             std::lock_guard lock(ImguiMutex);
 
-            if (Imgui == nullptr)
+            if (Imgui == nullptr && !ImguiRetiring.load())
                 Imgui = std::make_unique<Menu_Dx12>(Util::GetProcessWindow(), InDevice);
         }
 
@@ -280,19 +281,27 @@ bool IFeature_Dx12::Evaluate(ID3D12GraphicsCommandList* InCommandList, NVSDK_NGX
     {
         std::lock_guard lock(ImguiMutex);
 
-        if (Imgui != nullptr && Imgui.get() != nullptr)
+        menulife::Inputs menu;
+        menu.hasMenu = Imgui != nullptr;
+        menu.retiring = ImguiRetiring.load();
+        menu.fits = menu.hasMenu && !Imgui->IsHandleDifferent() &&
+                    (paramOutput == nullptr || Imgui->Fits(Device, paramOutput->GetDesc().Format));
+
+        switch (menulife::Next(menu))
         {
-            if (Imgui->IsHandleDifferent())
-            {
-                Imgui.reset();
-            }
-            else
-                Imgui->Render(InCommandList, paramOutput);
-        }
-        else
-        {
-            if (Imgui == nullptr || Imgui.get() == nullptr)
-                Imgui = std::make_unique<Menu_Dx12>(GetForegroundWindow(), Device);
+        case menulife::Step::Draw:
+            Imgui->Render(InCommandList, paramOutput);
+            break;
+        case menulife::Step::Create:
+            // The window IsHandleDifferent compares with: the foreground one (another app while alt-tabbed) made it
+            // differ at once and retire again
+            Imgui = std::make_unique<Menu_Dx12>(Util::GetProcessWindow(), Device);
+            break;
+        case menulife::Step::Retire:
+            RetireImgui("another window, device or output format");
+            break;
+        case menulife::Step::Wait:
+            break;
         }
     }
 
@@ -334,7 +343,32 @@ void IFeature_Dx12::ReadDetailedGpuTimes(void* commandQueueVoid, std::vector<Det
         detailedGpuTimes.emplace_back(DetailedGpuTime { Magnifier->Name(), magnifierTime.value(), false });
 }
 
-IFeature_Dx12::IFeature_Dx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters) {}
+IFeature_Dx12::IFeature_Dx12(unsigned int InHandleId, NVSDK_NGX_Parameter* InParameters) { ++LiveFeatures; }
+
+void IFeature_Dx12::RetireImgui(const char* why)
+{
+    if (Imgui == nullptr)
+        return;
+
+    LOG_INFO("In-upscaler menu: retired ({}), freed after the delay; a new one only then", why);
+    ImguiRetiring = true;
+    Util::DelayedDestroy(std::make_unique<RetiredImgui>(std::move(Imgui)));
+}
+
+IFeature_Dx12::RetiredImgui::~RetiredImgui()
+{
+    {
+        std::lock_guard lock(ImguiMutex);
+
+        // Under the loader lock: left, as the feature destructor leaves its parts
+        if (State::Instance().isShuttingDown)
+            menu.release();
+        else
+            menu.reset();
+    }
+
+    ImguiRetiring = false;
+}
 
 IFeature_Dx12::~IFeature_Dx12()
 {
@@ -349,9 +383,12 @@ IFeature_Dx12::~IFeature_Dx12()
         return;
     }
 
+    // Not the menu: the feature that replaces this one has been drawing with it, and its lists may still be on the GPU
+    // (RE2 hung on AMD when it was freed here). It goes with the last feature, after the same delay.
+    if (menulife::RetireOnFeatureGone(--LiveFeatures))
     {
         std::lock_guard lock(ImguiMutex);
-        Imgui.reset();
+        RetireImgui("the last upscaler feature is gone");
     }
 
     OutputScaler.reset();
