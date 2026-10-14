@@ -904,7 +904,8 @@ struct CapSettle
     bool started = false;
     CapPlan applied;
     CapPlan pending;
-    int held = 0; // presents `pending` has held
+    int held = 0;                       // presents `pending` has held
+    Method method = Method::RealReflex; // the method `applied` was planned for (the overload with a method)
 };
 
 inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, int needed = kCapSettlePresents)
@@ -934,6 +935,19 @@ inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, int needed =
     }
 
     return settle.applied;
+}
+
+// The same for the method in use. A changed method (XeFG's Output switched) counts frames its own way, XeLL shown ones
+// and the others rendered ones: its plan is taken at once, the interval settled for the method before would be wrong
+// for it (Arkham Knight: XeLL kept Reflex's per-rendered 25000 us, half the cap, for 0.7 s after the switch).
+inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, Method method, int needed = kCapSettlePresents)
+{
+    if (settle.started && settle.method != method)
+        settle.started = false;
+
+    const auto cap = SettleCap(settle, planned, needed);
+    settle.method = method;
+    return cap;
 }
 
 // What one SetSleepMode of ours carried, and whether the method took it

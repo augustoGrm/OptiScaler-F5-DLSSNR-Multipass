@@ -555,6 +555,15 @@ int main()
 
             // A pause that lasts: taken on its kCapSettlePresents-th present
             CHECK(SettleCap(settle, limiter) == limiter);
+
+            // A changed method takes its plan at once: Reflex's per-rendered interval is wrong for XeLL
+            CapSettle byMethod;
+            const CapPlan reflex { CapOwner::LowLatency, 25000 };
+            const CapPlan xellNow { CapOwner::LowLatency, 12500 };
+            CHECK(SettleCap(byMethod, reflex, Method::RealReflexWithXefg) == reflex);
+            CHECK(SettleCap(byMethod, xellNow, Method::XellWithXefg) == xellNow);
+            // ... the same method still settles
+            CHECK(SettleCap(byMethod, reflex, Method::XellWithXefg) == xellNow);
             CHECK(SettleCap(settle, limiter) == limiter);
 
             // A plan that keeps changing never settles on any of its passing values

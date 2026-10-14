@@ -587,7 +587,7 @@ void PresentEnd(Api api, IUnknown* device, PresentSource source)
 
     // The plan in force: a new one once it has held for a few presents (frame generation's short pauses)
     const auto planned = PlanCap(capInputs);
-    const auto cap = SettleCap(g_capSettle, planned);
+    const auto cap = SettleCap(g_capSettle, planned, method);
 
     SleepModeCall call;
     call.api = api;
