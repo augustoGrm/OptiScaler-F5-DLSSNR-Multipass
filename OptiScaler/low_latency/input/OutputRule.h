@@ -24,6 +24,7 @@ enum class Tech : uint8_t
     AntiLag2,    // AMD
     XeLL,        // Intel's, also XeFG's on every GPU; D3D12 only
     LatencyFlex, // works anywhere
+    FrameCap,    // only waits for OptiScaler's frame cap, at the Sleep or simulation start (ll_fps_limiter.h)
 };
 
 struct OutputInputs
@@ -33,6 +34,7 @@ struct OutputInputs
     bool xefgOutput = false;              // XeFG is the frame generation output
     XefgLatency side = XefgLatency::XeLL; // with XeFG, what lowers latency (native::lowlatency::XefgSide, in force)
     bool forceLatencyFlex = false;        // fakenvapi's Force LatencyFlex
+    bool frameCapOnly = false;            // [Framerate] FrameCapOnly, the Output "Frame cap only"
     bool multiFrame = false; // DLSS FG with more than one generated frame, or Dynamic: no Anti-Lag 2 or XeLL
     // The input sends XeLL's six markers with frame ids every frame (Intel R9, XL18): not the UE mod (simulation
     // markers only) or Anti-Lag 2 (no frame ids). XeLL fed half a frame does harm (InputCommon::incompatibility).
@@ -71,6 +73,11 @@ constexpr OutputPlan PlanOutput(const OutputInputs& in)
 
     if (in.realNvapi)
         return { { Tech::Reflex, Tech::None, Tech::None }, false };
+
+    // Waits where Reflex, Anti-Lag 2 and XeLL do, without their latency work: chosen over them, it replaces
+    // LatencyFlex. It counts the game's frames, more than one generated frame is fine.
+    if (in.frameCapOnly)
+        return { { Tech::FrameCap, Tech::None, Tech::None }, false };
 
     // fakenvapi as the game's nvapi: Anti-Lag 2 and XeLL fall apart with more than one generated frame
     if (in.forceLatencyFlex || in.multiFrame)
@@ -357,6 +364,8 @@ struct GameCapInputs
     uint32_t xefgShownPerRendered = 1; // native::lowlatency::XefgShownPerRendered
     uint8_t dlssgFramesToGenerate = 0; // the game's DLSS FG, seen from its async markers
     bool outputIsXell = false;         // the output runs XeLL (fakenvapi's choice)
+    bool outputIsFrameCap = false;     // the output only waits for the cap (Frame cap only)
+    bool forceDisabled = false;        // fakenvapi's Force Disable: Frame cap only stops waiting
     bool outputRunning = true;         // an output runs (none: not started yet, or it could not start)
 };
 
@@ -388,6 +397,12 @@ constexpr GameCap CapForGame(const GameCapInputs& in)
         {
             out.outputHoldsCap = in.xellHoldsCap;
         }
+    }
+    else if (in.outputIsFrameCap)
+    {
+        // Waiting for the cap is all it does: it keeps it with the game's markers alone too (it waits at simulation
+        // start without a Sleep), unless Force Disable stops it
+        out.outputHoldsCap = !in.forceDisabled;
     }
     else if (in.gameSetSleepMode)
     {

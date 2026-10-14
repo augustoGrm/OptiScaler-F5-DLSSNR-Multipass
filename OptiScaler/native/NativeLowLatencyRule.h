@@ -272,8 +272,9 @@ inline RunsFor RunReason(const Inputs& in)
 
 // The Framerate page's "Output": what lowers latency. Auto leaves it to the setup (NVIDIA Reflex on real nvapi, else
 // InputCommon's Anti-Lag 2 / Anti-Lag Vk, XeLL or LatencyFlex; XeLL with XeFG); XeLL is the Force XeLL setting (a
-// restart, it takes the frame generation slot); LatencyFlex is the Force LatencyFlex setting. Nothing here is a new
-// method. With XeFG as the frame generation output the entries are XeLL (its own), Reflex and Anti-Lag 2 ([XeFG]
+// restart, it takes the frame generation slot); LatencyFlex is the Force LatencyFlex setting; Frame cap only is
+// [Framerate] FrameCapOnly (InputCommon's FpsLimiter: it only waits for the cap, where the game is about to read
+// input). With XeFG as the frame generation output the entries are XeLL (its own), Reflex and Anti-Lag 2 ([XeFG]
 // LowLatencyOutput); Reflex and Anti-Lag 2 are offered only then (without XeFG, Auto already is Reflex or Anti-Lag 2).
 enum class Output
 {
@@ -281,7 +282,8 @@ enum class Output
     XeLL,
     LatencyFlex,
     Reflex,
-    AntiLag2
+    AntiLag2,
+    FrameCapOnly
 };
 
 struct OutputInputs
@@ -359,12 +361,16 @@ inline OutputChoice OutputAvailability(Output output, const OutputInputs& in)
     if (output == Output::LatencyFlex && !in.fakenvapiMain)
         return { false, "Needs fakenvapi as the game's nvapi" };
 
+    // The driver's Reflex waits at the same point and lowers latency too (OutputRule.h PlanOutput keeps it)
+    if (output == Output::FrameCapOnly && !in.fakenvapiMain && in.nvidiaGpu)
+        return { false, "NVIDIA Reflex already waits there, and lowers latency too" };
+
     return { true, "" };
 }
 
 // What the combo shows: with XeFG its choice if the setup has it, else from the two fakenvapi flags it writes (XeLL wins
 // when both are set, as it takes the slot)
-inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLatencyFlex)
+inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLatencyFlex, bool frameCapOnly = false)
 {
     if (in.xefgOutput)
     {
@@ -379,6 +385,10 @@ inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLate
 
     if (forceXell)
         return Output::XeLL;
+
+    // As PlanOutput: before LatencyFlex, never on NVIDIA Reflex (Auto shows there)
+    if (frameCapOnly)
+        return OutputAvailability(Output::FrameCapOnly, in).available ? Output::FrameCapOnly : Output::Auto;
 
     // Forced in the ini on a setup that does not offer it (real nvapi): Auto shows, not a greyed entry
     return forceLatencyFlex && in.fakenvapiMain ? Output::LatencyFlex : Output::Auto;

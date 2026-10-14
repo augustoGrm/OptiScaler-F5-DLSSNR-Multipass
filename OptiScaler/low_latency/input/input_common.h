@@ -197,28 +197,10 @@ class InputCommon
     static InputResult get_frame_reports(const InputContext& inputContext, IUnknown* pDev, FrameReport* reports);
     static bool get_timing_data(TimingData& timingDataOut);
     static uint64_t get_last_present_start_frame_id() { return last_present_start_frame_id; };
-    static flag_set<LowLatencyInput> get_avaliable_inputs()
-    {
-        flag_set<LowLatencyInput> inputs;
-
-        for (uint32_t i = 0; i < static_cast<uint32_t>(LowLatencyInput::_); i++)
-        {
-            if (available(static_cast<LowLatencyInput>(i)))
-                inputs |= static_cast<LowLatencyInput>(i);
-        }
-
-        return inputs;
-    }
     static LowLatencyMode active_output() { return activeOutput; }
 
     // The active input's API, the swapchain's without one
     static API uses_api();
-    static void get_currently_active(LowLatencyInput& activeInput, LowLatencyMode& activeOutput)
-    {
-        activeInput = InputCommon::activeInput.load();
-        activeOutput = InputCommon::activeOutput.load();
-    }
-
     static InputResult mark_present_start(IUnknown* pDevice);
 
     // Stops the output; the next call of the active input starts it again. `release` false lets go of it without a call

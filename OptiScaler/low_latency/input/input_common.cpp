@@ -270,6 +270,8 @@ LowLatencyMode InputCommon::to_mode(lloutput::Tech tech)
         return LowLatencyMode::XeLL;
     case lloutput::Tech::LatencyFlex:
         return LowLatencyMode::LatencyFlex;
+    case lloutput::Tech::FrameCap:
+        return LowLatencyMode::FpsLimiter;
     default:
         return LowLatencyMode::None;
     }
@@ -291,6 +293,7 @@ lloutput::OutputPlan InputCommon::plan_output(API api, IUnknown* pDevice)
     in.xefgOutput = state.activeFgOutput == FGOutput::XeFG;
     in.side = native::lowlatency::XefgSide();
     in.forceLatencyFlex = Config::Instance()->FN_ForceLatencyFlex.value_or_default();
+    in.frameCapOnly = Config::Instance()->FramerateFrameCapOnly.value_or_default();
     in.multiFrame = state.dlssgDetectedInterpolationCount > 1 || state.dlssgLastSetMode == sl::DLSSGMode::eDynamic;
     in.inputFeedsXell = incompatibility(activeInput.load(), LowLatencyMode::XeLL) == nullptr;
     return lloutput::PlanOutput(in);
@@ -1361,8 +1364,10 @@ SleepMode InputCommon::shaped_sleep_mode(lloutput::Role role)
     lloutput::ShapeInputs in;
     in.xefgOutput = State::Instance().activeFgOutput == FGOutput::XeFG;
     in.side = native::lowlatency::XefgSide();
-    // OptiScaler's own calls carry their cap (native::lowlatency PlanCap); the UE mod's stays with the limiter
-    in.capIntervalUs = input == LowLatencyInput::Reflex ? fps_limit_interval_us.load() : 0;
+    // OptiScaler's own calls carry their cap (native::lowlatency PlanCap); the UE mod's goes only to Frame cap only
+    // (update), else it stays with the limiter
+    in.capIntervalUs =
+        input == LowLatencyInput::Reflex || input == LowLatencyInput::UeLowLatency ? fps_limit_interval_us.load() : 0;
     in.forceDisabled = Config::Instance()->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable;
     in.blocked = input == LowLatencyInput::Reflex && native::lowlatency::GameLowLatencyBlocked();
     in.inputSetMode = (sleep_modes_set.load(std::memory_order_relaxed) & (1u << static_cast<uint32_t>(input))) != 0;
@@ -1476,7 +1481,7 @@ void InputCommon::update()
         const bool multiFrame = state.dlssgLastSetMode == sl::DLSSGMode::eDynamic || frames > 1;
 
         if (std::exchange(lastFrames, frames) != frames && fakenvapi::isUsingAsMainNvapi() &&
-            state.activeFgOutput != FGOutput::XeFG &&
+            state.activeFgOutput != FGOutput::XeFG && activeOutput != LowLatencyMode::FpsLimiter &&
             config->FN_ForceReflex.value_or_default() != ForceReflex::ForceEnable && multiFrame)
         {
             LOG_INFO("Multi frame generation, fakenvapi's low latency is told Force Disable");
@@ -1497,15 +1502,32 @@ void InputCommon::update()
 
     // Who keeps the frame cap (OutputRule.h CapForGame): the game's Reflex as the input, or the Streamline of
     // OptiScaler's DLSS FG output (its calls go through the hooks). OptiScaler's own calls carry their cap themselves
-    // (native::lowlatency PlanCap, OwnsFrameCap), the UE mod's stays with the limiter.
+    // (native::lowlatency PlanCap, OwnsFrameCap). The UE mod's goes to Frame cap only, which does nothing else, and
+    // otherwise stays with the limiter.
     const auto input = activeInput.load();
+    const bool frameCapOutput = activeOutput == LowLatencyMode::FpsLimiter;
+    const bool ueFrameCap = input == LowLatencyInput::UeLowLatency && frameCapOutput;
     const bool gameInput = input == LowLatencyInput::Reflex;
     const auto streamline = ReflexHooks::streamlineSleepMode();
     const bool streamlineSource = !gameInput && streamline.set;
 
     lloutput::GameCap cap;
 
-    if (gameInput || streamlineSource)
+    if (ueFrameCap)
+    {
+        lloutput::GameCapInputs in;
+        in.capFps = config->FramerateLimit.value_or_default();
+        in.externalFrameGeneration = state.externalFrameGeneration;
+        in.markersRecently = true; // the mod's calls are what made it the input
+        in.fsrFgOutput = state.activeFgOutput == FGOutput::FSRFG;
+        in.fgActive = state.currentFG != nullptr && state.currentFG->IsGenerating();
+        in.dlssgFramesToGenerate = ReflexHooks::dlssgFrameCountToGenerate();
+        in.outputIsFrameCap = true;
+        in.forceDisabled = config->FN_ForceReflex.value_or_default() == ForceReflex::ForceDisable;
+        in.outputRunning = current_tech != nullptr;
+        cap = lloutput::CapForGame(in);
+    }
+    else if (gameInput || streamlineSource)
     {
         const auto game = gameInput ? ReflexHooks::gameSleepMode() : streamline;
         const auto side = native::lowlatency::XefgSide();
@@ -1535,6 +1557,8 @@ void InputCommon::update()
         in.xefgShownPerRendered = native::lowlatency::XefgShownPerRendered();
         in.dlssgFramesToGenerate = ReflexHooks::dlssgFrameCountToGenerate();
         in.outputIsXell = activeOutput == LowLatencyMode::XeLL;
+        in.outputIsFrameCap = frameCapOutput;
+        in.forceDisabled = forceDisabled;
         in.outputRunning = current_tech != nullptr;
         cap = lloutput::CapForGame(in);
     }
@@ -1551,9 +1575,10 @@ void InputCommon::update()
         state.activeFgOutput == FGOutput::XeFG, current_tech != nullptr, native::lowlatency::XefgSide(),
         activeOutput == LowLatencyMode::XeLL, incompatibility(input, LowLatencyMode::XeLL) == nullptr);
 
-    // The game's: in its sleep mode through the output (and XeFG's XeLL)
-    if (fps_limit_interval_us.exchange(gameInput ? interval : 0u) != (gameInput ? interval : 0u) && !outputPending &&
-        current_tech != nullptr)
+    // The game's (or the UE mod's to Frame cap only): in its sleep mode through the output (and XeFG's XeLL)
+    const auto inputInterval = gameInput || ueFrameCap ? interval : 0u;
+
+    if (fps_limit_interval_us.exchange(inputInterval) != inputInterval && !outputPending && current_tech != nullptr)
     {
         apply_sleep_mode(current_tech.get());
     }
@@ -1564,7 +1589,7 @@ void InputCommon::update()
         const float capFps = config->FramerateLimit.value_or_default();
         std::string text;
 
-        if (gameInput && cap.outputHoldsCap)
+        if ((gameInput || ueFrameCap) && cap.outputHoldsCap)
             text = std::format("Frame cap {:.1f} fps through {}: {} us", cap.fps,
                                magic_enum::enum_name(activeOutput.load()), interval);
         else if (gameInput && capFps > 0.0f)

@@ -919,6 +919,20 @@ int main()
         CHECK(OutputShown(real, false, true) == Output::Auto);
         CHECK(OutputShown(fake, true, true) == Output::XeLL);
 
+        // Frame cap only: offered without XeFG wherever the driver's Reflex is not the output
+        CHECK(!OutputAvailability(Output::FrameCapOnly, real).available);
+        CHECK(OutputAvailability(Output::FrameCapOnly, real).why[0] != '\0');
+        CHECK(OutputAvailability(Output::FrameCapOnly, fake).available);
+        OutputInputs amdReal; // an AMD card on its own nvapi: InputCommon's Anti-Lag 2, or Frame cap only
+        amdReal.amdGpu = true;
+        CHECK(OutputAvailability(Output::FrameCapOnly, amdReal).available);
+        CHECK(!OutputAvailability(Output::FrameCapOnly, xefg).available);
+        CHECK(OutputShown(fake, false, false, true) == Output::FrameCapOnly);
+        CHECK(OutputShown(fake, false, true, true) == Output::FrameCapOnly); // ahead of LatencyFlex, as PlanOutput
+        CHECK(OutputShown(fake, true, false, true) == Output::XeLL);         // Force XeLL takes the slot
+        CHECK(OutputShown(real, false, false, true) == Output::Auto);        // set in the ini on NVIDIA Reflex
+        CHECK(OutputShown(xefg, false, false, true) == Output::XeLL);
+
         // Boost: only with real Reflex as the output, and only while OptiScaler makes the calls
         CHECK(BoostAvailable(Input::Auto, real, false));
         CHECK(BoostAvailable(Input::OptiScaler, real, false));

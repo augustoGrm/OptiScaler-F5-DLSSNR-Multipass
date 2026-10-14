@@ -5798,7 +5798,8 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         ImGui::TableNextColumn();
 
         Output shown = OutputShown(outputInputs, config->ForceXeLL.value_or_default(),
-                                   config->FN_ForceLatencyFlex.value_or_default());
+                                   config->FN_ForceLatencyFlex.value_or_default(),
+                                   config->FramerateFrameCapOnly.value_or_default());
         const Output shownBefore = shown;
 
         const std::string autoLabel = std::string("Auto (") + status.output + ")";
@@ -5830,6 +5831,11 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
                     "Takes the frame generation slot (disables FG). Needs a restart." },
                 { Output::LatencyFlex, "LatencyFlex",
                     "Force LatencyFlex instead of Anti-Lag 2 or XeLL." },
+                { Output::FrameCapOnly, "Frame cap only",
+                    "No latency reduction of its own: the FPS Limit waits where the game is about to read input,\n"
+                    "not at present, so input shows up to a frame sooner while the cap holds.\n"
+                    "For setups that would get LatencyFlex. Anti-Lag 2 and XeLL wait there too and lower latency.\n"
+                    "Needs an FPS Limit." },
             };
         }
         // clang-format on
@@ -5865,9 +5871,11 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         }
         else
         {
-            ShowHelpMarker("What lowers latency. Auto uses what the setup has. XeLL and LatencyFlex force that method "
-                           "(fakenvapi's Force XeLL and Force LatencyFlex).\n"
-                           "Entries that do not fit this setup say why when hovered.");
+            ShowHelpMarker(
+                "What lowers latency. Auto uses what the setup has. XeLL and LatencyFlex force that method "
+                "(fakenvapi's Force XeLL and Force LatencyFlex). Frame cap only lowers nothing, it moves where "
+                "the FPS Limit waits.\n"
+                "Entries that do not fit this setup say why when hovered.");
         }
 
         if (!outputLocked && !inputOff && shown != shownBefore)
@@ -5883,6 +5891,7 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
             {
                 config->ForceXeLL = shown == Output::XeLL;
                 config->FN_ForceLatencyFlex = shown == Output::LatencyFlex;
+                config->FramerateFrameCapOnly = shown == Output::FrameCapOnly;
             }
         }
 
@@ -6002,6 +6011,10 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         {
             keeper = "the game's XeLL";
         }
+
+        // Frame cap only is nothing but the cap: say where it waits
+        if (keeper != "OptiScaler's limiter" && InputCommon::current_mode() == LowLatencyMode::FpsLimiter)
+            keeper = "Frame cap only, before the game reads input";
 
         ImGui::TextDisabled("Frame cap %.0f fps: kept by %s", cap, keeper.c_str());
     }
@@ -6131,115 +6144,6 @@ void MenuCommon::RenderFakenvapiSettings(RenderMenuContext& ctx)
     // clang-format on
 
     PopulateCombo("Force Reflex", config->FN_ForceReflex, reflex_modes);
-}
-
-template <typename T> std::string GetMenuOptionLabel(const std::vector<MenuOption<T>>& options, T targetValue)
-{
-    auto it = std::find_if(options.begin(), options.end(),
-                           [targetValue](const MenuOption<T>& option) { return option.value == targetValue; });
-
-    if (it != options.end())
-    {
-        return it->label;
-    }
-
-    return "Unknown";
-}
-
-void MenuCommon::RenderLowLatencySettings(RenderMenuContext& ctx)
-{
-    auto& state = ctx.state;
-    auto config = ctx.config;
-
-    // Low Latency ---------------------------
-    ImGui::SeparatorText("Low Latency");
-
-    static std::vector<MenuOption<LowLatencyInput>> lowLatencyInput = {
-        { LowLatencyInput::None, "None (Off)" },    { LowLatencyInput::Auto, "Auto" },
-        { LowLatencyInput::AntiLag2, "AntiLag 2" }, { LowLatencyInput::Reflex, "Reflex" },
-        { LowLatencyInput::XeLL, "XeLL" },          { LowLatencyInput::UeLowLatency, "UeLowLatency" },
-    };
-
-    static std::vector<MenuOption<LowLatencyMode>> lowLatencyOutput = {
-        { LowLatencyMode::None, "None (Off)" },
-        { LowLatencyMode::Auto, "Auto" },
-        { LowLatencyMode::LatencyFlex, "LatencyFlex" },
-        { LowLatencyMode::AntiLag2, "AntiLag 2" },
-        { LowLatencyMode::XeLL, "XeLL" },
-        { LowLatencyMode::AntiLagVk, "AntiLag Vk" },
-        { LowLatencyMode::Reflex, "Reflex" },
-    };
-
-    LowLatencyInput activeInput {};
-    LowLatencyMode activeOutput {};
-
-    if (ImGui::BeginTable("lowLatencyActive", 2, ImGuiTableFlags_SizingStretchSame))
-    {
-        InputCommon::get_currently_active(activeInput, activeOutput);
-
-        ImGui::TableNextColumn();
-
-        ImGui::Text("Active input: %s", GetMenuOptionLabel(lowLatencyInput, activeInput).c_str());
-
-        ImGui::TableNextColumn();
-
-        ImGui::Text("Active output: %s", GetMenuOptionLabel(lowLatencyOutput, activeOutput).c_str());
-
-        ImGui::EndTable();
-    }
-
-    if (ImGui::BeginTable("lowLatencySelection", 2, ImGuiTableFlags_SizingStretchSame))
-    {
-        ImGui::TableNextColumn();
-
-        auto avalibleInputs = InputCommon::get_avaliable_inputs();
-
-        lowLatencyInput[(uint32_t) LowLatencyInput::AntiLag2].set_disabled(!avalibleInputs[LowLatencyInput::AntiLag2]);
-        lowLatencyInput[(uint32_t) LowLatencyInput::Reflex].set_disabled(!avalibleInputs[LowLatencyInput::Reflex]);
-        lowLatencyInput[(uint32_t) LowLatencyInput::XeLL].set_disabled(!avalibleInputs[LowLatencyInput::XeLL]);
-        lowLatencyInput[(uint32_t) LowLatencyInput::UeLowLatency].set_disabled(
-            !avalibleInputs[LowLatencyInput::UeLowLatency]);
-
-        // need to have a value before combo
-        if (!config->LowLatencyInput.has_value())
-            config->LowLatencyInput = config->LowLatencyInput.value_or_default();
-
-        PopulateCombo("Input", config->LowLatencyInput, lowLatencyInput);
-
-        ImGui::TableNextColumn();
-
-        lowLatencyOutput[(uint32_t) LowLatencyMode::AntiLagVk].set_disabled(true, "No support");
-        lowLatencyOutput[(uint32_t) LowLatencyMode::Reflex].set_disabled(true, "No support");
-
-        // need to have a value before combo
-        if (!config->LowLatencyOutput.has_value())
-            config->LowLatencyOutput = config->LowLatencyOutput.value_or_default();
-
-        PopulateCombo("Output", config->LowLatencyOutput, lowLatencyOutput);
-
-        ImGui::EndTable();
-    }
-
-    if (activeOutput == LowLatencyMode::LatencyFlex)
-    {
-        static const std::vector<MenuOption<LFXMode>> lfx_modes = {
-            { LFXMode::Conservative, "Conservative", "The safest, but might not reduce latency well" },
-            { LFXMode::Aggressive, "Aggressive",
-              "Improves latency, but in some cases will lower FPS more than expected" },
-            { LFXMode::ReflexIDs, "Reflex ID",
-              "Best when can be used, some games are not compatible (e.g. Cyberpunk)\n"
-              "and will fallback to Aggressive" }
-        };
-
-        PopulateCombo("LatencyFlex mode", config->FN_LatencyFlexMode, lfx_modes);
-    }
-
-    static std::vector<MenuOption<ForceReflex>> lowlatency_states = { { ForceReflex::InGame, "Follow in-game" },
-                                                                      { ForceReflex::ForceDisable, "Force Disable" },
-                                                                      { ForceReflex::ForceEnable, "Force Enable" } };
-
-    ImGui::SetNextItemWidth(150.0f * ctx.menuResScale);
-    PopulateCombo("Force State", config->FN_ForceReflex, lowlatency_states);
 }
 
 void MenuCommon::RenderActiveImageSettings(RenderMenuContext& ctx)
@@ -8170,11 +8074,7 @@ void MenuCommon::RenderMainMenuPages(RenderMenuContext& ctx)
         case Page::Framerate:
             section(RenderFramerateLowLatency);
             section(RenderFramerateSettings);
-#ifdef LOW_LATENCY_INPUTS
-            section(RenderLowLatencySettings);
-#else
             section(RenderFakenvapiSettings);
-#endif
             break;
         case Page::OverlayLook:
             section(RenderFpsOverlaySettings, true);

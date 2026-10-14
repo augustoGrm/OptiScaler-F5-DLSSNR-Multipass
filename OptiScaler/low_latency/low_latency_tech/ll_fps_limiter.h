@@ -7,7 +7,8 @@
 class FpsLimiter : public LowLatencyTech
 {
   private:
-    uint32_t minimum_interval_us = 0;
+    // Set from the present (InputCommon::update), read in the game's Sleep
+    std::atomic<uint32_t> minimum_interval_us = 0;
     uint64_t next_frame_timestamp = 0;
 
     uint64_t last_sleep_framecount = 0;
