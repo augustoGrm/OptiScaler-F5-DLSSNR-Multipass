@@ -98,10 +98,6 @@ bool DLSSG_Dx12::CreateSwapchainInternal(IDXGIFactory* factory, ID3D12CommandQue
         StreamlineProxy::UpgradeInterface()((void**) &factory);
         DxgiFactoryHooks::HookToDLSSGFactory(factory);
     }
-    else
-    {
-        slFactory->Release();
-    }
 
     StreamlineProxy::SetFeatureLoaded()(sl::kFeatureDLSS_G, true);
 
@@ -167,10 +163,6 @@ bool DLSSG_Dx12::CreateSwapchain1Internal(IDXGIFactory* factory, ID3D12CommandQu
         {
             StreamlineProxy::UpgradeInterface()((void**) &factory);
             DxgiFactoryHooks::HookToDLSSGFactory(factory);
-        }
-        else
-        {
-            slFactory->Release();
         }
 
         IDXGIFactory2* factory2 = nullptr;

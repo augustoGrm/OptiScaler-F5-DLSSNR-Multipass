@@ -457,8 +457,6 @@ void DxgiFactoryHooks::HookToDLSSGFactory(IDXGIFactory* pFactory)
     if (!Util::CheckForRealObject(__FUNCTION__, pFactory, (IUnknown**) &real))
         return;
 
-    real->Release();
-
     LOG_FUNC();
 
     void** pFactoryVTable = *reinterpret_cast<void***>(pFactory);
