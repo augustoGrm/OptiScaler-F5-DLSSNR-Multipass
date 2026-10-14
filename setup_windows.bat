@@ -6,7 +6,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "$text=[IO.File]::ReadAll
 set "optiExit=%errorlevel%"
 if "%optiExit%"=="10" (
     rem Leave the batch context before deleting its file, so cmd never reads it again.
-    (goto) 2>nul & powershell -NoProfile -Command "Remove-Item -LiteralPath $env:OPTISCALER_SCRIPT -ErrorAction Stop"
+    (goto) 2>nul & cmd /d /c del /q "%~f0"
 )
 if not defined CI pause
 exit /b %optiExit%
