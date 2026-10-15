@@ -139,22 +139,19 @@ int main()
     }
 
     // Warnings.
-    CHECK(WarningFor(Shown::NrOnly, true, true, false, false) == Warning::None);
-    CHECK(WarningFor(Shown::NrOnly, true, true, true, false) == Warning::Dx11FrameGeneration);
-    CHECK(WarningFor(Shown::NrOnly, false, false, true, false) ==
-          Warning::Dx11FrameGeneration); // the one to act on first
-    CHECK(WarningFor(Shown::NrOnly, false, true, false, false) == Warning::NrDisabled);
-    CHECK(WarningFor(Shown::NrOnly, false, false, false, false) == Warning::NrDisabled);
-    CHECK(WarningFor(Shown::NrOnly, true, false, false, false) == Warning::NeedsFinishedPicture);
+    CHECK(WarningFor(Shown::NrOnly, true, true, false) == Warning::None);
+    CHECK(WarningFor(Shown::NrOnly, false, true, false) == Warning::NrDisabled);
+    CHECK(WarningFor(Shown::NrOnly, false, false, false) == Warning::NrDisabled);
+    CHECK(WarningFor(Shown::NrOnly, true, false, false) == Warning::NeedsFinishedPicture);
 
-    CHECK(WarningFor(Shown::NrAndFrameGeneration, true, false, false, false) == Warning::None);
-    CHECK(WarningFor(Shown::NrAndFrameGeneration, true, true, true, false) == Warning::None);
-    CHECK(WarningFor(Shown::NrAndFrameGeneration, false, false, true, false) == Warning::NrDisabled);
+    CHECK(WarningFor(Shown::NrAndFrameGeneration, true, false, false) == Warning::None);
+    CHECK(WarningFor(Shown::NrAndFrameGeneration, true, true, false) == Warning::None);
+    CHECK(WarningFor(Shown::NrAndFrameGeneration, false, false, false) == Warning::NrDisabled);
 
     for (int bits = 0; bits < 8; ++bits)
     {
-        CHECK(WarningFor(Shown::Off, bits & 1, bits & 2, bits & 4, false) == Warning::None);
-        CHECK(WarningFor(Shown::MotionOnly, bits & 1, bits & 2, bits & 4, false) == Warning::None);
+        CHECK(WarningFor(Shown::Off, bits & 1, bits & 2, false) == Warning::None);
+        CHECK(WarningFor(Shown::MotionOnly, bits & 1, bits & 2, false) == Warning::None);
     }
 
     // A game that calls an upscaler of its own: only Off can be chosen, and a mode already on says it stands aside
@@ -170,18 +167,18 @@ int main()
     // A Vulkan game has no mode left out: frame generation presents through the bridge made when the game starts. Until it
     // is up the mode says to restart; the game's own upscaler still comes first.
     CHECK(Selectable(Mode::NrAndFrameGeneration, false));
-    CHECK(WarningFor(Shown::NrAndFrameGeneration, true, false, false, false, true) == Warning::VulkanNeedsRestart);
-    CHECK(WarningFor(Shown::NrAndFrameGeneration, true, false, false, false, false) == Warning::None);
-    CHECK(WarningFor(Shown::NrAndFrameGeneration, true, false, false, true, true) == Warning::GameUpscaler);
-    CHECK(WarningFor(Shown::NrOnly, true, true, false, false, true) == Warning::None);
-    CHECK(WarningFor(Shown::Off, true, true, false, false, true) == Warning::None);
+    CHECK(WarningFor(Shown::NrAndFrameGeneration, true, false, false, true) == Warning::VulkanNeedsRestart);
+    CHECK(WarningFor(Shown::NrAndFrameGeneration, true, false, false, false) == Warning::None);
+    CHECK(WarningFor(Shown::NrAndFrameGeneration, true, false, true, true) == Warning::GameUpscaler);
+    CHECK(WarningFor(Shown::NrOnly, true, true, false, true) == Warning::None);
+    CHECK(WarningFor(Shown::Off, true, true, false, true) == Warning::None);
 
     for (int bits = 0; bits < 8; ++bits)
     {
         for (Shown shown : { Shown::NrOnly, Shown::NrAndFrameGeneration, Shown::MotionOnly })
-            CHECK(WarningFor(shown, bits & 1, bits & 2, bits & 4, true) == Warning::GameUpscaler);
+            CHECK(WarningFor(shown, bits & 1, bits & 2, true) == Warning::GameUpscaler);
 
-        CHECK(WarningFor(Shown::Off, bits & 1, bits & 2, bits & 4, true) == Warning::None);
+        CHECK(WarningFor(Shown::Off, bits & 1, bits & 2, true) == Warning::None);
     }
 
     // FG only (game's upscaler): the reverse rule. Vulkan games that call an upscaler only; its own key, which comes
@@ -215,11 +212,11 @@ int main()
         CHECK(ForClick(Mode::Off, Shown::FrameGenerationOnly, false).keys.has_value());
 
         // Needs the game's upscaler call (where the other modes stand aside), then a D3D12 backend, then the bridge
-        CHECK(WarningFor(Shown::FrameGenerationOnly, true, false, false, false) == Warning::NeedsGameUpscaler);
-        CHECK(WarningFor(Shown::FrameGenerationOnly, true, false, false, true, false, false) == Warning::NeedsOn12Backend);
-        CHECK(WarningFor(Shown::FrameGenerationOnly, true, false, false, true, true, true) == Warning::VulkanNeedsRestart);
-        CHECK(WarningFor(Shown::FrameGenerationOnly, true, false, false, true, false, true) == Warning::None);
-        CHECK(WarningFor(Shown::FrameGenerationOnly, false, false, true, true) == Warning::None); // NR off: still FG
+        CHECK(WarningFor(Shown::FrameGenerationOnly, true, false, false) == Warning::NeedsGameUpscaler);
+        CHECK(WarningFor(Shown::FrameGenerationOnly, true, false, true, false, false) == Warning::NeedsOn12Backend);
+        CHECK(WarningFor(Shown::FrameGenerationOnly, true, false, true, true, true) == Warning::VulkanNeedsRestart);
+        CHECK(WarningFor(Shown::FrameGenerationOnly, true, false, true, false, true) == Warning::None);
+        CHECK(WarningFor(Shown::FrameGenerationOnly, false, false, true) == Warning::None); // NR off: still FG
     }
 
     // Which API the game is: the answer must not follow the D3D12 swapchain of a bridged Vulkan game (XeFG's presents

@@ -38,8 +38,8 @@ ID3D12Resource* RunFrame(IDXGISwapChain* swapChain, ID3D11Device* device, bool c
 
     g_source.SetPresent(swapChain, device, copyBack);
 
-    // The consumer is inert (same as native input and Finished Picture) while a D3D11 game's swap chain has been
-    // replaced by Dx11wDx12SC for frame generation -- see OnFGPresent for that path.
+    // While Dx11wDx12SC has replaced the game's swap chain for frame generation this runs from OnFGPresent only, and the
+    // bridge copies the result into frame generation's back buffer.
     return g_driver.RunFrame(g_source, false).submitted ? g_source.ProcessedPicture() : nullptr;
 }
 

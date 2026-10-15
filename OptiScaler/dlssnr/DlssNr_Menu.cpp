@@ -1077,8 +1077,7 @@ static void RenderNativeMode(Config* config, bool nrEnabled, bool& finishedPictu
     // a native Vulkan game, on dxvk's own Vulkan swapchain.
     const bool vulkanNoBridge = api == NativeApi::Vulkan && !VkPresentBridge::IsUp();
     const Warning warning =
-        WarningFor(shown, nrEnabled, finishedPicture, DlssNr::NativeInputBlockedBySwapChainInterop(), gameUpscaler,
-                   vulkanNoBridge, VulkanFeatureIsOn12());
+        WarningFor(shown, nrEnabled, finishedPicture, gameUpscaler, vulkanNoBridge, VulkanFeatureIsOn12());
     const char* warningText = nullptr;
 
     switch (warning)
@@ -1086,10 +1085,6 @@ static void RenderNativeMode(Config* config, bool nrEnabled, bool& finishedPictu
     case Warning::GameUpscaler:
         warningText = "The game is calling an upscaler of its own, so this stands aside and NR runs on that call. "
                       "Choose Off, or turn the game's upscaler off to use this.";
-        break;
-    case Warning::Dx11FrameGeneration:
-        warningText = "NR only does nothing while OptiScaler's frame generation has replaced this D3D11 game's swap "
-                      "chain. Choose NR + upscaler & frame generation.";
         break;
     case Warning::VulkanNeedsRestart:
         warningText = "Waiting for the game to make a new swapchain for frame generation (it was told to). If nothing "
