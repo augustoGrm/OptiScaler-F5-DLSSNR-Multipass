@@ -1716,7 +1716,7 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
         ImGui::SameLine();
         HelpMarker("Which look Faces, Painterly, Soft canvas and Structure start from: its style, strength and "
                    "curve. The look then adds its own skin, detail or input changes. Picking a base while one of "
-                   "these looks is on applies it right away.");
+                   "these looks is on applies it right away; with none on, it only sets what the next click uses.");
 
         // An input style that is skipped does nothing: say so where the look is, not only in its tooltip
         if (inEffect && inputStyleOff && DlssNrLook::Get(inEffect->look).experimental)
@@ -1724,7 +1724,8 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
             const char* name = DlssNrLook::Get(inEffect->look).name;
 
             if (config->DlssNrDeferredDlss.value_or_default())
-                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "%s: no effect on the deferred path.", name);
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "%s: no effect with \"Generate before SR, apply after SR\".",
+                                   name);
             else
                 ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f),
                                    "%s: no effect at %.0f%% model resolution (works at 100%% or below).", name,
