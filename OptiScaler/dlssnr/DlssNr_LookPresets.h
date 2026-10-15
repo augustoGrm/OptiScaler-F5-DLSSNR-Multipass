@@ -72,6 +72,30 @@ struct Settings
     bool facesOnly = false;
 };
 
+// What the second-row looks (Faces, Painterly, Soft canvas, Structure) start from: the base's pass profiles and curve.
+// Native is not offered: it is Linear, which bands in the darks under the looks' boosts, and it is NVIDIA's look as it is.
+enum class Base
+{
+    Standard,
+    Natural,
+    Cinematic,
+};
+
+inline constexpr size_t kBaseCount = 3;
+
+// What a second-row look changes on its base. An empty field keeps the base's value.
+struct Modifier
+{
+    std::optional<float> skin;         // skin structure on every pass the base defines
+    std::optional<float> structureCap; // Local structure capped at this on every pass (only ever lowered)
+    std::optional<uint32_t> curve;     // a curve the look needs whatever the base uses
+    std::optional<float> detail;
+    std::optional<bool> skinSplit;
+    std::optional<float> envDetail;
+    std::optional<uint32_t> inputStyle;
+    std::optional<float> inputStrength;
+};
+
 enum class Look
 {
     Native,
@@ -90,7 +114,9 @@ struct Entry
     const char* name;
     const char* tip;
     bool experimental; // an input style: no effect above 100% model resolution or on the deferred path
-    Settings settings;
+    Settings settings; // for a modifier look: Compose(Base::Standard, modifier)
+    bool isModifier;   // Faces, Painterly, Soft canvas, Structure: built on a Base
+    Modifier modifier;
 };
 
 namespace detail
@@ -124,64 +150,121 @@ inline Settings DetailOnly()
     return s;
 }
 
-inline Settings Faces()
+inline Settings BaseSettings(Base base)
 {
-    Settings s = Make({ 0, 1.0f, 1.0f, 1.0f, 1.0f, true }, kCurveSoftKnee);
-    s.skinSplit = true;
-    s.envDetail = 0.6f;
-    return s;
+    switch (base)
+    {
+    case Base::Natural:
+        return Natural();
+    case Base::Cinematic:
+        return Cinematic();
+    default:
+        return Make({ 0, 1.0f, 1.0f, 1.0f, -1.0f, true }, kCurveSoftKnee);
+    }
 }
 
-inline Settings Painterly()
+inline Modifier Faces()
 {
-    Settings s = Make({ 0, 1.0f, 1.0f, 1.0f, -1.0f, true }, kCurveSoftKnee);
-    s.inputStyle = kInputWatercolour;
-    s.detail = 1.5f; // user, 2026-10-14
-    return s;
+    Modifier m;
+    m.skin = 1.0f;
+    m.skinSplit = true;
+    m.envDetail = 0.6f;
+    return m;
 }
 
-inline Settings SoftCanvas()
+inline Modifier Painterly()
 {
-    Settings s = Make({ 0, 1.0f, 1.0f, 1.0f, -1.0f, true }, kCurveHlg);
-    s.inputStyle = kInputSmoothCanvas;
-    s.detail = 2.0f;
-    return s;
+    Modifier m;
+    m.inputStyle = kInputWatercolour;
+    m.detail = 1.5f; // user, 2026-10-14
+    return m;
+}
+
+inline Modifier SoftCanvas()
+{
+    Modifier m;
+    m.curve = kCurveHlg; // keeps the gradation in the darks under the boost
+    m.inputStyle = kInputSmoothCanvas;
+    m.detail = 2.0f;
+    return m;
 }
 
 // The structure hint shows the model the picture with its fine contrast raised, so it paints more surface structure;
 // Composed hands back only what it painted beyond that picture, so the boost itself never reaches the screen. The boost
 // is on brightness with one scale per pixel, capped below clipping, so no hue moves. Strength 1.25: 2 was too strong in
-// NBA 2K27 (user, 2026-10-15). The model's own Local structure and Detail strength stay at 1, so the boost is not
-// stacked on a second one (the model already over-sharpens mids and highlights); skin structure 0.75, the value games
-// with built-in NR use, keeps pores from turning harsh; HLG keeps the gradation in the darks, where the boost would band
-// on Linear.
-inline Settings Structure()
+// NBA 2K27 (user, 2026-10-15). The model's own Local structure is capped at 1 and Detail strength stays at 1, so the
+// boost is not stacked on a second one (the model already over-sharpens mids and highlights, and Natural's 1.4 and 1.5
+// would add to it); skin structure 0.75, the value games with built-in NR use, keeps pores from turning harsh; HLG
+// keeps the gradation in the darks, where the boost would band on Linear.
+inline Modifier Structure()
 {
-    Settings s = Make({ 0, 1.0f, 1.0f, 1.0f, 0.75f, true }, kCurveHlg);
-    s.inputStyle = kInputStructureHint;
-    s.inputStrength = 1.25f;
-    return s;
+    Modifier m;
+    m.skin = 0.75f;
+    m.structureCap = 1.0f;
+    m.curve = kCurveHlg;
+    m.inputStyle = kInputStructureHint;
+    m.inputStrength = 1.25f;
+    return m;
 }
 } // namespace detail
 
+inline void ApplyToPass(Profile& p, const Modifier& m)
+{
+    if (m.skin)
+        p.skin = *m.skin;
+
+    if (m.structureCap)
+        p.structure = std::fmin(p.structure, *m.structureCap);
+}
+
+// The base's pass profiles and curve with the look's changes on top. Passes 2 and 3 are changed only when the base
+// defines them (Natural's tuned ones); otherwise they inherit pass 1.
+inline Settings Compose(Base base, const Modifier& m)
+{
+    Settings s = detail::BaseSettings(base);
+    ApplyToPass(s.pass1, m);
+
+    if (s.pass2)
+        ApplyToPass(*s.pass2, m);
+
+    if (s.pass3)
+        ApplyToPass(*s.pass3, m);
+
+    if (m.curve)
+        s.curve = *m.curve;
+    if (m.detail)
+        s.detail = *m.detail;
+    if (m.skinSplit)
+        s.skinSplit = *m.skinSplit;
+    if (m.envDetail)
+        s.envDetail = *m.envDetail;
+    if (m.inputStyle)
+        s.inputStyle = *m.inputStyle;
+    if (m.inputStrength)
+        s.inputStrength = *m.inputStrength;
+
+    return s;
+}
+
 inline const Entry kLooks[] = {
     { Look::Native, "Native", "NVIDIA's own look, as games with built-in NR use it: Linear curve, no local tone.",
-      false, detail::Native() },
+      false, detail::Native(), false, {} },
     { Look::Natural, "Natural", "Natural style on the HLG curve. Passes 2 and 3 get their own tuned profiles.", false,
-      detail::Natural() },
-    { Look::Cinematic, "Cinematic", "The model's Cinematic style.", false, detail::Cinematic() },
+      detail::Natural(), false, {} },
+    { Look::Cinematic, "Cinematic", "The model's Cinematic style.", false, detail::Cinematic(), false, {} },
     { Look::DetailOnly, "Detail only", "Adds detail and keeps the game's colours: Colour strength 0.", false,
-      detail::DetailOnly() },
-    { Look::Faces, "Faces", "Full effect on skin, less on scenery (environment detail 0.6).", false, detail::Faces() },
-    { Look::Painterly, "Painterly", "Experimental: the picture is shown to the model as a watercolour, Detail strength 1.5.", true,
-      detail::Painterly() },
+      detail::DetailOnly(), false, {} },
+    { Look::Faces, "Faces", "Full effect on skin, less on scenery (environment detail 0.6).", false,
+      Compose(Base::Standard, detail::Faces()), true, detail::Faces() },
+    { Look::Painterly, "Painterly", "Experimental: the picture is shown to the model as a watercolour, Detail strength 1.5.",
+      true, Compose(Base::Standard, detail::Painterly()), true, detail::Painterly() },
     { Look::SoftCanvas, "Soft canvas",
       "Experimental: smooth canvas input on the HLG curve, Detail strength 2: smooth surfaces, strong detail.", true,
-      detail::SoftCanvas() },
+      Compose(Base::Standard, detail::SoftCanvas()), true, detail::SoftCanvas() },
     { Look::Structure, "Structure",
       "Experimental: the model is shown the picture with its fine contrast raised (brightness only, colours stay) and "
       "paints more surface structure. HLG curve, gentler on skin.",
-      true, detail::Structure() },
+      true, Compose(Base::Standard, detail::Structure()), true, detail::Structure() },
 };
 
 inline constexpr size_t kLookCount = sizeof(kLooks) / sizeof(kLooks[0]);
@@ -211,5 +294,37 @@ inline bool Matches(const Settings& now, const Settings& look)
            Near(now.envDetail, look.envDetail) && Near(now.envColour, look.envColour) &&
            now.inputStyle == look.inputStyle && Near(now.inputStrength, look.inputStrength) &&
            now.facesOnly == look.facesOnly;
+}
+
+// A second-row look on a base
+inline Settings ComposeLook(Look look, Base base) { return Compose(base, Get(look).modifier); }
+
+struct InEffect
+{
+    Look look;
+    Base base;
+};
+
+// The second-row look in effect and the base it is built on. Derived from the settings, never remembered. At most one
+// (base, look) pair matches (tests/nr_look_presets_smoke.cpp).
+inline std::optional<InEffect> SecondRowInEffect(const Settings& now)
+{
+    for (const auto& e : kLooks)
+    {
+        if (!e.isModifier)
+            continue;
+
+        for (size_t b = 0; b < kBaseCount; ++b)
+            if (Matches(now, Compose((Base) b, e.modifier)))
+                return InEffect { e.id, (Base) b };
+    }
+
+    return std::nullopt;
+}
+
+inline std::optional<Base> DerivedBase(const Settings& now)
+{
+    const auto found = SecondRowInEffect(now);
+    return found ? std::optional<Base> { found->base } : std::nullopt;
 }
 } // namespace DlssNrLook
