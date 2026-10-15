@@ -692,6 +692,11 @@ class Config
     // sets NativeDepthFinder, NativeMotion and this together, clears NativeInput, and switches NR Pass at: off Finished
     // Picture if it was on (see dlssnr/DlssNr_NativeMode.h). See native/VirtualUpscalerDriver.h.
     CustomOptional<bool> DlssNrNativeUpscaler { false };
+    // NativeUpscalerPass: with NativeUpscaler on and Neural Rendering on, whether the upscaler backend still evaluates
+    // the picture. Auto (unset) and false: it does not. The backend only keeps frame generation's Upscaler input alive,
+    // and NR runs on the game's picture in place, as in NativeInput (native/VirtualUpscalerMode.h). true: the old pass,
+    // NR on the backend's output (to compare, or as a fallback).
+    CustomOptional<bool> DlssNrNativeUpscalerPass { false };
     // NativeFrameGenerationOnly: a Vulkan game that calls DLSS, FSR or XeSS of its own gets OptiScaler's frame generation
     // from that call. The Vulkan present bridge (native/VkPresentBridge.h) puts frame generation's D3D12 swapchain on the
     // window, and the game's upscaler runs through a Vulkan-on-D3D12 backend (DLSS_on12, FFX_on12, FSR21_on12) on the

@@ -150,6 +150,9 @@ class IFeature
     virtual bool HasOutput() { return _hasOutput; }
     virtual bool ModuleLoaded() { return _moduleLoaded; }
     virtual long FrameCount() { return _frameCount; }
+    // A frame the feature was called for but not evaluated (the virtual upscaler's pass-through), counted as Evaluate
+    // counts it: frame generation and the HUD fix read the count to tell a new frame from none
+    void CountFrame() { _frameCount++; }
     virtual bool DepthLinear() { return _depthLinear; }
 
     virtual bool AutoExposure() { return _initFlags.AutoExposure; }

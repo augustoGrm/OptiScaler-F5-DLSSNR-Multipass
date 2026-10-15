@@ -105,6 +105,14 @@ bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd,
                       ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
                       bool depthReversed, bool reset,
                       DXGI_COLOR_SPACE_TYPE colorSpace, D3D12_RESOURCE_STATES pictureState, unsigned long long epoch);
+// The same for Optical F5Low's virtual upscaler (native/VirtualUpscalerDriver.h), which keeps its upscaler backend only for
+// frame generation and runs NR on the game's picture here. It skips the two checks that are about NR Only mode: Finished
+// Picture does not have to be on (the "NR + upscaler & frame generation" mode keeps it off), and a swap-chain interop does
+// not refuse it (the virtual upscaler already runs on frame generation's paired D3D12 queue). Needs Enable Neural Rendering.
+bool ApplyVirtualUpscalerInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
+                               ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
+                               bool depthReversed, bool reset, DXGI_COLOR_SPACE_TYPE colorSpace,
+                               D3D12_RESOURCE_STATES pictureState, unsigned long long epoch);
 // The colour space of a swap chain's picture, from what the game set (SDR when it set nothing), for a native-input frame.
 DXGI_COLOR_SPACE_TYPE NativeInputColourSpace(IDXGISwapChain* swapchain, DXGI_FORMAT format);
 void FinishedPictureColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE colorSpace);

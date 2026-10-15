@@ -40,6 +40,7 @@
 #include "DlssNr_ColourEncodingStatus.h"
 #include "DlssNr_GameDefaults.h"
 #include "DlssNr_NativeMode.h"
+#include "DlssNr_TierPlacement.h"
 #include "DlssNr_LutStatus.h"
 #include "DlssNrDetailReuseHost.h"
 
@@ -776,12 +777,19 @@ static constexpr ResolutionTier ResolutionTiers[] = {
 static void ApplyResolutionTier(Config* config, int& pendingScale, const ResolutionTier& tier,
                                 bool beforeSuperResolution)
 {
+    // With Finished Picture on (NR Only mode) the placement stays: the tier is about the model's size, and clearing it
+    // would switch NR Only off (DlssNr_TierPlacement.h).
+    const auto placement = DlssNrTierPlacement::AfterTier(
+        { config->DlssNrFinishedPicture.value_or_default(), config->DlssNrRunBeforeSr.value_or_default(),
+          config->DlssNrDeferredDlss.value_or_default() },
+        beforeSuperResolution);
+
     // Same rule as the "NR Pass at:" combo: leaving Finished Picture clears a session failure.
-    if (config->DlssNrFinishedPicture.value_or_default())
+    if (config->DlssNrFinishedPicture.value_or_default() && !placement.finishedPicture)
         RetryNr();
-    config->DlssNrFinishedPicture = false;
-    config->DlssNrRunBeforeSr = beforeSuperResolution;
-    config->DlssNrDeferredDlss = false;
+    config->DlssNrFinishedPicture = placement.finishedPicture;
+    config->DlssNrRunBeforeSr = placement.runBeforeSr;
+    config->DlssNrDeferredDlss = placement.deferred;
 
     config->DlssNrTransfer = 2u; // Upscale Mode: NVIDIA residual
     config->DlssNrReducedUpscaleMethod = tier.upscaleMethod;
@@ -794,12 +802,15 @@ static void ApplyResolutionTier(Config* config, int& pendingScale, const Resolut
 // Whether a tier's settings are what is currently in effect, for highlighting its button. Derived
 // from the config rather than remembered, so it can never claim a preset the settings have since
 // drifted from, and it survives a restart. The curve is left out: it is the look's (a look picked after a tier keeps
-// the tier green). At most one button can match -- tiers have distinct resolutions and the two rows differ in
-// placement.
+// the tier green). Tiers have distinct resolutions, so one tier at most matches. Its two rows differ in placement, which
+// tells them apart, except with Finished Picture on: placement does not apply there and both rows of that tier match
+// (DlssNr_TierPlacement.h).
 static bool ResolutionTierActive(Config* config, const ResolutionTier& tier, bool beforeSuperResolution)
 {
-    return !config->DlssNrFinishedPicture.value_or_default() &&
-           config->DlssNrRunBeforeSr.value_or_default() == beforeSuperResolution &&
+    return DlssNrTierPlacement::RowMatchesPlacement(
+               { config->DlssNrFinishedPicture.value_or_default(), config->DlssNrRunBeforeSr.value_or_default(),
+                 config->DlssNrDeferredDlss.value_or_default() },
+               beforeSuperResolution) &&
            config->DlssNrTransfer.value_or_default() == 2u &&
            config->DlssNrReducedUpscaleMethod.value_or_default() == tier.upscaleMethod &&
            !config->DlssNrModelResolutionAuto.value_or_default() &&
@@ -1042,8 +1053,9 @@ static void RenderNativeMode(Config* config, bool nrEnabled, bool& finishedPictu
 
     HelpMarker("For games that don't call an upscaler: Optical F5Low works out the motion itself so NR can run.\n"
                "NR only: NR on the finished picture. Cheapest; no frame generation.\n"
-               "NR + upscaler & frame generation: adds OptiScaler's upscaler to keep the picture steady; needed for "
-               "frame generation. Costs more.\n"
+               "NR + upscaler & frame generation: adds OptiScaler's upscaler, which gives frame generation its input; "
+               "needed for frame generation. With NR on, NR works on the game's picture and the upscaler does not "
+               "process it.\n"
                "FG only (Vulkan): frame generation for Vulkan games that call DLSS, FSR or XeSS themselves.\n"
                "Needs Enable Neural Rendering. On Vulkan, set up frame generation before the game starts.");
 
@@ -3670,12 +3682,12 @@ bool RenderHeaderBanner(Config* config, HeaderBanner::Feature feature, bool upsc
         ImGui::TextColored(offerColour, "No upscaler files found. Optical F5Low can still run NR without one.");
         break;
     case Line::F5LowNrAndFrameGen:
-        ImGui::TextDisabled("Optical F5Low: NR and frame generation on the finished picture (%s as stabiliser).",
+        ImGui::TextDisabled("Optical F5Low: NR and frame generation on the finished picture (%s gives frame generation "
+                            "its input).",
                             backendName.c_str());
         break;
     case Line::F5LowNrNoFrameGen:
-        ImGui::TextDisabled("Optical F5Low: NR on the finished picture (%s as stabiliser), frame generation off.",
-                            backendName.c_str());
+        ImGui::TextDisabled("Optical F5Low: NR on the finished picture, frame generation off.");
         break;
     case Line::F5LowFrameGenNoNr:
         ImGui::TextDisabled("Optical F5Low: frame generation on the finished picture (%s as stabiliser), NR off.",
@@ -3735,8 +3747,8 @@ bool RenderHeaderBanner(Config* config, HeaderBanner::Feature feature, bool upsc
 void RenderF5LowUpscalerNote()
 {
     ImGui::TextWrapped(
-        "Driven by Optical F5Low (the game makes no upscaler call): this upscaler runs at the same size as a "
-        "stabiliser.");
+        "Driven by Optical F5Low (the game makes no upscaler call): this upscaler runs at the same size as the game's "
+        "picture. With NR on, NR works on the game's picture and this upscaler only gives frame generation its input.");
 
     if (ImGui::SmallButton("Optical F5Low settings##upscalernote"))
         MenuPages::RequestPage(MenuPages::Page::NrF5Low);

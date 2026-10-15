@@ -21,6 +21,31 @@ bool loggedCrossQueue = false;
 inline constexpr const char* pausedForGameFg = "Paused while the game's own frame generation is on.";
 std::string status = "Waiting for a finished picture.";
 bool reset = true;
+// Native input's own history reset (ApplyNativeInput, ApplyVirtualUpscalerInput), apart from `reset` above: the swap chain
+// path cancels, and so sets `reset`, on every present while Finished Picture is off, which is how Optical F5Low's
+// "NR + upscaler & frame generation" mode runs. Shared, it reset NR's history on every frame there: NR's edits flickered.
+bool nativeReset = true;
+
+// Native input's HDR10 scratch pair (no slot to keep it in): NR's linear scRGB picture and the PQ result in the picture's
+// own format. Recreated when the picture's size or format changes. A replaced buffer is kept until the frame number has
+// moved kRetireFrames past the frame it was replaced in: lists recorded before that may still be reading it on the GPU,
+// however many resizes come in between (dragging a window edge resizes every frame). Released with the NR state (Shutdown).
+struct NativeHdr
+{
+    struct Retired
+    {
+        ComPtr<ID3D12Resource> resource;
+        unsigned long long epoch = 0; // the frame it was replaced in
+    };
+
+    // Well past the frames a swap chain keeps in flight (three at most here).
+    static constexpr unsigned long long kRetireFrames = 8;
+
+    ComPtr<ID3D12Resource> linear, encoded;
+    std::vector<Retired> retired;
+};
+NativeHdr nativeHdr;
+
 std::atomic<bool> tracking { false };
 inline constexpr GUID colorSpaceKey = { 0x34a31e7b, 0x84c5, 0x44ef, { 0xa7, 0x4d, 0x6b, 0xd3, 0x60, 0x8c, 0xe5, 0x22 } };
 
@@ -37,6 +62,33 @@ bool Finished(const Slot& slot)
 {
     return !slot.fence || (slot.fence->GetCompletedValue() != UINT64_MAX &&
                           slot.fence->GetCompletedValue() >= slot.done);
+}
+
+// The pair for a picture of this size and format, in frame `epoch` (native::PresentEpoch). False when it could not be made.
+bool EnsureNativeHdr(const D3D12_RESOURCE_DESC& desc, unsigned long long epoch)
+{
+    // Buffers replaced long enough ago that no list still in flight can read them. A frame number that went backwards (a
+    // new frame source) keeps them a while longer, which only costs memory.
+    std::erase_if(nativeHdr.retired, [epoch](const NativeHdr::Retired& old)
+                  { return epoch >= old.epoch && epoch - old.epoch > NativeHdr::kRetireFrames; });
+
+    const auto ensure = [&](ComPtr<ID3D12Resource>& resource, DXGI_FORMAT format)
+    {
+        if (resource)
+        {
+            const auto have = resource->GetDesc();
+
+            if (have.Width == desc.Width && have.Height == desc.Height && have.Format == format)
+                return true;
+
+            nativeHdr.retired.push_back({ std::move(resource), epoch });
+        }
+
+        resource.Attach(CreateScratch(device.Get(), format, (unsigned) desc.Width, desc.Height));
+        return resource != nullptr;
+    };
+
+    return ensure(nativeHdr.linear, DXGI_FORMAT_R16G16B16A16_FLOAT) && ensure(nativeHdr.encoded, desc.Format);
 }
 
 ID3D12CommandQueue* RealQueue(ID3D12CommandQueue* queue)
@@ -308,6 +360,41 @@ void FinishedPictureColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE 
     swapchain->SetPrivateData(Late::colorSpaceKey, sizeof(colorSpace), &colorSpace);
 }
 
+// An HDR10 (PQ) picture goes to NR as linear scRGB and comes back as PQ. Both finished-picture paths (the game's swap chain
+// above and native input below) record the two conversions here, so they cannot drift. `pictureState` is the state the
+// picture is in on entry and is left in; `linear` rests in UNORDERED_ACCESS before the decode's result is read.
+
+// PQ picture -> `linear` (R16G16B16A16_FLOAT). False when the pass could not run.
+static bool RecordPqDecode(ID3D12GraphicsCommandList* cmd, ID3D12Resource* color, D3D12_RESOURCE_STATES pictureState,
+                           ID3D12Resource* linear, const DlssNrConstants& conversion)
+{
+    Barrier(cmd, color, pictureState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    const bool decoded = g_compose->DispatchResidualPass(cmd, conversion, color, nullptr, nullptr, nullptr, linear);
+    Barrier(cmd, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, pictureState);
+    return decoded;
+}
+
+// `linear` (NR's result) -> PQ over `color`, through `encoded` (the picture's own format). The original picture is the
+// second input of the pass (what the encode keeps of it). `linear` is left in UNORDERED_ACCESS.
+static void RecordPqEncode(ID3D12GraphicsCommandList* cmd, ID3D12Resource* linear, ID3D12Resource* color,
+                           D3D12_RESOURCE_STATES pictureState, ID3D12Resource* encoded, const DlssNrConstants& decoded)
+{
+    DlssNrConstants conversion = decoded;
+    conversion.Mode = 1;
+    Barrier(cmd, linear, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    Barrier(cmd, color, pictureState, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+    if (g_compose->DispatchResidualPass(cmd, conversion, linear, nullptr, color, nullptr, encoded))
+    {
+        Barrier(cmd, encoded, D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
+        Barrier(cmd, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
+        cmd->CopyResource(color, encoded);
+        Barrier(cmd, color, D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
+        Barrier(cmd, encoded, D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+    }
+    Barrier(cmd, color, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, pictureState);
+    Barrier(cmd, linear, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+}
+
 void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue)
 {
     std::lock_guard<std::recursive_mutex> lock(g_nrMutex);
@@ -485,10 +572,7 @@ void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue
             colorReady = ensure(slot.linear, DXGI_FORMAT_R16G16B16A16_FLOAT) && ensure(slot.encoded, desc.Format);
             if (colorReady)
             {
-                Barrier(cmd, color.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                colorReady = g_compose->DispatchResidualPass(cmd, conversion, color.Get(), nullptr, nullptr, nullptr,
-                                                           slot.linear.Get());
-                Barrier(cmd, color.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_PRESENT);
+                colorReady = RecordPqDecode(cmd, color.Get(), D3D12_RESOURCE_STATE_PRESENT, slot.linear.Get(), conversion);
                 // Dispatch reads the converted colour; its transition out of UAV orders the conversion.
                 nrColor = slot.linear.Get();
                 frame.OutputArrivalState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
@@ -498,20 +582,8 @@ void ApplyToFinishedPicture(IDXGISwapChain* swapchain, ID3D12CommandQueue* queue
             g_compose->Dispatch(cmd, nrColor, slot.depth.Get(), slot.motion.Get(), nrColor, frame, queue);
         if (pq && colorReady && g_nr.successfulDispatches > before && Config::Instance()->DlssNrApplyModel.value_or_default())
         {
-            conversion.Mode = 1;
-            Barrier(cmd, slot.linear.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            Barrier(cmd, color.Get(), D3D12_RESOURCE_STATE_PRESENT, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-            if (g_compose->DispatchResidualPass(cmd, conversion, slot.linear.Get(), nullptr, color.Get(), nullptr,
-                                               slot.encoded.Get()))
-            {
-                Barrier(cmd, slot.encoded.Get(), D3D12_RESOURCE_STATE_UNORDERED_ACCESS, D3D12_RESOURCE_STATE_COPY_SOURCE);
-                Barrier(cmd, color.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
-                cmd->CopyResource(color.Get(), slot.encoded.Get());
-                Barrier(cmd, color.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE);
-                Barrier(cmd, slot.encoded.Get(), D3D12_RESOURCE_STATE_COPY_SOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
-            }
-            Barrier(cmd, color.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_PRESENT);
-            Barrier(cmd, slot.linear.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
+            RecordPqEncode(cmd, slot.linear.Get(), color.Get(), D3D12_RESOURCE_STATE_PRESENT, slot.encoded.Get(),
+                           conversion);
         }
         Barrier(cmd, slot.motion.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
         if (slot.depth) Barrier(cmd, slot.depth.Get(), D3D12_RESOURCE_STATE_NON_PIXEL_SHADER_RESOURCE, D3D12_RESOURCE_STATE_COPY_DEST);
@@ -559,23 +631,31 @@ bool NativeInputBlockedBySwapChainInterop()
     return State::Instance().swapchainInteropApi != SwapchainInteropApi::None;
 }
 
-bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
-                      ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
-                      bool depthReversed, bool reset,
-                      DXGI_COLOR_SPACE_TYPE colorSpace, D3D12_RESOURCE_STATES pictureState, unsigned long long epoch)
+// The body of ApplyNativeInput and ApplyVirtualUpscalerInput. `fromVirtualUpscaler` skips the two checks that are about
+// where NR Only mode runs, not about the picture: the Finished Picture setting (NR + upscaler & frame generation keeps it
+// off, for the game's own upscaler calls) and the swap-chain interop (the virtual upscaler runs from frame generation's
+// present, on the paired D3D12 queue).
+static bool ApplyFinishedPictureInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
+                                      ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
+                                      bool depthReversed, bool reset, DXGI_COLOR_SPACE_TYPE colorSpace,
+                                      D3D12_RESOURCE_STATES pictureState, unsigned long long epoch,
+                                      bool fromVirtualUpscaler)
 {
     std::lock_guard<std::recursive_mutex> lock(g_nrMutex);
-    if (!Config::Instance()->DlssNrFinishedPicture.value_or_default() ||
+    if ((!fromVirtualUpscaler && !Config::Instance()->DlssNrFinishedPicture.value_or_default()) ||
         !Config::Instance()->DlssNrEnabled.value_or_default())
     {
-        Late::Say("Native input needs Finished picture and Enable Neural Rendering on.");
+        Late::Say(fromVirtualUpscaler ? "Enable Neural Rendering to use it on the game's picture."
+                                      : "Native input needs Finished picture and Enable Neural Rendering on.");
         return false;
     }
     // Depth is optional: NR runs without it.
-    if (!queue || !cmd || !color || !motion || NativeInputBlockedBySwapChainInterop())
+    if (!queue || !cmd || !color || !motion || (!fromVirtualUpscaler && NativeInputBlockedBySwapChainInterop()))
         return false;
     if (Late::PausedForGameFrameGeneration())
     {
+        // Frames go by without NR: its history starts over when it is back.
+        Late::nativeReset = true;
         Late::Say(Late::pausedForGameFg);
         return false;
     }
@@ -609,13 +689,24 @@ bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd,
         Late::Say("This screen colour format is not supported.");
         return false;
     }
-    // HDR10 (PQ) needs the conversion passes the game-input path records; not done for native input yet.
-    if (screenChoice.screen == Screen::Pq)
+    const bool pq = screenChoice.screen == Screen::Pq;
+    const bool scrgb = screenChoice.screen == Screen::Scrgb;
     {
-        Late::Say("Native input does not support HDR10 output yet.");
+        // The encoding report above only logs a mismatch: say once per change what the picture is taken for.
+        static int lastScreen = -1;
+        if (lastScreen != (int) screenChoice.screen)
+        {
+            lastScreen = (int) screenChoice.screen;
+            LOG_INFO("DLSS-NR native input colour space: {}", pq ? "HDR10 (PQ)" : scrgb ? "scRGB" : "SDR");
+        }
+    }
+    // HDR10 goes to NR as linear scRGB and back, through the scratch pair (the same two passes as the game's swap chain
+    // path, recorded by the same helpers).
+    if (pq && !Late::EnsureNativeHdr(desc, epoch))
+    {
+        Late::Say("Could not make the HDR10 buffers. Restart the game to retry.");
         return false;
     }
-    const bool scrgb = screenChoice.screen == Screen::Scrgb;
     if (!g_compose)
         g_compose = std::make_unique<DlssNr_Dx12>("Neural Rendering", Late::device.Get());
 
@@ -623,15 +714,16 @@ bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd,
     frame.DepthInverted = depthReversed;
     frame.MvScaleX = 1.0f;
     frame.MvScaleY = 1.0f;
-    frame.ColourIsLinearHdr = scrgb;
+    frame.ColourIsLinearHdr = scrgb || pq;
     frame.InputEncoding = screenChoice.shaderConversion;
     frame.ColourEncoding = (uint32_t) screenChoice.choice.encoding;
     frame.ColourEncodingForced = !screenChoice.choice.automatic;
+    // Absolute display encodings: white at the game's HDR paper white, in 80-nit scRGB units (the PQ decode writes scRGB too)
     frame.WhitePointOverride =
-        scrgb ? DlssNrExposureState::PinnedWhitePoint(Config::Instance()->DlssNrDisplayPaperWhiteNits.value_or_default(),
+        (scrgb || pq) ? DlssNrExposureState::PinnedWhitePoint(Config::Instance()->DlssNrDisplayPaperWhiteNits.value_or_default(),
                                                       DlssNrExposureState::kNitsPerScrgbUnit)
               : 0.0f;
-    frame.Reset = reset || Late::reset;
+    frame.Reset = reset || Late::nativeReset;
     frame.OutputWidth = (unsigned) desc.Width;
     frame.OutputHeight = desc.Height;
     frame.FinishedPicture = true;
@@ -647,12 +739,53 @@ bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd,
 
     DlssNrNative::SetPrecision(Config::Instance()->DlssNrPrecision.value_or_default());
     const auto before = g_nr.successfulDispatches;
-    g_compose->Dispatch(cmd, color, depth, motion, color, frame, queue);
+    ID3D12Resource* nrColor = color;
+    DlssNrConstants conversion {};
+    conversion.Width = (unsigned) desc.Width;
+    conversion.Height = desc.Height;
+
+    if (pq)
+    {
+        if (!RecordPqDecode(cmd, color, pictureState, Late::nativeHdr.linear.Get(), conversion))
+        {
+            Late::Say("Could not convert the HDR10 picture.");
+            return false;
+        }
+
+        // Dispatch reads the converted colour; its transition out of UAV orders the conversion.
+        nrColor = Late::nativeHdr.linear.Get();
+        frame.OutputArrivalState = D3D12_RESOURCE_STATE_UNORDERED_ACCESS;
+    }
+
+    g_compose->Dispatch(cmd, nrColor, depth, motion, nrColor, frame, queue);
     const bool ran = g_nr.successfulDispatches > before;
-    Late::reset = !ran;
+
+    if (pq && ran && Config::Instance()->DlssNrApplyModel.value_or_default())
+        RecordPqEncode(cmd, nrColor, color, pictureState, Late::nativeHdr.encoded.Get(), conversion);
+
+    Late::nativeReset = !ran;
     Late::Say(!Config::Instance()->DlssNrApplyModel.value_or_default() ? "NR changes are hidden." :
         ran ? "Applying NR to the finished picture (native input)." : "Preparing NR for the finished picture (native input).");
     if (ran && (++Late::successes == 1 || Late::successes % 300 == 0))
-        LOG_INFO("DLSS-NR native input: {} frames, {}x{}", Late::successes, desc.Width, desc.Height);
+        LOG_INFO("DLSS-NR {}: {} frames, {}x{}", fromVirtualUpscaler ? "on the virtual upscaler's picture" : "native input",
+                 Late::successes, desc.Width, desc.Height);
     return ran;
+}
+
+bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
+                      ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
+                      bool depthReversed, bool reset,
+                      DXGI_COLOR_SPACE_TYPE colorSpace, D3D12_RESOURCE_STATES pictureState, unsigned long long epoch)
+{
+    return ApplyFinishedPictureInput(queue, cmd, color, depth, motion, historyDistrust, depthReversed, reset, colorSpace,
+                                     pictureState, epoch, false);
+}
+
+bool ApplyVirtualUpscalerInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
+                               ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
+                               bool depthReversed, bool reset, DXGI_COLOR_SPACE_TYPE colorSpace,
+                               D3D12_RESOURCE_STATES pictureState, unsigned long long epoch)
+{
+    return ApplyFinishedPictureInput(queue, cmd, color, depth, motion, historyDistrust, depthReversed, reset, colorSpace,
+                                     pictureState, epoch, true);
 }

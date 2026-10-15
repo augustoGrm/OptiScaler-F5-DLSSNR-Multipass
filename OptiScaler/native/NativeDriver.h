@@ -13,6 +13,7 @@
 #include "NativeProducer.h"
 #include "VirtualUpscalerHold.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -96,6 +97,7 @@ class NativeDriver
 
     uint64_t _frame = 0;      // frames the producer submitted
     bool _nativeRan = false;  // DLSS-NR or the virtual upscaler ran on native input in the last frame
+    std::atomic<bool> _pictureHdr10 { false }; // the last picture handed to NR was HDR10 (read by the menu thread)
     uint64_t _trustFrame = 0; // the last frame the trust mask was recorded in
     uint64_t _cuts = 0;       // scene cuts the mask reported
     Status _status = Status::Off;

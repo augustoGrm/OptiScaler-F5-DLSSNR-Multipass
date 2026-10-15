@@ -12,7 +12,9 @@
 // queue: native/NativeDriverDx12.cpp drives it from FGHooks::FGPresent when frame generation owns the swapchain.
 //
 // Jitter is zero and render size equals output size: there is no upscaling, the backend runs as a temporal stabiliser on the
-// native-resolution picture.
+// native-resolution picture. With NR off the backend's pass is skipped (the feature is only counted, for frame generation);
+// with NR on it is skipped too and NR runs on the game's picture in place (DlssNr::ApplyVirtualUpscalerInput), unless the
+// [DlssNr] NativeUpscalerPass is true (native/VirtualUpscalerMode.h).
 //
 // The feature is kept out of the real NGX handle tables. Like a game's own feature it makes FeatureProvider_Dx12 record the
 // backend it built in Config::Dx12Upscaler, which is also the backend it builds: the user's choice, FFX when there is none.
@@ -23,6 +25,7 @@
 #include <d3d12.h>
 #include <dxgiformat.h>
 
+#include <atomic>
 #include <memory>
 #include <string>
 
@@ -46,8 +49,11 @@ class VirtualUpscalerDriver
     VirtualUpscalerDriver& operator=(const VirtualUpscalerDriver&) = delete;
 
     // A NativeProducer::ApplyFn: one synthetic upscaler call on `frame`, recorded on `cmd`, with the picture written back in
-    // place. True when the backend evaluated.
-    bool Run(ID3D12GraphicsCommandList* cmd, const NativeFrame& frame);
+    // place. True when the backend evaluated, or when it was only counted (Neural Rendering off, or NR on the picture in
+    // place: VirtualUpscalerMode.h). `queue`, `colorSpace` and `epoch` are what DlssNr::ApplyNativeInput takes for the
+    // same frame; NR on the picture in place needs them.
+    bool Run(ID3D12GraphicsCommandList* cmd, const NativeFrame& frame, ID3D12CommandQueue* queue,
+             DXGI_COLOR_SPACE_TYPE colorSpace, uint64_t epoch);
 
     // Drops the backend the way a game releasing its feature does: frame generation is told, currentFeature is cleared, and the
     // feature is destroyed once the GPU can no longer be using it. Nothing happens when there is none.
@@ -58,6 +64,12 @@ class VirtualUpscalerDriver
     void Pause();
 
     bool Active() const { return _feature != nullptr; }
+
+    // NR ran on the game's picture itself in the last frame and the backend does not process it: it only feeds frame
+    // generation. Read by the menu thread for the status line.
+    bool NrInPlace() const { return _nrInPlace.load(std::memory_order_relaxed); }
+    // The backend's pass ran over the picture in the last frame ([DlssNr] NativeUpscalerPass true). Read by the menu thread.
+    bool BackendPass() const { return _backendPass.load(std::memory_order_relaxed); }
     const std::string& Error() const { return _error; }
     const std::string& BackendName() const { return _backendName; }
 
@@ -104,6 +116,9 @@ class VirtualUpscalerDriver
     ID3D12DescriptorHeap* _rtvHeap = nullptr;
 
     uint64_t _evaluations = 0;
+    int _routeLogged = -1; // the VuNrRoute the log last said (-1: none yet)
+    std::atomic<bool> _nrInPlace { false };
+    std::atomic<bool> _backendPass { false };
     uint32_t _zeroSizeFrames = 0;
     std::string _error;
 };
