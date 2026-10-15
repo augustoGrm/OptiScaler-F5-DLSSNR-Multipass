@@ -159,6 +159,10 @@ NativeDriver::RunResult NativeDriver::RunFrame(IFrameSource& source, bool flowPr
     const auto result = _producer->Run(source.Queue(), input, options, apply, output);
     source.Return(input, output);
 
+    // Nothing ran on native input this frame (no NR mode, or the producer was not ready): NR's history must not reach across
+    if (!result.nativeRan)
+        DlssNr::NativeInputSkipped();
+
     if (result.stoppedAt != nullptr)
     {
         ++_stopped;

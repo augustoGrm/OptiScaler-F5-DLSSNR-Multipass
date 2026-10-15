@@ -502,6 +502,8 @@ bool VirtualUpscalerDriver::Run(ID3D12GraphicsCommandList* cmd, const NativeFram
         nrRan = DlssNr::ApplyVirtualUpscalerInput(queue, cmd, frame.color, frame.depth, frame.motion,
                                                   frame.historyDistrust, frame.depthReversed, frame.reset, colorSpace,
                                                   frame.pictureState, epoch);
+    else
+        DlssNr::NativeInputSkipped(); // NR off or on the backend's output: in place, its history starts over next time
 
     // Only when NR really ran: the status line says so, and otherwise shows why it did not (FinishedPictureStatus).
     _nrInPlace.store(nrRan, std::memory_order_relaxed);

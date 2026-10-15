@@ -650,8 +650,6 @@ static bool ApplyFinishedPictureInput(ID3D12CommandQueue* queue, ID3D12GraphicsC
         return false;
     if (Late::PausedForGameFrameGeneration())
     {
-        // Frames go by without NR: its history starts over when it is back.
-        Late::nativeReset = true;
         Late::Say(Late::pausedForGameFg);
         return false;
     }
@@ -768,13 +766,23 @@ static bool ApplyFinishedPictureInput(ID3D12CommandQueue* queue, ID3D12GraphicsC
     return ran;
 }
 
+void NativeInputSkipped()
+{
+    std::lock_guard<std::recursive_mutex> lock(g_nrMutex);
+    Late::nativeReset = true;
+}
+
 bool ApplyNativeInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
                       ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
                       bool depthReversed, bool reset,
                       DXGI_COLOR_SPACE_TYPE colorSpace, D3D12_RESOURCE_STATES pictureState, unsigned long long epoch)
 {
-    return ApplyFinishedPictureInput(queue, cmd, color, depth, motion, historyDistrust, depthReversed, reset, colorSpace,
-                                     pictureState, epoch, false);
+    // Any frame NR did not run on (switched off, refused, still preparing) is a gap its history must not reach across
+    const bool ran = ApplyFinishedPictureInput(queue, cmd, color, depth, motion, historyDistrust, depthReversed, reset,
+                                               colorSpace, pictureState, epoch, false);
+    if (!ran)
+        NativeInputSkipped();
+    return ran;
 }
 
 bool ApplyVirtualUpscalerInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
@@ -782,6 +790,9 @@ bool ApplyVirtualUpscalerInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandL
                                bool depthReversed, bool reset, DXGI_COLOR_SPACE_TYPE colorSpace,
                                D3D12_RESOURCE_STATES pictureState, unsigned long long epoch)
 {
-    return ApplyFinishedPictureInput(queue, cmd, color, depth, motion, historyDistrust, depthReversed, reset, colorSpace,
-                                     pictureState, epoch, true);
+    const bool ran = ApplyFinishedPictureInput(queue, cmd, color, depth, motion, historyDistrust, depthReversed, reset,
+                                               colorSpace, pictureState, epoch, true);
+    if (!ran)
+        NativeInputSkipped();
+    return ran;
 }
