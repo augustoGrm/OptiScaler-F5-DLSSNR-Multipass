@@ -20,7 +20,11 @@ static int fails = 0;
 
 int main()
 {
-    CHECK(kLookCount == 7);
+    CHECK(kLookCount == 8);
+
+    // kLooks is indexed by Look (Get)
+    for (size_t i = 0; i < kLookCount; ++i)
+        CHECK((size_t) kLooks[i].id == i);
 
     // Every look reads as itself, and as no other (two looks never show green together)
     for (size_t i = 0; i < kLookCount; ++i)
@@ -93,7 +97,16 @@ int main()
         CHECK(Get(Look::Faces).settings.skinSplit && Get(Look::Faces).settings.envDetail < 1.0f);
         CHECK(Get(Look::Cinematic).settings.pass1.style == 2);
 
-        CHECK(Get(Look::Painterly).experimental && Get(Look::SoftCanvas).experimental);
+        // Structure: the structure hint input at 1.25 (2 was too strong in NBA), the model's own structure and Detail strength
+        // left at 1 so the boost is not stacked, skin structure 0.75, HLG for the darks
+        const Settings& structure = Get(Look::Structure).settings;
+        CHECK(structure.inputStyle == kInputStructureHint && structure.inputStrength == 1.25f);
+        CHECK(structure.curve == kCurveHlg && structure.detail == 1.0f && structure.colour == 1.0f);
+        CHECK(structure.pass1.style == 0 && structure.pass1.structure == 1.0f && structure.pass1.skin == 0.75f);
+        CHECK(!structure.facesOnly && !structure.skinSplit);
+
+        CHECK(Get(Look::Painterly).experimental && Get(Look::SoftCanvas).experimental &&
+              Get(Look::Structure).experimental);
         CHECK(!Get(Look::Native).experimental && !Get(Look::Natural).experimental);
     }
 

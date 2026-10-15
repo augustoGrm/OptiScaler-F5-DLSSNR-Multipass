@@ -733,8 +733,9 @@ static void WriteLook(Config* config, const DlssNrLook::Settings& s)
     config->DlssNrInputStyleFacesOnly = s.facesOnly;
 }
 
-// A button drawn green while its preset is the one in effect (the overlay's existing success green).
-static bool PresetButton(const char* label, bool active)
+// A button drawn green while its preset is the one in effect (the overlay's existing success green). `width` 0: as wide
+// as its label.
+static bool PresetButton(const char* label, bool active, float width = 0.0f)
 {
     if (active)
     {
@@ -743,13 +744,15 @@ static bool PresetButton(const char* label, bool active)
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.16f, 0.45f, 0.20f, 1.0f));
     }
 
-    const bool pressed = ImGui::Button(label);
+    const bool pressed = ImGui::Button(label, ImVec2(width, 0.0f));
 
     if (active)
         ImGui::PopStyleColor(3);
 
     return pressed;
 }
+
+static constexpr const char* PassPresetNames[] = { "1 Pass", "2 Pass", "3 Pass" };
 
 // Quality tiers (High/Medium/Low/Potato) for running NR at a reduced model resolution, offered as
 // two preset rows that differ only in where NR runs: Pre-SR (Before Super Resolution) and Post-SR
@@ -773,6 +776,25 @@ static constexpr ResolutionTier ResolutionTiers[] = {
     { "Low", 0u, 0.65f },
     { "Potato", 0u, 0.50f },
 };
+
+// One width for every preset button on the status page (looks, pass presets, both tier rows): the widest label's, so
+// the rows line up as columns instead of each button hugging its own label. From the current font, so it follows the
+// menu's scale.
+static float PresetButtonWidth()
+{
+    float widest = 0.0f;
+
+    for (const auto& look : DlssNrLook::kLooks)
+        widest = std::max(widest, ImGui::CalcTextSize(look.name).x);
+
+    for (const char* name : PassPresetNames)
+        widest = std::max(widest, ImGui::CalcTextSize(name).x);
+
+    for (const auto& tier : ResolutionTiers)
+        widest = std::max(widest, ImGui::CalcTextSize(tier.name).x);
+
+    return widest + 2.0f * ImGui::GetStyle().FramePadding.x;
+}
 
 static void ApplyResolutionTier(Config* config, int& pendingScale, const ResolutionTier& tier,
                                 bool beforeSuperResolution)
@@ -1632,6 +1654,8 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
     if (ImGui::SmallButton("Open Optical F5Low##statuslink"))
         MenuPages::RequestPage(MenuPages::Page::NrF5Low);
 
+    const float presetWidth = PresetButtonWidth();
+
     ImGui::SeparatorText("Look Presets");
     {
         const auto now = ReadLook(config);
@@ -1647,7 +1671,7 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
             if (i != 0 && i != 4)
                 ImGui::SameLine();
 
-            if (PresetButton(look.name, DlssNrLook::Matches(now, look.settings)))
+            if (PresetButton(look.name, DlssNrLook::Matches(now, look.settings), presetWidth))
                 WriteLook(config, look.settings);
 
             if (ImGui::IsItemHovered())
@@ -1663,14 +1687,13 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
                "effect; changing one of its settings clears it.");
 
     ImGui::SeparatorText("Multipass Presets");
-    if (PresetButton("1 Pass", PassPresetActive(config, 1u)))
-        ApplyPassPreset(config, 1u);
-    ImGui::SameLine();
-    if (PresetButton("2 Pass", PassPresetActive(config, 2u)))
-        ApplyPassPreset(config, 2u);
-    ImGui::SameLine();
-    if (PresetButton("3 Pass", PassPresetActive(config, 3u)))
-        ApplyPassPreset(config, 3u);
+    for (uint32_t passes = 1; passes <= IM_ARRAYSIZE(PassPresetNames); ++passes)
+    {
+        if (passes > 1)
+            ImGui::SameLine();
+        if (PresetButton(PassPresetNames[passes - 1], PassPresetActive(config, passes), presetWidth))
+            ApplyPassPreset(config, passes);
+    }
     HelpMarker("Sets the pass count, with NR on FP8 and the default exposure. How each pass looks is the Look "
                "presets'. Green = in effect; changing the pass count clears it.");
 
@@ -1736,7 +1759,7 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
             if (i > 0)
                 ImGui::SameLine();
             if (PresetButton(ResolutionTiers[i].name,
-                             ResolutionTierActive(config, ResolutionTiers[i], beforeSuperResolution)))
+                             ResolutionTierActive(config, ResolutionTiers[i], beforeSuperResolution), presetWidth))
                 ApplyResolutionTier(config, pendingScale, ResolutionTiers[i], beforeSuperResolution);
         }
         ImGui::PopID();
