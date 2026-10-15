@@ -682,8 +682,9 @@ class Config
     CustomOptional<bool> DlssNrNativeInput { false };
     // NativeUpscaler: experimental. With NativeMotion on and the game making no upscaler call, presents the picture,
     // the finder's depth (all far when it has none) and the optical flow to OptiScaler's upscaler (Dx12Upscaler, FFX
-    // when unset) as a synthetic upscaler call (render size == output size, no jitter: a stabiliser, not a
-    // reconstruction), so frame generation with the Upscaler input works in a game that never calls an upscaler. Takes
+    // when unset) as a synthetic upscaler call (render size == output size, no jitter: no reconstruction; the backend's
+    // pass runs only with NativeUpscalerPass true and NR on), so frame generation with the Upscaler input works in a
+    // game that never calls an upscaler. Takes
     // priority over NativeInput. Changes apply at once. In a D3D11 game, FGInput=Upscaler replaces the game's swap chain
     // with with_dx12::Dx11wDx12SC; this and NativeInput then run from its present (native/NativeDriverDx11.cpp's
     // OnFGPresent, with_dx12/dx11_with_dx12_sc.cpp's _ApplyNativeInputToFGBackBuffer), while Finished Picture NR (the

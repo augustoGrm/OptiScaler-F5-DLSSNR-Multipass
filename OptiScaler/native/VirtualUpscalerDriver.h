@@ -11,8 +11,7 @@
 // generation), Evaluate, then DLSS-NR's EvaluateAfterUpscale. It must run before frame generation presents, on the game's
 // queue: native/NativeDriverDx12.cpp drives it from FGHooks::FGPresent when frame generation owns the swapchain.
 //
-// Jitter is zero and render size equals output size: there is no upscaling, the backend runs as a temporal stabiliser on the
-// native-resolution picture. With NR off the backend's pass is skipped (the feature is only counted, for frame generation);
+// Jitter is zero and render size equals output size: there is no upscaling. With NR off the backend's pass is skipped (the feature is only counted, for frame generation);
 // with NR on it is skipped too and NR runs on the game's picture in place (DlssNr::ApplyVirtualUpscalerInput), unless the
 // [DlssNr] NativeUpscalerPass is true (native/VirtualUpscalerMode.h).
 //

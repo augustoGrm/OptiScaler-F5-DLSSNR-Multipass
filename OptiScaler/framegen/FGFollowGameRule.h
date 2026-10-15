@@ -37,6 +37,14 @@ constexpr bool Follows(bool enabledSet, bool canFollow) { return !enabledSet && 
 
 constexpr bool Enabled(bool follows, Request game, bool menuEnabled) { return follows ? game.enabled : menuEnabled; }
 
+// Following the game must not start XeFG where XeFG's own checks refuse it (the menu runs those only while it is
+// drawn): exclusive full screen, or a float (scRGB) swapchain, since XeFG only takes HDR10. Ignore Init Checks lifts
+// it, as in the menu. Other outputs are not concerned.
+constexpr bool FollowBlocked(bool xefgOutput, bool ignoreChecks, bool exclusiveFullscreen, bool floatSwapchain)
+{
+    return xefgOutput && !ignoreChecks && (exclusiveFullscreen || floatSwapchain);
+}
+
 // Frames to generate per real frame: the game's count when following, else the output's menu count (XeFG or
 // DLSSG InterpolationCount). Never above the output's max; a max not known yet (below 1) allows 1.
 // The game-side "Override DLSSG Ratio" is not part of this: it applies to the game's own DLSS-FG only.

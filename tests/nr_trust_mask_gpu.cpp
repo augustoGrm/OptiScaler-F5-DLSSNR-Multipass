@@ -234,6 +234,15 @@ struct Gpu
     }
 };
 
+// An IEEE half (as an R16 float texture stores it) as a float
+float HalfToFloat(uint16_t h)
+{
+    const uint32_t sign = (h >> 15) & 1, exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
+    float v = exponent == 0 ? std::ldexp((float) mantissa, -24)
+                            : std::ldexp((float) (mantissa | 0x400), (int) exponent - 25);
+    return sign ? -v : v;
+}
+
 // A scene: a still background and a square at x, with a depth map where near is 1 (reversed-Z, near plane 0.1).
 struct Scene
 {
@@ -665,6 +674,76 @@ int main()
                                       : "reversed-Z input: guide unchanged (square 0.02, background 0.005)";
             ok &= Check(what, square, std::fabs(square - 0.02f) < 1e-5f && std::fabs(background - 0.005f) < 1e-5f);
         }
+    }
+
+    // 10. the motion guide reads the guide depth as reversed-Z whatever the game's convention: a normal-Z game gets the
+    // same per-surface motion at an outline as a reversed-Z one (it took the other surface's motion when the guide depth
+    // was decoded by the game's convention)
+    {
+        printf("motion guide by surface, both depth conventions\n");
+        // x motion (towards the previous frame) at pixels either side of the square's left edge, per convention
+        float outside[2] = {}, inside[2] = {};
+
+        for (const bool normal : { false, true })
+        {
+            Runner run(gpu);
+            if (!run.ok)
+                return 1;
+
+            // The square moves right 10 pixels a frame over a still background
+            run.Frame(Scene { 7, 280, 20.0f, 5.0f });
+            run.Frame(Scene { 7, 290, 20.0f, 5.0f });
+            run.Frame(Scene { 7, 300, 20.0f, 5.0f });
+            run.Frame(Scene { 7, 310, 20.0f, 5.0f });
+
+            const Scene scene { 7, 320, 20.0f, 5.0f };
+            auto colour = Colour(gpu, scene);
+            auto depth = Depth(gpu, scene, 0, normal);
+            run.flow.Dispatch(gpu.list.Get(), colour.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
+
+            TrustMaskDx12::Inputs in;
+            in.flow = run.flow.Flow();
+            in.flowWidth = run.flow.FlowWidth();
+            in.flowHeight = run.flow.FlowHeight();
+            in.fullPerFlow = 2.0f;
+            in.lumaNow = run.flow.LumaOfLastFrame();
+            in.lumaBefore = run.flow.LumaOfFrameBefore();
+            in.depths[0] = depth.Get();
+            in.depthCount = 1;
+            in.depthFormat = DXGI_FORMAT_R32_FLOAT;
+            in.depthWidth = kWidth;
+            in.depthHeight = kHeight;
+            in.depthReversed = !normal;
+            run.trust.Dispatch(gpu.list.Get(), in);
+            const bool built = run.trust.BuildGuides(gpu.list.Get(), in, kWidth, kHeight);
+            gpu.Submit();
+
+            if (!built || run.trust.GuideMotion() == nullptr)
+            {
+                ok &= Check("motion guide built", 0.0, false);
+                continue;
+            }
+
+            // R16G16B16A16_FLOAT: x is the first half
+            const auto motion = gpu.Read(run.trust.GuideMotion(), 8);
+            const auto motionX = [&](uint32_t x, uint32_t y)
+            {
+                uint16_t h;
+                memcpy(&h, &motion[((size_t) y * kWidth + x) * 8], 2);
+                return HalfToFloat(h);
+            };
+            outside[normal ? 1 : 0] = motionX(319, 360);
+            inside[normal ? 1 : 0] = motionX(321, 360);
+        }
+
+        printf("  reversed-Z: outside %.2f inside %.2f   normal-Z: outside %.2f inside %.2f\n", outside[0], inside[0],
+               outside[1], inside[1]);
+        ok &= Check("the background next to the outline keeps the background's motion (about 0)", outside[0],
+                    std::fabs(outside[0]) < 2.0f);
+        ok &= Check("normal-Z: the same motion as reversed-Z just outside the outline", outside[1],
+                    std::fabs(outside[1] - outside[0]) < 1.0f);
+        ok &= Check("normal-Z: the same motion as reversed-Z just inside the outline", inside[1],
+                    std::fabs(inside[1] - inside[0]) < 1.0f);
     }
 
     printf(ok ? "all passed\n" : "FAILED\n");

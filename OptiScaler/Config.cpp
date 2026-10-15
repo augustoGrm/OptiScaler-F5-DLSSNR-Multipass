@@ -2249,8 +2249,20 @@ bool Config::FGFollowsGame() const { return FGFollowGame::Follows(FGEnabled.has_
 
 bool Config::IsFGEnabled() const
 {
-    return FGFollowGame::Enabled(FGFollowsGame(), State::Instance().dlssgInputGameRequest.load(),
-                                 FGEnabled.value_or_default());
+    const bool follows = FGFollowsGame();
+    auto& state = State::Instance();
+
+    if (follows)
+    {
+        const auto format = state.currentSwapchainDesc.BufferDesc.Format;
+        const bool floatSwapchain = format >= DXGI_FORMAT_R32G32B32A32_TYPELESS && format <= DXGI_FORMAT_R16G16B16A16_SINT;
+
+        if (FGFollowGame::FollowBlocked(state.activeFgOutput == FGOutput::XeFG, FGXeFGIgnoreInitChecks.value_or_default(),
+                                        state.realExclusiveFullscreen, floatSwapchain))
+            return false;
+    }
+
+    return FGFollowGame::Enabled(follows, state.dlssgInputGameRequest.load(), FGEnabled.value_or_default());
 }
 
 int Config::FGInterpolationCount(int menuCount, int outputMax) const

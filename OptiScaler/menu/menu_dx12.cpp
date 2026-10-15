@@ -266,7 +266,10 @@ void Menu_Dx12::CreateRenderTarget(const D3D12_RESOURCE_DESC& InDesc)
     {
         auto rtDesc = _renderTargetResource[0]->GetDesc();
 
-        if (InDesc.Width != rtDesc.Width || InDesc.Height != rtDesc.Height || InDesc.Format != rtDesc.Format)
+        // The copies are made in the typed format (below): compared against the raw one, a typeless output never matched
+        // and the copies were remade, and delay-released, every frame
+        if (InDesc.Width != rtDesc.Width || InDesc.Height != rtDesc.Height ||
+            TranslateTypelessFormats(InDesc.Format) != rtDesc.Format)
         {
             // Last frames' copies may still be on the GPU
             Util::DelayedRelease(_renderTargetResource[0]);

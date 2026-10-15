@@ -43,6 +43,14 @@ int main()
     CHECK(Enabled(false, gameOff, true));
     CHECK(!Enabled(false, gameOn3, false));
 
+    // Following never starts XeFG where its own checks refuse: exclusive full screen, or a float (scRGB) swapchain.
+    // Ignore Init Checks lifts that, as in the menu; other outputs are not concerned.
+    CHECK(!FollowBlocked(true, false, false, false));
+    CHECK(FollowBlocked(true, false, true, false));
+    CHECK(FollowBlocked(true, false, false, true));
+    CHECK(!FollowBlocked(true, true, true, true));
+    CHECK(!FollowBlocked(false, false, true, true));
+
     // Count: the game's when following, else the menu's; clamped to the output's max, unknown max -> 1
     CHECK(Count(true, gameOn3, 1, 3) == 3);
     CHECK(Count(true, gameOn3, 1, 2) == 2);

@@ -108,6 +108,10 @@ bool ApplyVirtualUpscalerInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandL
                                ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
                                bool depthReversed, bool reset, DXGI_COLOR_SPACE_TYPE colorSpace,
                                D3D12_RESOURCE_STATES pictureState, unsigned long long epoch);
+// A native-input frame went by without NR (NR off, a mode without NR, the virtual upscaler's own pass): the next NR frame
+// starts its history over instead of blending with the picture from before the gap. The two entries above do this
+// themselves for a frame they did not run on.
+void NativeInputSkipped();
 // The colour space of a swap chain's picture, from what the game set (SDR when it set nothing), for a native-input frame.
 DXGI_COLOR_SPACE_TYPE NativeInputColourSpace(IDXGISwapChain* swapchain, DXGI_FORMAT format);
 void FinishedPictureColorSpace(IDXGISwapChain* swapchain, DXGI_COLOR_SPACE_TYPE colorSpace);

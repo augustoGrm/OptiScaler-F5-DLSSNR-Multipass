@@ -355,9 +355,9 @@ void GuideMotion(uint3 id : SV_DispatchThreadID)
     Flow.GetDimensions(flowWidth, flowHeight);
     const int2 flowHi = int2(flowWidth, flowHeight) - 1;
 
-    // This pixel's distance, as the depth proxy has it (larger is farther).
+    // This pixel's distance, as the depth proxy has it (larger is farther). The guide depth is always reversed-Z.
     const float raw = GuideRawDepth.Load(int3(id.xy, 0));
-    const float here = min(1.0 / max(reversed != 0 ? raw : 1.0 - raw, 1e-6), 1e6);
+    const float here = min(1.0 / max(raw, 1e-6), 1e6);
 
     const float2 f = uv * float2(flowWidth, flowHeight) - 0.5;
     const int2 f0 = int2(floor(f));
