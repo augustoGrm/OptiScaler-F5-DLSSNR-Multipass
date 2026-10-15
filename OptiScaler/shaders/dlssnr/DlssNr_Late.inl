@@ -626,15 +626,11 @@ DXGI_COLOR_SPACE_TYPE NativeInputColourSpace(IDXGISwapChain* swapchain, DXGI_FOR
     return colorSpace;
 }
 
-bool NativeInputBlockedBySwapChainInterop()
-{
-    return State::Instance().swapchainInteropApi != SwapchainInteropApi::None;
-}
-
-// The body of ApplyNativeInput and ApplyVirtualUpscalerInput. `fromVirtualUpscaler` skips the two checks that are about
-// where NR Only mode runs, not about the picture: the Finished Picture setting (NR + upscaler & frame generation keeps it
-// off, for the game's own upscaler calls) and the swap-chain interop (the virtual upscaler runs from frame generation's
-// present, on the paired D3D12 queue).
+// The body of ApplyNativeInput and ApplyVirtualUpscalerInput. `fromVirtualUpscaler` skips the Finished Picture setting,
+// which is about NR Only mode, not the picture (NR + upscaler & frame generation keeps it off, for the game's own upscaler
+// calls). Neither refuses while frame generation has replaced a D3D11 or Vulkan game's swap chain: both then run from that
+// swap chain's present on the paired D3D12 queue, whose picture is the one presented. (The first NR Only read the game's
+// D3D12 swap chain at present, which under that interop is frame generation's, and so refused it.)
 static bool ApplyFinishedPictureInput(ID3D12CommandQueue* queue, ID3D12GraphicsCommandList* cmd, ID3D12Resource* color,
                                       ID3D12Resource* depth, ID3D12Resource* motion, ID3D12Resource* historyDistrust,
                                       bool depthReversed, bool reset, DXGI_COLOR_SPACE_TYPE colorSpace,
@@ -650,7 +646,7 @@ static bool ApplyFinishedPictureInput(ID3D12CommandQueue* queue, ID3D12GraphicsC
         return false;
     }
     // Depth is optional: NR runs without it.
-    if (!queue || !cmd || !color || !motion || (!fromVirtualUpscaler && NativeInputBlockedBySwapChainInterop()))
+    if (!queue || !cmd || !color || !motion)
         return false;
     if (Late::PausedForGameFrameGeneration())
     {

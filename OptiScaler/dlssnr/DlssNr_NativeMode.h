@@ -200,7 +200,6 @@ enum class Warning
 {
     None,
     GameUpscaler,        // a mode is on while the game calls an upscaler of its own: it stands aside
-    Dx11FrameGeneration, // NR only, while frame generation replaces a D3D11 game's swap chain
     VulkanNeedsRestart,  // NR + upscaler & frame generation in a Vulkan game whose swapchain was made without the bridge
     NrDisabled,           // Enable Neural Rendering is off
     NeedsFinishedPicture, // NR only, with NR Pass at: not on Finished Picture
@@ -208,13 +207,14 @@ enum class Warning
     NeedsOn12Backend      // frame generation only, while the game's upscaler runs on a Vulkan backend (not *_on12)
 };
 
-// nativeInputBlocked: DlssNr::NativeInputBlockedBySwapChainInterop(), the condition native input itself refuses on.
 // gameUpscaler: as for Selectable; it comes first, since nothing else matters while the mode stands aside.
+// NR only has no warning for a D3D11 or Vulkan game whose swap chain frame generation replaced: it runs from that swap
+// chain's present (NativeMotionDx11::OnFGPresent, the Vulkan present bridge), as NR + upscaler & frame generation does.
 // vulkanNoBridge: a Vulkan game whose swapchain was made without the present bridge (native/VkPresentBridge.h): frame
 // generation starts with the next start of the game, once chosen.
 // on12Backend: frame generation only, the game's upscaler feature is a Vulkan-on-D3D12 one (the only kind that feeds
 // frame generation).
-inline Warning WarningFor(Shown shown, bool nrEnabled, bool finishedPicture, bool nativeInputBlocked, bool gameUpscaler,
+inline Warning WarningFor(Shown shown, bool nrEnabled, bool finishedPicture, bool gameUpscaler,
                           bool vulkanNoBridge = false, bool on12Backend = true)
 {
     // The one mode that needs the game's upscaler call
@@ -234,9 +234,6 @@ inline Warning WarningFor(Shown shown, bool nrEnabled, bool finishedPicture, boo
 
     if (shown == Shown::NrOnly)
     {
-        if (nativeInputBlocked)
-            return Warning::Dx11FrameGeneration;
-
         if (!nrEnabled)
             return Warning::NrDisabled;
 

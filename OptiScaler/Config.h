@@ -677,18 +677,17 @@ class Config
     // NativeInput: with NativeMotion on and the game making no upscaler call, runs DLSS-NR on the finished picture with
     // the optical flow as its motion and the depth finder's depth when it has one (Story 4 of the native input
     // producer). Needs FinishedPicture and Enabled on as well. Lower GPU cost than NativeUpscaler below, with no frame
-    // generation; inert once FGInput=Upscaler replaces a D3D11 game's swap chain (see NativeUpscaler). The menu's "NR
-    // only" mode. Changes apply at once.
+    // generation. Once FGInput=Upscaler has replaced a D3D11 or Vulkan game's swap chain it runs from that swap chain's
+    // present (frame generation idles: nothing feeds it). The menu's "NR only" mode. Changes apply at once.
     CustomOptional<bool> DlssNrNativeInput { false };
     // NativeUpscaler: experimental. With NativeMotion on and the game making no upscaler call, presents the picture,
     // the finder's depth (all far when it has none) and the optical flow to OptiScaler's upscaler (Dx12Upscaler, FFX
     // when unset) as a synthetic upscaler call (render size == output size, no jitter: a stabiliser, not a
     // reconstruction), so frame generation with the Upscaler input works in a game that never calls an upscaler. Takes
-    // priority over NativeInput. Changes apply at once. For a D3D11 game, this is also the only one of the three
-    // native-input options (this, NativeInput, Finished Picture NR) that still works once FGInput=Upscaler is selected:
-    // that replaces the game's swap chain with with_dx12::Dx11wDx12SC, which the other two require not to be in play
-    // (see native/NativeDriverDx11.cpp's OnFGPresent and with_dx12/dx11_with_dx12_sc.cpp's
-    // _ApplyNativeInputToFGBackBuffer). The menu's "NR + upscaler & frame generation" mode (Optical F5Low page): it
+    // priority over NativeInput. Changes apply at once. In a D3D11 game, FGInput=Upscaler replaces the game's swap chain
+    // with with_dx12::Dx11wDx12SC; this and NativeInput then run from its present (native/NativeDriverDx11.cpp's
+    // OnFGPresent, with_dx12/dx11_with_dx12_sc.cpp's _ApplyNativeInputToFGBackBuffer), while Finished Picture NR (the
+    // D3D12 swap chain path) does nothing there. The menu's "NR + upscaler & frame generation" mode (Optical F5Low page): it
     // sets NativeDepthFinder, NativeMotion and this together, clears NativeInput, and switches NR Pass at: off Finished
     // Picture if it was on (see dlssnr/DlssNr_NativeMode.h). See native/VirtualUpscalerDriver.h.
     CustomOptional<bool> DlssNrNativeUpscaler { false };
