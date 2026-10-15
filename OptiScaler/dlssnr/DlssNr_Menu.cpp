@@ -733,6 +733,9 @@ static void WriteLook(Config* config, const DlssNrLook::Settings& s)
     config->DlssNrInputStyleFacesOnly = s.facesOnly;
 }
 
+static constexpr const char* LookBaseNames[] = { "Standard", "Natural", "Cinematic" };
+static_assert(IM_ARRAYSIZE(LookBaseNames) == DlssNrLook::kBaseCount);
+
 // A button drawn green while its preset is the one in effect (the overlay's existing success green). `width` 0: as wide
 // as its label.
 static bool PresetButton(const char* label, bool active, float width = 0.0f)
@@ -1663,6 +1666,14 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
         const bool inputStyleOff = config->DlssNrWorkingScale.value_or_default() > 1.0f + 0.005f ||
                                    config->DlssNrDeferredDlss.value_or_default();
 
+        // The base the second row is built on is derived from the settings when one of those looks is in effect, else
+        // it is this session's last pick (Standard at start) and changes nothing until a look is clicked
+        static DlssNrLook::Base pickedBase = DlssNrLook::Base::Standard;
+        const auto inEffect = DlssNrLook::SecondRowInEffect(now);
+
+        if (inEffect)
+            pickedBase = inEffect->base;
+
         for (size_t i = 0; i < DlssNrLook::kLookCount; ++i)
         {
             const auto& look = DlssNrLook::kLooks[i];
@@ -1671,8 +1682,11 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
             if (i != 0 && i != 4)
                 ImGui::SameLine();
 
-            if (PresetButton(look.name, DlssNrLook::Matches(now, look.settings), presetWidth))
-                WriteLook(config, look.settings);
+            const bool active = look.isModifier ? inEffect && inEffect->look == look.id
+                                                : DlssNrLook::Matches(now, look.settings);
+
+            if (PresetButton(look.name, active, presetWidth))
+                WriteLook(config, look.isModifier ? DlssNrLook::ComposeLook(look.id, pickedBase) : look.settings);
 
             if (ImGui::IsItemHovered())
                 ImGui::SetTooltip("%s%s", look.tip,
@@ -1680,6 +1694,41 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
                                       ? "\nNo effect right now: the input style is skipped above 100% model "
                                         "resolution and on the deferred path."
                                       : "");
+        }
+
+        // Directly under the row it changes. Picking a base while one of these looks is on moves that look onto it.
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Built on:");
+
+        for (size_t b = 0; b < DlssNrLook::kBaseCount; ++b)
+        {
+            ImGui::SameLine();
+
+            if (ImGui::RadioButton(LookBaseNames[b], pickedBase == (DlssNrLook::Base) b))
+            {
+                pickedBase = (DlssNrLook::Base) b;
+
+                if (inEffect)
+                    WriteLook(config, DlssNrLook::ComposeLook(inEffect->look, pickedBase));
+            }
+        }
+
+        ImGui::SameLine();
+        HelpMarker("Which look Faces, Painterly, Soft canvas and Structure start from: its style, strength and "
+                   "curve. The look then adds its own skin, detail or input changes. Picking a base while one of "
+                   "these looks is on applies it right away.");
+
+        // An input style that is skipped does nothing: say so where the look is, not only in its tooltip
+        if (inEffect && inputStyleOff && DlssNrLook::Get(inEffect->look).experimental)
+        {
+            const char* name = DlssNrLook::Get(inEffect->look).name;
+
+            if (config->DlssNrDeferredDlss.value_or_default())
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "%s: no effect on the deferred path.", name);
+            else
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f),
+                                   "%s: no effect at %.0f%% model resolution (works at 100%% or below).", name,
+                                   config->DlssNrWorkingScale.value_or_default() * 100.0f);
         }
     }
     HelpMarker("How NR's edit looks: each pass's style and strengths, the curve, Detail and Colour strength, skin and "

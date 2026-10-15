@@ -299,9 +299,15 @@ inline bool Matches(const Settings& now, const Settings& look)
 // A second-row look on a base
 inline Settings ComposeLook(Look look, Base base) { return Compose(base, Get(look).modifier); }
 
-// The base `now` is built on, when it is a second-row look in effect on some base. Derived from the settings, never
-// remembered. At most one (base, look) pair matches (tests/nr_look_presets_smoke.cpp).
-inline std::optional<Base> DerivedBase(const Settings& now)
+struct InEffect
+{
+    Look look;
+    Base base;
+};
+
+// The second-row look in effect and the base it is built on. Derived from the settings, never remembered. At most one
+// (base, look) pair matches (tests/nr_look_presets_smoke.cpp).
+inline std::optional<InEffect> SecondRowInEffect(const Settings& now)
 {
     for (const auto& e : kLooks)
     {
@@ -310,9 +316,15 @@ inline std::optional<Base> DerivedBase(const Settings& now)
 
         for (size_t b = 0; b < kBaseCount; ++b)
             if (Matches(now, Compose((Base) b, e.modifier)))
-                return (Base) b;
+                return InEffect { e.id, (Base) b };
     }
 
     return std::nullopt;
+}
+
+inline std::optional<Base> DerivedBase(const Settings& now)
+{
+    const auto found = SecondRowInEffect(now);
+    return found ? std::optional<Base> { found->base } : std::nullopt;
 }
 } // namespace DlssNrLook
