@@ -150,15 +150,16 @@ inline Settings SoftCanvas()
 
 // The structure hint shows the model the picture with its fine contrast raised, so it paints more surface structure;
 // Composed hands back only what it painted beyond that picture, so the boost itself never reaches the screen. The boost
-// is on brightness with one scale per pixel, capped below clipping, so no hue moves. Strength 2: 1 was weak in NBA 2K27
-// (the shader's note). The model's own Local structure and Detail strength stay at 1, so the boost is not stacked on a
-// second one (the model already over-sharpens mids and highlights); skin structure 0.75, the value games with built-in
-// NR use, keeps pores from turning harsh; HLG keeps the gradation in the darks, where the boost would band on Linear.
+// is on brightness with one scale per pixel, capped below clipping, so no hue moves. Strength 1.25: 2 was too strong in
+// NBA 2K27 (user, 2026-10-15). The model's own Local structure and Detail strength stay at 1, so the boost is not
+// stacked on a second one (the model already over-sharpens mids and highlights); skin structure 0.75, the value games
+// with built-in NR use, keeps pores from turning harsh; HLG keeps the gradation in the darks, where the boost would band
+// on Linear.
 inline Settings Structure()
 {
     Settings s = Make({ 0, 1.0f, 1.0f, 1.0f, 0.75f, true }, kCurveHlg);
     s.inputStyle = kInputStructureHint;
-    s.inputStrength = 2.0f;
+    s.inputStrength = 1.25f;
     return s;
 }
 } // namespace detail

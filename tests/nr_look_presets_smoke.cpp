@@ -97,10 +97,10 @@ int main()
         CHECK(Get(Look::Faces).settings.skinSplit && Get(Look::Faces).settings.envDetail < 1.0f);
         CHECK(Get(Look::Cinematic).settings.pass1.style == 2);
 
-        // Structure: the structure hint input at 2 (1 was weak in NBA), the model's own structure and Detail strength
+        // Structure: the structure hint input at 1.25 (2 was too strong in NBA), the model's own structure and Detail strength
         // left at 1 so the boost is not stacked, skin structure 0.75, HLG for the darks
         const Settings& structure = Get(Look::Structure).settings;
-        CHECK(structure.inputStyle == kInputStructureHint && structure.inputStrength == 2.0f);
+        CHECK(structure.inputStyle == kInputStructureHint && structure.inputStrength == 1.25f);
         CHECK(structure.curve == kCurveHlg && structure.detail == 1.0f && structure.colour == 1.0f);
         CHECK(structure.pass1.style == 0 && structure.pass1.structure == 1.0f && structure.pass1.skin == 0.75f);
         CHECK(!structure.facesOnly && !structure.skinSplit);
