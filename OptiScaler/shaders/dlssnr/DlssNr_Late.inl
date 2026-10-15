@@ -21,6 +21,10 @@ bool loggedCrossQueue = false;
 inline constexpr const char* pausedForGameFg = "Paused while the game's own frame generation is on.";
 std::string status = "Waiting for a finished picture.";
 bool reset = true;
+// Native input's own history reset (ApplyNativeInput, ApplyVirtualUpscalerInput), apart from `reset` above: the swap chain
+// path cancels, and so sets `reset`, on every present while Finished Picture is off, which is how Optical F5Low's
+// "NR + upscaler & frame generation" mode runs. Shared, it reset NR's history on every frame there: NR's edits flickered.
+bool nativeReset = true;
 
 // Native input's HDR10 scratch pair (no slot to keep it in): NR's linear scRGB picture and the PQ result in the picture's
 // own format. Recreated when the picture's size or format changes. A replaced buffer is kept until the frame number has
@@ -650,6 +654,8 @@ static bool ApplyFinishedPictureInput(ID3D12CommandQueue* queue, ID3D12GraphicsC
         return false;
     if (Late::PausedForGameFrameGeneration())
     {
+        // Frames go by without NR: its history starts over when it is back.
+        Late::nativeReset = true;
         Late::Say(Late::pausedForGameFg);
         return false;
     }
@@ -717,7 +723,7 @@ static bool ApplyFinishedPictureInput(ID3D12CommandQueue* queue, ID3D12GraphicsC
         (scrgb || pq) ? DlssNrExposureState::PinnedWhitePoint(Config::Instance()->DlssNrDisplayPaperWhiteNits.value_or_default(),
                                                       DlssNrExposureState::kNitsPerScrgbUnit)
               : 0.0f;
-    frame.Reset = reset || Late::reset;
+    frame.Reset = reset || Late::nativeReset;
     frame.OutputWidth = (unsigned) desc.Width;
     frame.OutputHeight = desc.Height;
     frame.FinishedPicture = true;
@@ -757,7 +763,7 @@ static bool ApplyFinishedPictureInput(ID3D12CommandQueue* queue, ID3D12GraphicsC
     if (pq && ran && Config::Instance()->DlssNrApplyModel.value_or_default())
         RecordPqEncode(cmd, nrColor, color, pictureState, Late::nativeHdr.encoded.Get(), conversion);
 
-    Late::reset = !ran;
+    Late::nativeReset = !ran;
     Late::Say(!Config::Instance()->DlssNrApplyModel.value_or_default() ? "NR changes are hidden." :
         ran ? "Applying NR to the finished picture (native input)." : "Preparing NR for the finished picture (native input).");
     if (ran && (++Late::successes == 1 || Late::successes % 300 == 0))
