@@ -33,6 +33,17 @@
 
 #include "Hook_Utils.h"
 
+#include <low_latency/input/OutputRule.h>
+#include <low_latency/input/VkLatencyMode.h>
+#include <low_latency/input/input_antilag_vk.h>
+#include <low_latency/input/input_reflex.h>
+#include <low_latency/input/input_reflex_vk.h>
+#include <low_latency/low_latency_tech/ll_reflex_nvapi_vk.h>
+
+#include <intrin.h>
+
+#pragma intrinsic(_ReturnAddress)
+
 // for menu rendering
 static VkDevice _device = VK_NULL_HANDLE;
 static VkInstance _instance = VK_NULL_HANDLE;
@@ -59,6 +70,11 @@ static PFN_vkGetPhysicalDeviceFeatures2 o_vkGetPhysicalDeviceFeatures2 = nullptr
 PFN_vkCreateSemaphore VulkanHooks::o_vkCreateSemaphore = nullptr;
 PFN_vkSignalSemaphore VulkanHooks::o_vkSignalSemaphore = nullptr;
 PFN_vkAntiLagUpdateAMD VulkanHooks::o_vkAntiLagUpdateAMD = nullptr;
+PFN_vkSetLatencySleepModeNV VulkanHooks::o_vkSetLatencySleepModeNV = nullptr;
+PFN_vkLatencySleepNV VulkanHooks::o_vkLatencySleepNV = nullptr;
+PFN_vkSetLatencyMarkerNV VulkanHooks::o_vkSetLatencyMarkerNV = nullptr;
+PFN_vkGetLatencyTimingsNV VulkanHooks::o_vkGetLatencyTimingsNV = nullptr;
+PFN_vkQueueNotifyOutOfBandNV VulkanHooks::o_vkQueueNotifyOutOfBandNV = nullptr;
 
 // Forward declaration
 static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPresentInfo);
@@ -84,245 +100,72 @@ static VkResult hkvkReleaseFullScreenExclusiveModeEXT(VkDevice device, VkSwapcha
     return o_ReleaseFullScreenExclusiveModeEXT(device, swapchain);
 }
 
-// A Vulkan game's own Reflex, through VK_NV_low_latency2: Optical F5Low's low latency stands aside once it is called
-// (native/NativeLowLatency.h), and on the present bridge with XeFG the calls feed XeFG's XeLL (ReflexHooks forwarding,
-// native/XefgReflexRule.h). Our own low latency goes through the NvAPI_Vulkan_* interface and never calls these.
-static PFN_vkSetLatencySleepModeNV o_vkSetLatencySleepModeNV = nullptr;
-static PFN_vkLatencySleepNV o_vkLatencySleepNV = nullptr;
-static PFN_vkSetLatencyMarkerNV o_vkSetLatencyMarkerNV = nullptr;
-
-// A bridged game with XeFG as the output (ReflexHooks::bridgedXellDevice): these calls feed XeFG's XeLL on the bridge's
-// D3D12 device instead of the driver, as the NvAPI_Vulkan_* ones do. The driver gets the sleep mode with low latency
-// off. No game was available to run this through.
-static std::mutex g_ll2Mutex;
-static bool g_ll2HaveMode = false;
-static VkLatencySleepModeInfoNV g_ll2Mode {};
-static bool g_ll2Forwarding = false;
-
-static native::xefgreflex::SleepMode Ll2SleepMode(const VkLatencySleepModeInfoNV* info)
+// dxvk, vkd3d-proton and an nvapi call Vulkan's low latency for a D3D game's own Reflex, which is its D3D input
+// already: a D3D runtime or nvapi module that calls Vulkan is one of those (the system's own never do). Never
+// OptiScaler itself, which may be named dxgi.dll.
+static bool D3DOnVulkanModule(HMODULE module)
 {
-    native::xefgreflex::SleepMode mode;
+    if (module == nullptr || module == dllModule)
+        return false;
 
-    if (info != nullptr)
-    {
-        mode.lowLatency = info->lowLatencyMode != VK_FALSE;
-        mode.boost = info->lowLatencyBoost != VK_FALSE;
-        mode.minimumIntervalUs = info->minimumIntervalUs;
-    }
+    static std::mutex cacheMutex;
+    static std::unordered_map<HMODULE, bool> cache;
 
-    return mode;
+    std::scoped_lock lock(cacheMutex);
+
+    if (auto it = cache.find(module); it != cache.end())
+        return it->second;
+
+    wchar_t path[MAX_PATH] {};
+    GetModuleFileNameW(module, path, MAX_PATH);
+
+    auto name = std::filesystem::path(path).filename().wstring();
+    std::transform(name.begin(), name.end(), name.begin(), ::towlower);
+
+    const bool d3d = name == L"d3d9.dll" || name == L"d3d10core.dll" || name == L"d3d11.dll" || name == L"d3d12.dll" ||
+                     name == L"d3d12core.dll" || name == L"dxgi.dll" || name == L"nvapi64.dll";
+    cache[module] = d3d;
+    return d3d;
 }
 
-// The Framerate page's Input is Off (native::lowlatency::GameLowLatencyBlocked): the mode goes to the driver with low
-// latency off, no Boost and no interval; OptiScaler's limiter keeps the frame cap
-static VkLatencySleepModeInfoNV Ll2ForDriver(const VkLatencySleepModeInfoNV& info)
+// The game's own Vulkan low latency calls are InputCommon's inputs (low_latency/input): VK_NV_low_latency2's
+// (InputReflexVk) and VK_AMD_anti_lag's (InputAntiLagVk). Handed out by vkGetInstanceProcAddr / vkGetDeviceProcAddr:
+// the loader's own stubs for extension functions are too small to detour, so the game gets the input's function, and
+// the driver's stays in VulkanHooks for the outputs (taken from here too, for a device made before our hooks). A D3D
+// game's translation layer gets the driver's (D3DOnVulkanModule). Null for any other name.
+static PFN_vkVoidFunction LowLatencyInputHook(const std::string& name, PFN_vkVoidFunction orgFunc, void* returnAddress)
 {
-    VkLatencySleepModeInfoNV out = info;
+    if (ScopedSkipVulkanHooks::Active())
+        return nullptr;
 
-    if (native::lowlatency::GameLowLatencyBlocked())
+    auto hook = [&]<typename PFN>(PFN& original, auto input) -> PFN_vkVoidFunction
     {
-        const auto off = native::xefgreflex::SleepModeForOutput(Ll2SleepMode(&info), 0, false, false, true);
-        out.lowLatencyMode = off.lowLatency ? VK_TRUE : VK_FALSE;
-        out.lowLatencyBoost = off.boost ? VK_TRUE : VK_FALSE;
-        out.minimumIntervalUs = off.minimumIntervalUs;
-    }
+        if (original == nullptr)
+            original = (PFN) orgFunc;
 
-    return out;
-}
+        if (D3DOnVulkanModule(Util::GetCallerModule(returnAddress)))
+            return nullptr;
 
-// XeFG has Reflex as the low latency Output (native/XefgReflexRule.h): the driver does the work on these calls, XeLL only
-// keeps XeFG running. Anti-Lag 2 is AMD's and AMD has no VK_NV_low_latency2: these calls are XeLL's then, as before.
-static bool Ll2SplitToDriver()
-{
-    return native::lowlatency::XefgSide() == native::xefgreflex::XefgLatency::Reflex;
-}
+        return (PFN_vkVoidFunction) input;
+    };
 
-// XeLL gets the game's mode (with low latency off in the split); the driver the same call with low latency off, or in the
-// split the game's own (null: the game switched it off)
-static VkResult Ll2ForwardSleepMode(ID3D12Device* xellDevice, VkDevice device, VkSwapchainKHR swapchain,
-                                    const VkLatencySleepModeInfoNV* info)
-{
-    auto mode = Ll2SleepMode(info);
-    ReflexHooks::noteLowLatency2SleepMode(info != nullptr ? &mode : nullptr);
-
-    // Anti-Lag 2 has no VK_NV_low_latency2 surface: XeLL keeps these calls and does the work then, not only the frame IDs
-    ReflexHooks::xellSetSleepMode(xellDevice, mode,
-                                  Ll2SplitToDriver() ? native::xefgreflex::XefgLatency::Reflex
-                                                     : native::xefgreflex::XefgLatency::XeLL);
-
-    if (info == nullptr)
-        return o_vkSetLatencySleepModeNV(device, swapchain, nullptr);
-
-    if (Ll2SplitToDriver())
-        return o_vkSetLatencySleepModeNV(device, swapchain, info);
-
-    constexpr auto off = native::xefgreflex::kDriverSleepMode;
-    VkLatencySleepModeInfoNV driver = *info;
-    driver.lowLatencyMode = off.lowLatency ? VK_TRUE : VK_FALSE;
-    driver.lowLatencyBoost = off.boost ? VK_TRUE : VK_FALSE;
-    driver.minimumIntervalUs = off.minimumIntervalUs;
-    return o_vkSetLatencySleepModeNV(device, swapchain, &driver);
-}
-
-// The device the game's calls go to XeLL on, else null. The first call after a change of owner gives the game's last
-// mode to the new one, on this call's device and swapchain (the one the mode was set on may be gone). The driver gets
-// it back as the game set it: OptiScaler's cap stays with its own limiter then (ReflexHooks::update has no
-// VK_NV_low_latency2 owner to give it to).
-static ID3D12Device* Ll2XellDevice(VkDevice device, VkSwapchainKHR swapchain)
-{
-    auto* xellDevice = ReflexHooks::bridgedXellDevice();
-    ReflexHooks::noteBridgedForwarding(xellDevice != nullptr);
-
-    std::lock_guard lock(g_ll2Mutex);
-
-    if ((xellDevice != nullptr) != g_ll2Forwarding)
-    {
-        g_ll2Forwarding = xellDevice != nullptr;
-
-        if (g_ll2HaveMode && swapchain != VK_NULL_HANDLE)
-        {
-            if (xellDevice != nullptr)
-            {
-                Ll2ForwardSleepMode(xellDevice, device, swapchain, &g_ll2Mode);
-            }
-            else
-            {
-                const auto forDriver = Ll2ForDriver(g_ll2Mode);
-                o_vkSetLatencySleepModeNV(device, swapchain, &forDriver);
-            }
-        }
-    }
-
-    return xellDevice;
-}
-
-// The Input was switched to or from Off since the game set its mode: the game's last mode goes out again in the other
-// shape, on this call's device and swapchain (the game may not set it again for a long time)
-static void Ll2ApplyInputChange(VkDevice device, VkSwapchainKHR swapchain, ID3D12Device* xellDevice)
-{
-    // The Input's Off and the Output (the split) both change the shape the mode goes out in
-    static int applied = 0;
-    const int shape = (native::lowlatency::GameLowLatencyBlocked() ? 1 : 0) + (Ll2SplitToDriver() ? 2 : 0);
-
-    std::lock_guard lock(g_ll2Mutex);
-
-    if (shape == applied)
-        return;
-
-    applied = shape;
-
-    if (!g_ll2HaveMode || swapchain == VK_NULL_HANDLE)
-        return;
-
-    if (xellDevice != nullptr)
-    {
-        Ll2ForwardSleepMode(xellDevice, device, swapchain, &g_ll2Mode);
-    }
-    else
-    {
-        const auto forDriver = Ll2ForDriver(g_ll2Mode);
-        o_vkSetLatencySleepModeNV(device, swapchain, &forDriver);
-    }
-}
-
-static VkResult VKAPI_CALL hkvkSetLatencySleepModeNV(VkDevice device, VkSwapchainKHR swapchain,
-                                                     const VkLatencySleepModeInfoNV* pSleepModeInfo)
-{
-    ReflexHooks::noteGameVulkanLowLatency2(true);
-
-    // Asked before the new mode is stored: a change of owner hands the previous mode over first
-    auto* xellDevice = Ll2XellDevice(device, swapchain);
-
-    {
-        std::lock_guard lock(g_ll2Mutex);
-        g_ll2HaveMode = pSleepModeInfo != nullptr;
-
-        if (pSleepModeInfo != nullptr)
-        {
-            g_ll2Mode = *pSleepModeInfo;
-            g_ll2Mode.pNext = nullptr;
-        }
-    }
-
-    if (xellDevice != nullptr)
-        return Ll2ForwardSleepMode(xellDevice, device, swapchain, pSleepModeInfo);
-
-    if (pSleepModeInfo != nullptr)
-    {
-        const auto forDriver = Ll2ForDriver(*pSleepModeInfo);
-        return o_vkSetLatencySleepModeNV(device, swapchain, &forDriver);
-    }
-
-    return o_vkSetLatencySleepModeNV(device, swapchain, pSleepModeInfo);
-}
-
-static VkResult VKAPI_CALL hkvkLatencySleepNV(VkDevice device, VkSwapchainKHR swapchain,
-                                              const VkLatencySleepInfoNV* pSleepInfo)
-{
-    ReflexHooks::noteGameVulkanLowLatency2(false);
-
-    auto* xellDevice = Ll2XellDevice(device, swapchain);
-    Ll2ApplyInputChange(device, swapchain, xellDevice);
-
-    // In the split the driver sleeps (its mode is the game's, and it signals the game's semaphore itself)
-    if (xellDevice != nullptr && pSleepInfo != nullptr && !Ll2SplitToDriver())
-    {
-        ReflexHooks::xellSleep(xellDevice);
-
-        // The driver's sleep would have signalled the game's semaphore: from the host now. If that cannot be done the
-        // driver's own sleep (its mode is off) does it, the game must never wait for a value that does not come.
-        if (VulkanHooks::SignalTimelineSemaphore(device, pSleepInfo->signalSemaphore, pSleepInfo->value))
-            return VK_SUCCESS;
-    }
-
-    return o_vkLatencySleepNV(device, swapchain, pSleepInfo);
-}
-
-static void VKAPI_CALL hkvkSetLatencyMarkerNV(VkDevice device, VkSwapchainKHR swapchain,
-                                              const VkSetLatencyMarkerInfoNV* pLatencyMarkerInfo)
-{
-    ReflexHooks::noteGameVulkanLowLatency2(false);
-
-    if (auto* xellDevice = Ll2XellDevice(device, swapchain); xellDevice != nullptr && pLatencyMarkerInfo != nullptr)
-    {
-        // Vulkan has no PC_LATENCY_PING: the out of band markers sit one place higher in NVAPI's list
-        uint32_t nvapiMarker = 0;
-
-        if (native::xefgreflex::NvApiMarkerFromVulkanNV((uint32_t) pLatencyMarkerInfo->marker, &nvapiMarker))
-            ReflexHooks::xellMarker(xellDevice, pLatencyMarkerInfo->presentID, nvapiMarker);
-    }
-
-    o_vkSetLatencyMarkerNV(device, swapchain, pLatencyMarkerInfo);
-}
-
-// Handed out by vkGetInstanceProcAddr / vkGetDeviceProcAddr for the three calls (the loader's own stubs for extension
-// functions are too small to detour, so the game gets our function and ours calls the one the loader gave). Null for any
-// other name.
-static PFN_vkVoidFunction HookLowLatency2(const std::string& name, PFN_vkVoidFunction orgFunc)
-{
     if (name == "vkSetLatencySleepModeNV")
-    {
-        if (o_vkSetLatencySleepModeNV == nullptr)
-            o_vkSetLatencySleepModeNV = (PFN_vkSetLatencySleepModeNV) orgFunc;
-
-        return (PFN_vkVoidFunction) hkvkSetLatencySleepModeNV;
-    }
+        return hook(VulkanHooks::o_vkSetLatencySleepModeNV, &InputReflexVk::SetLatencySleepMode);
 
     if (name == "vkLatencySleepNV")
-    {
-        if (o_vkLatencySleepNV == nullptr)
-            o_vkLatencySleepNV = (PFN_vkLatencySleepNV) orgFunc;
-
-        return (PFN_vkVoidFunction) hkvkLatencySleepNV;
-    }
+        return hook(VulkanHooks::o_vkLatencySleepNV, &InputReflexVk::LatencySleep);
 
     if (name == "vkSetLatencyMarkerNV")
-    {
-        if (o_vkSetLatencyMarkerNV == nullptr)
-            o_vkSetLatencyMarkerNV = (PFN_vkSetLatencyMarkerNV) orgFunc;
+        return hook(VulkanHooks::o_vkSetLatencyMarkerNV, &InputReflexVk::SetLatencyMarker);
 
-        return (PFN_vkVoidFunction) hkvkSetLatencyMarkerNV;
-    }
+    if (name == "vkGetLatencyTimingsNV")
+        return hook(VulkanHooks::o_vkGetLatencyTimingsNV, &InputReflexVk::GetLatencyTimings);
+
+    if (name == "vkQueueNotifyOutOfBandNV")
+        return hook(VulkanHooks::o_vkQueueNotifyOutOfBandNV, &InputReflexVk::QueueNotifyOutOfBand);
+
+    if (name == "vkAntiLagUpdateAMD")
+        return hook(VulkanHooks::o_vkAntiLagUpdateAMD, &InputAntiLagVk::AntiLagUpdate);
 
     return nullptr;
 }
@@ -348,28 +191,94 @@ static bool TimelineFeatureOn(const void* chain)
     return false;
 }
 
+// Devices made with VK_NV_low_latency2 and timeline semaphores, not for a D3D device (VulkanHooks::LowLatency2On)
+static std::mutex _lowLatencyMutex;
+static std::set<VkDevice> _lowLatency2Devices;
+// Each device's newest swapchain (LatencySwapchainOf): LatencySwapchainMutex, shared for a read or a call on it
+// (VulkanHooks::LatencySwapchainUse), alone to change it (vkDestroySwapchainKHR waits for a call under way)
+static std::map<VkDevice, VulkanHooks::LatencySwapchain> _latencySwapchains;
+
+static std::shared_mutex& LatencySwapchainMutex()
+{
+    static std::shared_mutex mutex;
+    return mutex;
+}
+
+bool VulkanHooks::LowLatency2On(VkDevice device)
+{
+    std::lock_guard lock(_lowLatencyMutex);
+    return _lowLatency2Devices.contains(device);
+}
+
+VulkanHooks::LatencySwapchain VulkanHooks::LatencySwapchainOf(VkDevice device)
+{
+    std::shared_lock lock(LatencySwapchainMutex());
+    auto it = _latencySwapchains.find(device);
+    return it != _latencySwapchains.end() ? it->second : LatencySwapchain {};
+}
+
+VulkanHooks::LatencySwapchainUse::LatencySwapchainUse(VkDevice device) : _lock(LatencySwapchainMutex())
+{
+    if (auto it = _latencySwapchains.find(device); it != _latencySwapchains.end() && it->second.latencyMode)
+        swapchain = it->second.swapchain;
+}
+
+void VulkanHooks::NoteLatencySwapchain(VkDevice device, VkSwapchainKHR swapchain)
+{
+    if (device == VK_NULL_HANDLE || swapchain == VK_NULL_HANDLE)
+        return;
+
+    // Every call of the game's names it: the exclusive lock only when it is news
+    if (auto known = LatencySwapchainOf(device); known.swapchain == swapchain && known.latencyMode)
+        return;
+
+    std::unique_lock lock(LatencySwapchainMutex());
+    _latencySwapchains[device] = { swapchain, true };
+}
+
+PFN_vkVoidFunction VulkanHooks::GetDeviceProcAddr(VkDevice device, const char* name)
+{
+    return o_vkGetDeviceProcAddr != nullptr ? o_vkGetDeviceProcAddr(device, name) : nullptr;
+}
+
+// A swapchain on a device with VK_NV_low_latency2 is made with its latency mode (low_latency/input/VkLatencyMode.h)
+static bool ChainLatencyMode(VkDevice device, VkSwapchainCreateInfoKHR& info, VkSwapchainLatencyCreateInfoNV& latency)
+{
+    return lloutput::ChainLatencyMode(VulkanHooks::LowLatency2On(device), info, latency);
+}
+
 bool VulkanHooks::TimelineSemaphoresOn(VkDevice device)
 {
     std::lock_guard lock(_timelineDevicesMutex);
     return _timelineDevices.contains(device);
 }
 
+// A device function past our hooks (the core name, else the KHR one), cached for the device asked last: the function
+// and the device it was looked up on go together (any thread). One cache per function type.
+template <typename PFN> static PFN CachedDeviceFunction(VkDevice device, const char* name, const char* khrName)
+{
+    static std::mutex cacheMutex;
+    static PFN cached = nullptr;
+    static VkDevice cachedDevice = VK_NULL_HANDLE;
+
+    std::lock_guard lock(cacheMutex);
+
+    if ((cached == nullptr || cachedDevice != device) && o_vkGetDeviceProcAddr != nullptr)
+    {
+        cached = reinterpret_cast<PFN>(o_vkGetDeviceProcAddr(device, name));
+
+        if (cached == nullptr)
+            cached = reinterpret_cast<PFN>(o_vkGetDeviceProcAddr(device, khrName));
+
+        cachedDevice = device;
+    }
+
+    return cached;
+}
+
 bool VulkanHooks::WaitTimelineSemaphore(VkDevice device, VkSemaphore semaphore, uint64_t value, uint64_t timeoutNs)
 {
-    static PFN_vkWaitSemaphores wait = nullptr;
-    static VkDevice waitDevice = VK_NULL_HANDLE;
-
-    if (wait == nullptr || waitDevice != device)
-    {
-        wait = o_vkGetDeviceProcAddr != nullptr
-                   ? reinterpret_cast<PFN_vkWaitSemaphores>(o_vkGetDeviceProcAddr(device, "vkWaitSemaphores"))
-                   : nullptr;
-
-        if (wait == nullptr && o_vkGetDeviceProcAddr != nullptr)
-            wait = reinterpret_cast<PFN_vkWaitSemaphores>(o_vkGetDeviceProcAddr(device, "vkWaitSemaphoresKHR"));
-
-        waitDevice = device;
-    }
+    const auto wait = CachedDeviceFunction<PFN_vkWaitSemaphores>(device, "vkWaitSemaphores", "vkWaitSemaphoresKHR");
 
     if (wait == nullptr || semaphore == VK_NULL_HANDLE)
         return false;
@@ -383,34 +292,15 @@ bool VulkanHooks::WaitTimelineSemaphore(VkDevice device, VkSemaphore semaphore, 
     return wait(device, &info, timeoutNs) == VK_SUCCESS;
 }
 
+bool VulkanHooks::CanSignalTimelineSemaphore(VkDevice device)
+{
+    return CachedDeviceFunction<PFN_vkSignalSemaphore>(device, "vkSignalSemaphore", "vkSignalSemaphoreKHR") != nullptr;
+}
+
 bool VulkanHooks::SignalTimelineSemaphore(VkDevice device, VkSemaphore semaphore, uint64_t value)
 {
-    // The function and the device it was looked up on go together (any thread)
-    static std::mutex cacheMutex;
-    static PFN_vkSignalSemaphore cachedSignal = nullptr;
-    static VkDevice cachedDevice = VK_NULL_HANDLE;
-
-    PFN_vkSignalSemaphore signal = nullptr;
-    {
-        std::lock_guard lock(cacheMutex);
-
-        if (cachedSignal == nullptr || cachedDevice != device)
-        {
-            cachedSignal = o_vkGetDeviceProcAddr != nullptr ? reinterpret_cast<PFN_vkSignalSemaphore>(
-                                                                  o_vkGetDeviceProcAddr(device, "vkSignalSemaphore"))
-                                                            : nullptr;
-
-            if (cachedSignal == nullptr && o_vkGetDeviceProcAddr != nullptr)
-            {
-                cachedSignal =
-                    reinterpret_cast<PFN_vkSignalSemaphore>(o_vkGetDeviceProcAddr(device, "vkSignalSemaphoreKHR"));
-            }
-
-            cachedDevice = device;
-        }
-
-        signal = cachedSignal;
-    }
+    const auto signal =
+        CachedDeviceFunction<PFN_vkSignalSemaphore>(device, "vkSignalSemaphore", "vkSignalSemaphoreKHR");
 
     if (signal == nullptr || semaphore == VK_NULL_HANDLE)
         return false;
@@ -848,7 +738,15 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
     VkPhysicalDeviceTimelineSemaphoreFeatures nativeTimelineFeature {};
     VkBool32* nativeBorrowedTimeline = nullptr;
 
-    if (Config::Instance()->DlssNrEnabled.value_or_default())
+    // VK_NV_low_latency2 (VulkanSpoofing adds it on NVIDIA) signals a timeline semaphore in its sleep: InputCommon's
+    // Reflex output needs the feature too. Not on a device dxvk or vkd3d-proton makes for a D3D device: those run the
+    // D3D game's own Reflex.
+    const bool lowLatency2Asked =
+        !ScopedCreatingD3DDevice::Active() &&
+        DlssNr::VkExt::ListHas(localCreteInfo.ppEnabledExtensionNames, localCreteInfo.enabledExtensionCount,
+                               VK_NV_LOW_LATENCY_2_EXTENSION_NAME);
+
+    if (Config::Instance()->DlssNrEnabled.value_or_default() || lowLatency2Asked)
     {
         VkPhysicalDeviceTimelineSemaphoreFeatures offered {};
         offered.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES;
@@ -908,7 +806,7 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
             }
         }
 
-        LOG_INFO("Optical F5Low Vulkan: timelineSemaphore feature {}", what);
+        LOG_INFO("Vulkan: timelineSemaphore feature {} (Optical F5Low, Reflex)", what);
     }
 
     // VK_AMD_anti_lag (added by VulkanSpoofing when the device offers it) does nothing until its antiLag feature is
@@ -969,6 +867,26 @@ static VkResult hkvkCreateDevice(VkPhysicalDevice physicalDevice, const VkDevice
     {
         std::lock_guard lock(_timelineDevicesMutex);
         _timelineDevices.insert(*pDevice);
+    }
+
+    // VK_NV_low_latency2 with its timeline semaphores: the driver's functions for InputCommon's Reflex output
+    if (result == VK_SUCCESS && pDevice != nullptr && *pDevice != VK_NULL_HANDLE && lowLatency2Asked &&
+        TimelineFeatureOn(localCreteInfo.pNext) && o_vkGetDeviceProcAddr != nullptr)
+    {
+        auto get = [&](const char* name) { return o_vkGetDeviceProcAddr(*pDevice, name); };
+
+        if (auto setSleepMode = (PFN_vkSetLatencySleepModeNV) get("vkSetLatencySleepModeNV"))
+        {
+            VulkanHooks::o_vkSetLatencySleepModeNV = setSleepMode;
+            VulkanHooks::o_vkLatencySleepNV = (PFN_vkLatencySleepNV) get("vkLatencySleepNV");
+            VulkanHooks::o_vkSetLatencyMarkerNV = (PFN_vkSetLatencyMarkerNV) get("vkSetLatencyMarkerNV");
+            VulkanHooks::o_vkGetLatencyTimingsNV = (PFN_vkGetLatencyTimingsNV) get("vkGetLatencyTimingsNV");
+            VulkanHooks::o_vkQueueNotifyOutOfBandNV = (PFN_vkQueueNotifyOutOfBandNV) get("vkQueueNotifyOutOfBandNV");
+
+            std::lock_guard lock(_lowLatencyMutex);
+            _lowLatency2Devices.insert(*pDevice);
+            LOG_INFO("Vulkan Reflex: VK_NV_low_latency2 is on for this device");
+        }
     }
 
     if (nativeBorrowedTimeline != nullptr)
@@ -1094,7 +1012,7 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
 
     // ??? TODO: if we are hooking dxvk's vulkan calls then this present call could be either coming from dxvk or from a
     // native vk game
-    if (!IdentifyGpu::getPrimaryGpu().usesDxvk)
+    if (!VkPresentBridge::DxvkGame())
         State::Instance().swapchainApi = Vulkan;
 
     // Tick feature to let it know if it's frozen
@@ -1138,7 +1056,7 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
         return VK_ERROR_OUT_OF_DATE_KHR;
     }
 
-    ReflexHooks::update(false, true);
+    ReflexHooks::presentUpdate(lloutput::PresentSite::Vulkan, false);
 
     // Optical F5Low's low latency (native/NativeLowLatency.h): Reflex markers around the game's present. This call is the
     // game's own present whether or not the frame-generation bridge is up -- bridged, it is on the hidden window
@@ -1156,21 +1074,20 @@ static VkResult hkvkQueuePresentKHR(VkQueue queue, const VkPresentInfoKHR* pPres
         native::lowlatency::PresentTarget(true, bridged, presentDevice,
                                           bridged ? static_cast<IUnknown*>(VkPresentBridge::Device()) : nullptr,
                                           splitOnVulkan);
-    // dxvk calls this present from its own thread, not the game's, so a Sleep here only paces dxvk and the game runs ahead
-    // until dxvk's frame latency limit stops it. By default (NativeLowLatencyDxvkGameThread) the game's own D3D11 Present
-    // runs the pair instead (wrapped/wrapped_swapchain.cpp), and says so in this frame's ledger entry: `pairHere` is false
-    // for those frames. It is this frame's own entry, not the current setting, that decides: a frame the game's Present
-    // already paired is never paired again here, and a frame it left to this present is never left unpaired.
-    // Unverified, to check in a game: with the pair at the game's Present, PRESENT_START/END (and Anti-Lag Vk's present
-    // stage call) no longer bracket the real vkQueuePresentKHR, which dxvk makes up to its frame latency later on its own
-    // thread, so the driver's Reflex report and the AMD pairing may read differently.
-    // Both sites only call the NVAPI entry points that take the device (NvAPI_D3D_* on the bridge's D3D12 device,
-    // NvAPI_Vulkan_SetLatencyMarker / Sleep on the VkDevice) and vkWaitSemaphores on the VkDevice's sleep semaphore.
-    // None of them takes a swapchain, and the Vulkan specification lists no externally synchronised parameter for
-    // vkWaitSemaphores, so none has to stay on dxvk's thread. The VK_NV_low_latency2 calls that do take the swapchain
-    // (vkLatencySleepNV, vkSetLatencyMarkerNV, externally synchronised in that extension) are not part of our pair.
-    const bool lowLatency = (!IdentifyGpu::getPrimaryGpu().usesDxvk || dxvkBridged) &&
-                            lowLatencyTarget.device != nullptr && pairHere;
+    // dxvk calls this present from its own thread, not the game's, so a Sleep here only paces dxvk and the game runs
+    // ahead until dxvk's frame latency limit stops it. By default (NativeLowLatencyDxvkGameThread) the game's own D3D11
+    // Present runs the pair instead (wrapped/wrapped_swapchain.cpp), and says so in this frame's ledger entry:
+    // `pairHere` is false for those frames. It is this frame's own entry, not the current setting, that decides: a
+    // frame the game's Present already paired is never paired again here, and a frame it left to this present is never
+    // left unpaired. Unverified, to check in a game: with the pair at the game's Present, PRESENT_START/END (and
+    // Anti-Lag Vk's present stage call) no longer bracket the real vkQueuePresentKHR, which dxvk makes up to its frame
+    // latency later on its own thread, so the driver's Reflex report and the AMD pairing may read differently. Both
+    // sites go through InputCommon's output: NvAPI_D3D_* on the bridge's D3D12 device, NvAPI_Vulkan_* and
+    // vkWaitSemaphores on the VkDevice, or VK_NV_low_latency2 on the device's swapchain with latency mode. The Vulkan
+    // registry (vk.xml) marks no parameter of any of them externally synchronised, so none has to stay on dxvk's
+    // thread; the swapchain's destroy waits for a VK_NV_low_latency2 call under way (VulkanHooks::LatencySwapchainUse).
+    const bool lowLatency =
+        (!VkPresentBridge::DxvkGame() || dxvkBridged) && lowLatencyTarget.device != nullptr && pairHere;
 
     const auto lowLatencyBegin = [&]
     {
@@ -1293,6 +1210,13 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
         }
     }
 
+    // InputCommon's Reflex output on VK_NV_low_latency2 needs the swapchain's latency mode
+    VkSwapchainLatencyCreateInfoNV latencyInfo {};
+    bool latencyMode = false;
+
+    if (pCreateInfo != nullptr && !ScopedSkipVulkanHooks::Active())
+        latencyMode = ChainLatencyMode(device, localCreateInfo, latencyInfo);
+
     // On the hidden surface the swapchain never takes the screen; the game's own value is put back after the call.
     bool fullScreenModeReadOnly = false;
     int32_t* fullScreenMode =
@@ -1330,6 +1254,8 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
             if (VkPresentBridge::Owns(pCreateInfo->oldSwapchain))
                 localCreateInfo.oldSwapchain = VK_NULL_HANDLE;
 
+            latencyMode = ChainLatencyMode(device, localCreateInfo, latencyInfo);
+
             ScopedSkipSpoofingGlobal skipSpoofingGlobal {};
             result = o_CreateSwapchainKHR(device, &localCreateInfo, pAllocator, pSwapchain);
         }
@@ -1337,7 +1263,12 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
 
     if (result == VK_SUCCESS && pCreateInfo != nullptr && pSwapchain != nullptr && *pSwapchain != VK_NULL_HANDLE &&
         !ScopedSkipVulkanHooks::Active())
+    {
         native::VkFrameSource::NoteSwapchain(device, *pSwapchain, localCreateInfo);
+
+        std::unique_lock lock(LatencySwapchainMutex());
+        _latencySwapchains[device] = { *pSwapchain, latencyMode };
+    }
 
     if (result == VK_SUCCESS && device != VK_NULL_HANDLE && pCreateInfo != nullptr && *pSwapchain != VK_NULL_HANDLE &&
         !ScopedSkipVulkanHooks::Active())
@@ -1408,6 +1339,17 @@ static VkResult hkvkCreateSwapchainKHR(VkDevice device, const VkSwapchainCreateI
 VALIDATE_HOOK(hkvkDestroySwapchainKHR, PFN_vkDestroySwapchainKHR)
 static void hkvkDestroySwapchainKHR(VkDevice device, VkSwapchainKHR swapchain, const VkAllocationCallbacks* pAllocator)
 {
+    // Before it goes: InputCommon's Reflex output stops using it, after a call of it that is under way
+    // (VulkanHooks::LatencySwapchainUse)
+    if (swapchain != VK_NULL_HANDLE)
+    {
+        std::unique_lock lock(LatencySwapchainMutex());
+
+        if (auto it = _latencySwapchains.find(device);
+            it != _latencySwapchains.end() && it->second.swapchain == swapchain)
+            it->second = {};
+    }
+
     o_DestroySwapchainKHR(device, swapchain, pAllocator);
 
     if (swapchain != VK_NULL_HANDLE)
@@ -1441,8 +1383,24 @@ static void hkvkDestroyDevice(VkDevice device, const VkAllocationCallbacks* pAll
         GenericDepthVk::OnDeviceDestroyed(device);
         native::lowlatency::OnDeviceReleasedVulkan(device);
 
-        std::lock_guard lock(_timelineDevicesMutex);
-        _timelineDevices.erase(device);
+        // InputCommon's output on it stops while the device still lives (its semaphores are the device's), then the
+        // NvAPI Reflex output's state and the game's own semaphore (InputReflex) go
+        InputCommon::device_released(reinterpret_cast<IUnknown*>(device), true);
+        ReflexNvApiVk::forget_device(device);
+        InputReflex::ForgetVulkanDevice(device);
+
+        {
+            std::lock_guard lock(_timelineDevicesMutex);
+            _timelineDevices.erase(device);
+        }
+
+        {
+            std::lock_guard lock(_lowLatencyMutex);
+            _lowLatency2Devices.erase(device);
+        }
+
+        std::unique_lock lock(LatencySwapchainMutex());
+        _latencySwapchains.erase(device);
     }
 
     // The present path falls back to the last device made when its queue is not known (hkvkQueuePresentKHR): that must
@@ -1492,8 +1450,8 @@ PFN_vkVoidFunction hkvkGetInstanceProcAddr(VkInstance instance, const char* pNam
         return (PFN_vkVoidFunction) hkvkDestroyDevice;
     }
 
-    if (auto lowLatency2 = HookLowLatency2(procName, orgFunc); lowLatency2 != nullptr)
-        return lowLatency2;
+    if (auto lowLatency = LowLatencyInputHook(procName, orgFunc, _ReturnAddress()); lowLatency != nullptr)
+        return lowLatency;
 
     auto result = VulkanSpoofing::hkvkGetInstanceProcAddr(orgFunc, pName);
     if (result != VK_NULL_HANDLE)
@@ -1537,8 +1495,8 @@ PFN_vkVoidFunction hkvkGetDeviceProcAddr(VkDevice device, const char* pName)
         return (PFN_vkVoidFunction) hkvkDestroyDevice;
     }
 
-    if (auto lowLatency2 = HookLowLatency2(procName, orgFunc); lowLatency2 != nullptr)
-        return lowLatency2;
+    if (auto lowLatency = LowLatencyInputHook(procName, orgFunc, _ReturnAddress()); lowLatency != nullptr)
+        return lowLatency;
 
     auto result = VulkanSpoofing::hkvkGetDeviceProcAddr(orgFunc, pName);
     if (result != VK_NULL_HANDLE)

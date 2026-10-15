@@ -90,25 +90,33 @@ HMODULE StreamlineHooks::LoadIsolatedGamePlugin(LPCWSTR requestedPath)
     return nullptr;
 }
 
-static bool IsSL1AndDLSSGActive()
-{
-    return State::Instance().streamlineVersion.major == 1 && State::Instance().activeFgInput == FGInput::DLSSG &&
-           (State::Instance().activeFgOutput == FGOutput::FSRFG || State::Instance().activeFgOutput == FGOutput::XeFG);
-}
-
 static bool IsSL1AndFGActive()
 {
     const auto& state = State::Instance();
 
-    return state.streamlineVersion.major == 1 && state.activeFgInput == FGInput::DLSSG;
+    return state.streamlineVersion.major == 1 && state.activeFgInput == FGInput::DLSSG &&
+           state.activeFgOutput != FGOutput::NoFG;
+}
+
+// Game's SL1 DLSSG has to stay inert when we use its inputs or provide DLSSG ourselves,
+// otherwise its swapchain hooks end up stacked on top of our FG swapchain
+static bool IsSL1AndDLSSGManaged()
+{
+    const auto& state = State::Instance();
+
+    return state.streamlineVersion.major == 1 &&
+           (state.activeFgInput == FGInput::DLSSG || state.activeFgOutput == FGOutput::DLSSG);
 }
 
 static void PatchSL1PluginJson(nlohmann::json& configJson)
 {
-    if (!IsSL1AndFGActive())
+    if (!IsSL1AndDLSSGManaged())
         return;
 
-    LOG_DEBUG("Patching SL1 plugin JSON for external FG management");
+    // Once per plugin load: says in a user's log why the game's own SL1 frame generation does nothing
+    LOG_INFO("SL1 DLSSG kept inert, OptiScaler manages it (FG Input {}, FG Output {}): plugin hooks and tags cleared",
+             magic_enum::enum_name(State::Instance().activeFgInput),
+             magic_enum::enum_name(State::Instance().activeFgOutput));
 
     if (configJson.contains("/hooks"_json_pointer))
         configJson["hooks"].clear();
@@ -446,15 +454,64 @@ sl::Result StreamlineHooks::hkslGetFeatureVersion(sl::Feature feature, sl::Featu
     return o_slGetFeatureVersion(feature, version);
 }
 
+// FG Input DLSSG: what OptiScaler's FG output tells the game. The max lets the game's menu offer what our output can
+// do (3x/4x), not just 2x; presented frames are the real ones of our FG.
+static void FillDlssgInputState(sl::DLSSGState& state)
+{
+    auto& optiState = State::Instance();
+    auto fg = optiState.currentFG;
+
+    const bool fgRunning = fg != nullptr && fg->IsActive() && !fg->IsPaused();
+    state.numFramesActuallyPresented =
+        FGFollowGame::Presented(fgRunning, fgRunning ? static_cast<int>(fg->GetInterpolatedFrameCount()) : 0);
+
+    // Struct version 1 ends at 56 bytes, ahead of this field
+    if (state.structVersion < 2)
+        return;
+
+    // Before our FG swapchain exists only the MFG unlock is known (OptiScaler's DLSSG output). XeFG's max needs an
+    // XeFG context, and a throwaway one here would race ours (Intel R5), so it is reported once our XeFG exists.
+    const int earlyMax = optiState.activeFgOutput == FGOutput::DLSSG ? static_cast<int>(MfgUnlock::UnlockedMax()) : 0;
+    const int reported = FGFollowGame::ReportedMax(fg != nullptr ? fg->GetMaxInterpolationCount() : 0, earlyMax);
+    state.numFramesToGenerateMax = reported;
+
+    // GetState runs every frame: log a change only
+    static std::atomic<int> lastReported { 0 };
+    if (lastReported.exchange(reported) != reported)
+        LOG_INFO("Telling the game DLSS Frame Generation goes up to {}x ({} output)", reported + 1,
+                 magic_enum::enum_name(optiState.activeFgOutput));
+}
+
+// FG Input DLSSG: record the game's own DLSS FG choice, which OptiScaler's FG follows while Enabled is auto.
+// mode and numFramesToGenerate are struct version 1 fields, safe to read from any version.
+static void RecordGameDlssgRequest(const sl::DLSSGOptions& options)
+{
+    auto& state = State::Instance();
+    const auto next = FGFollowGame::FromGame(options.mode == sl::DLSSGMode::eOff, options.numFramesToGenerate);
+    const auto previous = state.dlssgInputGameRequest.exchange(next);
+
+    // While off, games keep resending their menu's multiplier (Witcher 3 alternates 2x/4x): nothing to report
+    if (next == previous || (!next.enabled && !previous.enabled))
+        return;
+
+    const bool follows = Config::Instance()->FGFollowsGame();
+    LOG_INFO("Game set DLSS Frame Generation {} {}x ({}): {}", next.enabled ? "on" : "off", next.count + 1,
+             magic_enum::enum_name(options.mode),
+             follows ? "OptiScaler FG follows it"
+                     : "not followed, Frame Generation is set in OptiScaler (or Streamline 1)");
+
+    if (FGFollowGame::NeedsFGChange(follows, previous, next, state.activeFgOutput == FGOutput::XeFG))
+        state.fgChanged = true;
+}
+
 static sl::Result dummy_slDLSSGGetState(const sl::ViewportHandle& viewport, sl::DLSSGState& state,
                                         const sl::DLSSGOptions* options)
 {
-    state.numFramesActuallyPresented = 1; // TODO: can do better
+    FillDlssgInputState(state);
+
     if (state.structVersion >= 2)
-    {
-        state.numFramesToGenerateMax = 1;
         state.bIsVsyncSupportAvailable = sl::Boolean::eTrue;
-    }
+
     state.estimatedVRAMUsageInBytes = 300 * 1024 * 1024;
 
     return sl::Result::eOk;
@@ -462,6 +519,7 @@ static sl::Result dummy_slDLSSGGetState(const sl::ViewportHandle& viewport, sl::
 
 static sl::Result dummy_slDLSSGSetOptions(const sl::ViewportHandle& viewport, const sl::DLSSGOptions& options)
 {
+    RecordGameDlssgRequest(options);
     return sl::Result::eOk;
 }
 
@@ -1258,6 +1316,10 @@ sl::Result StreamlineHooks::hkslDLSSGSetOptions(const sl::ViewportHandle& viewpo
 
     auto& state = State::Instance();
 
+    // A game that reached the real plugin's SetOptions (not our slGetFeatureFunction stand-in) is followed the same way
+    if (state.activeFgInput == FGInput::DLSSG)
+        RecordGameDlssgRequest(options);
+
     // Disable game's DLSSG when we are trying to create our own instance of DLSSG
     if (state.activeFgInput != FGInput::DLSSG && state.activeFgOutput == FGOutput::DLSSG)
     {
@@ -1468,30 +1530,11 @@ sl::Result StreamlineHooks::hkslDLSSGGetState(const sl::ViewportHandle& viewport
 
     if (optiState.activeFgInput == FGInput::DLSSG)
     {
-        auto fg = optiState.currentFG;
+        if (optiState.currentFG != nullptr && options != nullptr &&
+            options->flags & sl::DLSSGFlags::eRequestVRAMEstimate)
+            state.estimatedVRAMUsageInBytes = static_cast<uint64_t>(256 * 1024) * 1024;
 
-        if (fg != nullptr)
-        {
-            if (options != nullptr && options->flags & sl::DLSSGFlags::eRequestVRAMEstimate)
-                state.estimatedVRAMUsageInBytes = static_cast<uint64_t>(256 * 1024) * 1024;
-
-            if (fg->IsActive() && !fg->IsPaused())
-            {
-                state.numFramesActuallyPresented = fg->GetInterpolatedFrameCount() + 1;
-            }
-            else
-            {
-                state.numFramesActuallyPresented = 1;
-            }
-        }
-        else
-        {
-            state.numFramesActuallyPresented = 1;
-        }
-
-        // Struct version 1 ends at 56 bytes, ahead of this field.
-        if (originalStructVersion >= 2)
-            state.numFramesToGenerateMax = 1;
+        FillDlssgInputState(state);
 
         LOG_DEBUG("Status: {}, numFramesActuallyPresented: {}", magic_enum::enum_name(state.status),
                   state.numFramesActuallyPresented);
@@ -1635,7 +1678,7 @@ void* StreamlineHooks::hkdlssg_slGetPluginFunction(const char* functionName)
         return &hkslDLSSGGetState;
     }
 
-    if (strcmp(functionName, "slGetPluginJSONConfig") == 0 && IsSL1AndDLSSGActive())
+    if (strcmp(functionName, "slGetPluginJSONConfig") == 0 && IsSL1AndDLSSGManaged())
     {
         o_dlssg_slGetPluginJSONConfig_sl1 =
             reinterpret_cast<PFN_slGetPluginJSONConfig_sl1>(o_dlssg_slGetPluginFunction(functionName));

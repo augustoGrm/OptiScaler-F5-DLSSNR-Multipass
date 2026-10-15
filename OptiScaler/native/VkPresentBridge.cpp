@@ -344,7 +344,7 @@ struct ResizeHold
     {
         auto& state = State::Instance();
 
-        if (Config::Instance()->FGEnabled.value_or_default())
+        if (Config::Instance()->IsFGEnabled())
         {
             state.fgResetCapturedResources = true;
             state.fgOnlyUseCapturedResources = false;

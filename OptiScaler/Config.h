@@ -208,6 +208,7 @@ enum class LowLatencyInput : uint32_t
     Reflex,
     XeLL,
     UeLowLatency,
+    OptiScaler, // OptiScaler's own Streamline (DLSSG output) when the game has no low latency of its own
     _
 };
 
@@ -219,7 +220,9 @@ enum class LowLatencyMode : uint32_t
     AntiLag2,
     XeLL,
     AntiLagVk,
-    Reflex
+    Reflex,
+    FpsLimiter,
+    _
 };
 
 class Config
@@ -604,13 +607,18 @@ class Config
     // was a button the notice never mentioned -- and then by clearing, which silently undid a
     // setting the user had made. Both were attempts to stop an illegal state being REACHED. A single
     // choice cannot reach it: there is nothing to keep consistent, because there is only one value.
-    // Default 3 (Automatic, at +1.5 EV): it needs nothing from the game; Game exposure left NBA 2K27 far too dark.
-    CustomOptional<uint32_t> DlssNrWhitePointSource { 3 };
+    //   4  auto (the default): Game exposure when the game hands one over, else Automatic (user decision 2026-10-14),
+    //      with Game exposure's scale per game (GameExposureScale auto). shaders/dlssnr/DlssNr_ExposureDefault.h; every
+    //      reader goes through DlssNr::WhitePointSourceEffective (DlssNr_GameDefaults.h).
+    // Before 2026-10-14 the default was 3 (Automatic, at +1.5 EV): Game exposure on the game's-setting scale left NBA
+    // 2K27 far too dark, which the per-game scale now covers.
+    CustomOptional<uint32_t> DlssNrWhitePointSource { 4 };
 
     // Game exposure's scale: what its Trim multiplies. 0 = with the game's exposure (PreExposure / exposure, the value
     // the game reports to DLSS SR), 1 = the game's colour as is (a base of exactly 1, as games with built-in DLSS-NR
-    // feed the model). Only read with WhitePointSource 1. See DlssNr_GameScale.h.
-    CustomOptional<uint32_t> DlssNrGameExposureScale { 0 };
+    // feed the model), 2 = auto (the default): as is for a game measured to need it (NBA 2K27), else the game's
+    // setting. Only read with Game exposure in force. See DlssNr_GameScale.h and DlssNr_ExposureDefault.h.
+    CustomOptional<uint32_t> DlssNrGameExposureScale { 2 };
 
     // OptiScaler-owned automatic exposure controls. When active, automatic exposure uses the
     // linear-HDR NR input. Finished-picture mode bypasses this calculation and keeps its own
@@ -669,21 +677,26 @@ class Config
     // NativeInput: with NativeMotion on and the game making no upscaler call, runs DLSS-NR on the finished picture with
     // the optical flow as its motion and the depth finder's depth when it has one (Story 4 of the native input
     // producer). Needs FinishedPicture and Enabled on as well. Lower GPU cost than NativeUpscaler below, with no frame
-    // generation; inert once FGInput=Upscaler replaces a D3D11 game's swap chain (see NativeUpscaler). The menu's "NR
-    // only" mode. Changes apply at once.
+    // generation. Once FGInput=Upscaler has replaced a D3D11 or Vulkan game's swap chain it runs from that swap chain's
+    // present (frame generation idles: nothing feeds it). The menu's "NR only" mode. Changes apply at once.
     CustomOptional<bool> DlssNrNativeInput { false };
     // NativeUpscaler: experimental. With NativeMotion on and the game making no upscaler call, presents the picture,
     // the finder's depth (all far when it has none) and the optical flow to OptiScaler's upscaler (Dx12Upscaler, FFX
-    // when unset) as a synthetic upscaler call (render size == output size, no jitter: a stabiliser, not a
-    // reconstruction), so frame generation with the Upscaler input works in a game that never calls an upscaler. Takes
-    // priority over NativeInput. Changes apply at once. For a D3D11 game, this is also the only one of the three
-    // native-input options (this, NativeInput, Finished Picture NR) that still works once FGInput=Upscaler is selected:
-    // that replaces the game's swap chain with with_dx12::Dx11wDx12SC, which the other two require not to be in play
-    // (see native/NativeDriverDx11.cpp's OnFGPresent and with_dx12/dx11_with_dx12_sc.cpp's
-    // _ApplyNativeInputToFGBackBuffer). The menu's "NR + upscaler & frame generation" mode (Optical F5Low page): it
+    // when unset) as a synthetic upscaler call (render size == output size, no jitter: no reconstruction; the backend's
+    // pass runs only with NativeUpscalerPass true and NR on), so frame generation with the Upscaler input works in a
+    // game that never calls an upscaler. Takes
+    // priority over NativeInput. Changes apply at once. In a D3D11 game, FGInput=Upscaler replaces the game's swap chain
+    // with with_dx12::Dx11wDx12SC; this and NativeInput then run from its present (native/NativeDriverDx11.cpp's
+    // OnFGPresent, with_dx12/dx11_with_dx12_sc.cpp's _ApplyNativeInputToFGBackBuffer), while Finished Picture NR (the
+    // D3D12 swap chain path) does nothing there. The menu's "NR + upscaler & frame generation" mode (Optical F5Low page): it
     // sets NativeDepthFinder, NativeMotion and this together, clears NativeInput, and switches NR Pass at: off Finished
     // Picture if it was on (see dlssnr/DlssNr_NativeMode.h). See native/VirtualUpscalerDriver.h.
     CustomOptional<bool> DlssNrNativeUpscaler { false };
+    // NativeUpscalerPass: with NativeUpscaler on and Neural Rendering on, whether the upscaler backend still evaluates
+    // the picture. Auto (unset) and false: it does not. The backend only keeps frame generation's Upscaler input alive,
+    // and NR runs on the game's picture in place, as in NativeInput (native/VirtualUpscalerMode.h). true: the old pass,
+    // NR on the backend's output (to compare, or as a fallback).
+    CustomOptional<bool> DlssNrNativeUpscalerPass { false };
     // NativeFrameGenerationOnly: a Vulkan game that calls DLSS, FSR or XeSS of its own gets OptiScaler's frame generation
     // from that call. The Vulkan present bridge (native/VkPresentBridge.h) puts frame generation's D3D12 swapchain on the
     // window, and the game's upscaler runs through a Vulkan-on-D3D12 backend (DLSS_on12, FFX_on12, FSR21_on12) on the
@@ -1115,7 +1128,9 @@ class Config
     CustomOptional<FrameTimeSource> FTInput { FrameTimeSource::Input };
 
     // OptiFG
-    CustomOptional<bool> FGEnabled { false };
+    // Unset (auto) follows the game's DLSS FG with FG Input DLSSG: read it through IsFGEnabled(). SoftDefault so a
+    // false set in the menu is saved and stops the following.
+    CustomOptional<bool, SoftDefault> FGEnabled { false };
     CustomOptional<bool> FGUseMutexForSwapchain { true };
     CustomOptional<bool> FGMakeMVCopy { true };
     CustomOptional<bool> FGMakeDepthCopy { true };
@@ -1209,8 +1224,6 @@ class Config
     CustomOptional<bool> FN_ForceLatencyFlex { false };
     CustomOptional<LFXMode> FN_LatencyFlexMode { LFXMode::Conservative };
     CustomOptional<ForceReflex> FN_ForceReflex { ForceReflex::InGame };
-    CustomOptional<LowLatencyInput> LowLatencyInput { LowLatencyInput::Auto }; // TODO: no reading/saving to config
-    CustomOptional<LowLatencyMode> LowLatencyOutput { LowLatencyMode::Auto };
 
     // Inputs
     CustomOptional<bool> EnableDlssInputs { true };
@@ -1236,6 +1249,10 @@ class Config
     // off: no low latency, the game's Reflex is sent with it off. The old [DlssNr] NativeLowLatency is read when this
     // key is missing (auto, true = optiscaler, false = game) and still written beside it.
     CustomOptional<native::lowlatency::Input> FramerateLowLatencyInput { native::lowlatency::Input::Auto };
+    // [Framerate] FrameCapOnly, the Framerate page's Output "Frame cap only" (ll_fps_limiter.h): no latency reduction,
+    // FramerateLimit waits at the game's Sleep (or simulation start) instead of at present. Not with XeFG or on NVIDIA
+    // Reflex (low_latency/input/OutputRule.h PlanOutput).
+    CustomOptional<bool> FramerateFrameCapOnly { false };
 
     // HDR
     CustomOptional<bool> ForceHDR { false };
@@ -1255,6 +1272,13 @@ class Config
     bool SaveXeFG();
 
     void CheckUpscalerFiles();
+
+    // FG on/off and frame count. With FG Input DLSSG (Streamline 2+) and Enabled unset they follow the game's DLSS
+    // Frame Generation setting (framegen/FGFollowGameRule.h); otherwise FGEnabled and the output's menu count.
+    static bool FGCanFollowGame();
+    bool FGFollowsGame() const;
+    bool IsFGEnabled() const;
+    int FGInterpolationCount(int menuCount, int outputMax) const;
 
     std::vector<std::string> GetConfigLog();
 

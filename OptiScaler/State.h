@@ -4,6 +4,7 @@
 #include "misc/Quirks.h"
 #include "misc/SkipSpoof.h"
 #include "framegen/IFGFeature_Dx12.h"
+#include "framegen/FGFollowGameRule.h"
 #include <inputs/FG/Streamline_Inputs_Dx12.h>
 #include <inputs/FG/Streamline_Inputs_Sl1_Dx12.h>
 
@@ -191,6 +192,9 @@ class State
 
     // OptiFG
     bool fgPresentIsCalled = false;
+    // Frame generation's last present waited for V-Sync (sync interval after ForceVsync): XeLL with XeFG then lines its
+    // frames up with the refresh rate instead of the frame cap (NativeLowLatencyRule.h XellKeepsCap)
+    std::atomic<bool> fgPresentVsync { false };
     bool fgOnlyGenerated = false;
     bool fgHudlessCompare = false;
     bool fgChanged = false;
@@ -250,7 +254,6 @@ class State
     bool reflexLimitsFps = false;
     bool reflexShowWarning = false;
     bool rtssReflexInjection = false;
-    bool fakenvapiReloadLowLatency = false;
     UINT64 reflexFrameId = 0;
     // XeFG's last Present Id and whether it was the frame markers' ID (the FPS overlay's Reflex timings show both)
     // Written on XeFG's present thread, read by the menu
@@ -276,6 +279,9 @@ class State
     bool dlssgGameDMFGSupported = false;
     sl::DLSSGMode dlssgLastSetMode = sl::DLSSGMode::eOff;
     int dlssgDetectedInterpolationCount = 0;
+    // The game's own DLSS FG choice (slDLSSGSetOptions) with FG Input DLSSG; OptiScaler's FG follows it while
+    // Enabled is auto (Config::IsFGEnabled). Written on the game's thread, read on render and present threads.
+    std::atomic<FGFollowGame::Request> dlssgInputGameRequest {};
     UINT64 dlssgLastEvaluateFrame = UINT64_MAX; // frameCount at the last DLSS-G evaluate passed through
     // That evaluate generated frames: its DLSSG.MultiFrameCount was above zero, or it had none (builds without multi
     // frame generation leave it out).

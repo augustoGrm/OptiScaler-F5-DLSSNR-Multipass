@@ -34,8 +34,8 @@ inline uint64_t PresentEpoch(Api api, uint64_t dxgiPresents, uint64_t vulkanPres
     return api == Api::Vulkan ? vulkanPresents : dxgiPresents;
 }
 
-// What the picture's values mean. The producer supports Srgb (SDR) and ScRgb (linear, 1.0 = 80 nits) today; Pq (HDR10) is
-// reported, not processed.
+// What the picture's values mean. Srgb (SDR), ScRgb (linear, 1.0 = 80 nits) and Pq (HDR10). The producer measures
+// motion on the values as they are; NR's native input converts Pq to scRGB and back itself.
 enum class ColorSpace
 {
     Srgb,

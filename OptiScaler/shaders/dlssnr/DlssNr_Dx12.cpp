@@ -1658,7 +1658,7 @@ float ResolveWhitePoint(const Config& cfg, bool isHdrBuffer)
     // menu. A game that hands over a real exposure has no business being driven by a buffer found by
     // its shape, and two sources fighting over one number is the class of bug worth making
     // unreachable rather than merely unlikely.
-    if (cfg.DlssNrWhitePointSource.value_or_default() == 2)
+    if (DlssNr::WhitePointSourceEffective(cfg) == 2)
     {
         // Multi-point: one or more calibration points the user placed, interpolated in log space by
         // the current scan value. One point is the original ratio law; more fit the buffer's actual
@@ -1671,7 +1671,7 @@ float ResolveWhitePoint(const Config& cfg, bool isHdrBuffer)
             return w;
     }
 
-    if (cfg.DlssNrWhitePointSource.value_or_default() == 1 && g_nr.gameExposure > 1e-6f)
+    if (DlssNr::WhitePointSourceEffective(cfg) == 1 && g_nr.gameExposure > 1e-6f)
     {
         // Its own setting, not the manual divisor. See Config: they are different quantities with
         // different units and different sensible ranges, and sharing one value meant adjusting the
@@ -1692,7 +1692,7 @@ float ResolveWhitePoint(const Config& cfg, bool isHdrBuffer)
         //
         // What the Trim multiplies follows the scale (DlssNr_GameScale.h), but the points stay keyed by the game's
         // exposure, the scene's brightness, in both scales.
-        const float baseWhitePoint = DlssNrGameScale::WhiteBase(cfg.DlssNrGameExposureScale.value_or_default(),
+        const float baseWhitePoint = DlssNrGameScale::WhiteBase(DlssNr::GameExposureScaleEffective(cfg),
                                                                 g_nr.gamePreExposure, g_nr.gameExposure);
         const float anchorKey = DlssNrGameScale::AnchorKey(g_nr.gamePreExposure, g_nr.gameExposure);
         const auto anchors = DlssNrTrim::Parse(cfg.DlssNrGameExposureTrimAnchors.value_or_default());
@@ -1708,7 +1708,7 @@ float ResolveWhitePoint(const Config& cfg, bool isHdrBuffer)
     // Measured off the frame the encode is about to read -- the upscaler's fresh output -- and never
     // off anything this pass has written. That is the difference from the statistical meter removed
     // below, which read its own output and chased it.
-    if (cfg.DlssNrWhitePointSource.value_or_default() == 3 && g_nr.autoExposureValue > 1e-8f)
+    if (DlssNr::WhitePointSourceEffective(cfg) == 3 && g_nr.autoExposureValue > 1e-8f)
     {
         // Following the game (DlssNr_FollowGame.h): the game's base white point times the learned calibration, which
         // is where Automatic's own would sit. The shader does the same from the game's live texture.
@@ -3703,7 +3703,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     //
     // The ring carries the game's exposure or the automatic one, and a slot written for one source must
     // never be read as the other's, so a change of source starts it over.
-    const uint32_t whitePointSource = cfg.DlssNrWhitePointSource.value_or_default();
+    DlssNr::NoteExposureFrame(cfg, frame.ExposureTexture != nullptr && !frame.GameAutoExposure,
+                              g_nr.gameExposure > 1e-6f);
+    const uint32_t whitePointSource = DlssNr::WhitePointSourceEffective(cfg);
 
     if (whitePointSource != g_nr.exposureReadbackSource)
     {
@@ -3914,9 +3916,9 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     // Only with the game's-setting scale: the shader recomputes PreExposure / exposure, and Native look's base is 1
     // whatever the exposure (DlssNr_GameScale.h), so there the host value, 1 x the Trim, is the white point. Binding
     // the texture under Native look made the shader put the game's exposure back (NBA 2K27: ~0.4 EV).
-    if (cfg.DlssNrWhitePointSource.value_or_default() == 1 && frame.ExposureTexture != nullptr &&
+    if (DlssNr::WhitePointSourceEffective(cfg) == 1 && frame.ExposureTexture != nullptr &&
         frame.WhitePointOverride <= 0.0f &&
-        DlssNrGameScale::ShaderReadsGameExposure(cfg.DlssNrGameExposureScale.value_or_default()))
+        DlssNrGameScale::ShaderReadsGameExposure(DlssNr::GameExposureScaleEffective(cfg)))
     {
         exposureTex = (ID3D12Resource*) frame.ExposureTexture;
         useGameExposure = 1;
@@ -5788,6 +5790,7 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
         g_nr.exposureFrames++;
 
         const bool autoExposureFlag = (createFlags & NVSDK_NGX_DLSS_Feature_Flags_AutoExposure) != 0;
+        frame.GameAutoExposure = autoExposureFlag;
 
         struct ExposureReport
         {
@@ -6363,6 +6366,7 @@ void Shutdown()
     g_lastNgxTime.reset();
     g_lastGpuTime.reset();
 
+    Late::nativeHdr = {};
     g_compose.reset();
 }
 } // namespace DlssNr

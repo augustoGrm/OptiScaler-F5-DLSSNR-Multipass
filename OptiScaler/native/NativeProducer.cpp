@@ -312,7 +312,7 @@ NativeProducer::Result NativeProducer::Run(ID3D12CommandQueue* queue, const Fram
             frame.depth = _trust->GuideDepth();
             frame.motion = _trust->GuideMotion();
             frame.historyDistrust = _trust->Mask();
-            frame.depthReversed = nativeInputs.depthReversed;
+            frame.depthReversed = true; // the guide is reversed-Z whatever the game's depth is
             frame.reset = nativeReset || _consumerResetPending;
             result.nativeRan = apply(list, frame);
 

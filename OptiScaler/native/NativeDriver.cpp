@@ -136,8 +136,7 @@ NativeDriver::RunResult NativeDriver::RunFrame(IFrameSource& source, bool flowPr
 
     const auto apply = [this, &source, useVirtualUpscaler](ID3D12GraphicsCommandList* cmd, const NativeFrame& frame)
     {
-        if (useVirtualUpscaler)
-            return _virtualUpscaler->Run(cmd, frame);
+        _pictureHdr10.store(frame.space == ColorSpace::Pq, std::memory_order_relaxed);
 
         const DXGI_COLOR_SPACE_TYPE type = frame.space == ColorSpace::ScRgb ? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709
                                            : frame.space == ColorSpace::Pq  ? DXGI_COLOR_SPACE_RGB_FULL_G2084_NONE_P2020
@@ -145,6 +144,12 @@ NativeDriver::RunResult NativeDriver::RunFrame(IFrameSource& source, bool flowPr
         const uint64_t epoch =
             PresentEpoch(source.GetApi(), State::Instance().frameCount,
                          State::Instance().vulkanPresentCount.load(std::memory_order_relaxed));
+
+        // The virtual upscaler runs NR on the picture itself while its backend only feeds frame generation, so it takes
+        // what NR Only mode takes: the queue, the colour space and the epoch.
+        if (useVirtualUpscaler)
+            return _virtualUpscaler->Run(cmd, frame, source.Queue(), type, epoch);
+
         return DlssNr::ApplyNativeInput(source.Queue(), cmd, frame.color, frame.depth, frame.motion,
                                         frame.historyDistrust, frame.depthReversed, frame.reset, type, frame.pictureState,
                                         epoch);
@@ -153,6 +158,10 @@ NativeDriver::RunResult NativeDriver::RunFrame(IFrameSource& source, bool flowPr
     FrameOutput output;
     const auto result = _producer->Run(source.Queue(), input, options, apply, output);
     source.Return(input, output);
+
+    // Nothing ran on native input this frame (no NR mode, or the producer was not ready): NR's history must not reach across
+    if (!result.nativeRan)
+        DlssNr::NativeInputSkipped();
 
     if (result.stoppedAt != nullptr)
     {
@@ -233,16 +242,33 @@ void NativeDriver::DrawStatus()
     if (Config::Instance()->DlssNrNativeUpscaler.value_or_default())
     {
         if (_nativeRan && _virtualUpscaler != nullptr && _virtualUpscaler->Active())
-            ImGui::TextDisabled("%s is running as a stabiliser on this picture.",
-                                _virtualUpscaler->BackendName().c_str());
+        {
+            const char* backend = _virtualUpscaler->BackendName().c_str();
+
+            if (_virtualUpscaler->NrInPlace())
+                ImGui::TextDisabled("NR on the game's picture (no upscaler pass); %s gives frame generation its input.",
+                                    backend);
+            else if (_virtualUpscaler->BackendPass())
+                ImGui::TextDisabled("%s is running as a stabiliser on this picture.", backend);
+            else if (!Config::Instance()->DlssNrEnabled.value_or_default())
+                ImGui::TextDisabled("NR is off; %s gives frame generation its input (no upscaler pass).", backend);
+            else
+            {
+                // NR is on but did not run on this frame: say why, as NR Only mode does.
+                const std::string reason = DlssNr::FinishedPictureStatus();
+                ImGui::TextDisabled("NR is not running: %s", reason.empty() ? "waiting." : reason.c_str());
+            }
+        }
         else if (_virtualUpscaler != nullptr && !_virtualUpscaler->Error().empty())
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "Stabiliser: %s", _virtualUpscaler->Error().c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "Upscaler for frame generation: %s",
+                               _virtualUpscaler->Error().c_str());
         else
-            ImGui::TextDisabled("Stabiliser: waiting for the motion estimate.");
+            ImGui::TextDisabled("Upscaler for frame generation: waiting for the motion estimate.");
     }
     else if (_nativeRan)
     {
-        ImGui::TextDisabled("NR running on this picture.");
+        ImGui::TextDisabled(_pictureHdr10.load(std::memory_order_relaxed) ? "NR running on this picture (HDR10)."
+                                                                          : "NR running on this picture.");
     }
     else
     {

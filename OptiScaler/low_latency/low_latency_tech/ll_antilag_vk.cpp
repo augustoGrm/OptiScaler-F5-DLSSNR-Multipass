@@ -2,9 +2,40 @@
 #include "ll_antilag_vk.h"
 #include <hooks/Vulkan_Hooks.h>
 
-bool AntiLagVk::init(IUnknown* pDevice) { return VulkanHooks::o_vkAntiLagUpdateAMD != nullptr; }
+// fakenvapi starts it without a device, its markers bring one
+bool AntiLagVk::init(IUnknown* pDevice)
+{
+    device = (VkDevice) pDevice;
+    return VulkanHooks::o_vkAntiLagUpdateAMD != nullptr;
+}
 
 void* AntiLagVk::get_tech_context() { return nullptr; }
+
+void AntiLagVk::update(VkAntiLagStageAMD stage, std::optional<uint64_t> frame_id)
+{
+    const VkDevice target = device.load();
+
+    if (target == VK_NULL_HANDLE || VulkanHooks::o_vkAntiLagUpdateAMD == nullptr)
+        return;
+
+    VkAntiLagPresentationInfoAMD presentationInfo = {};
+    presentationInfo.sType = VK_STRUCTURE_TYPE_ANTI_LAG_PRESENTATION_INFO_AMD;
+    presentationInfo.stage = stage;
+    presentationInfo.frameIndex = frame_id.value_or(0);
+
+    VkAntiLagDataAMD antiLagData = {};
+    antiLagData.sType = VK_STRUCTURE_TYPE_ANTI_LAG_DATA_AMD;
+    antiLagData.mode = is_enabled() ? VK_ANTI_LAG_MODE_ON_AMD : VK_ANTI_LAG_MODE_OFF_AMD;
+    antiLagData.maxFPS = max_fps;
+
+    // Without a frame id it's only the delay, as AntiLag 2's update
+    antiLagData.pPresentationInfo = frame_id.has_value() ? &presentationInfo : nullptr;
+
+    LOG_TRACE_LOWLATENCY("AntiLag {}: {}, status: {}", stage == VK_ANTI_LAG_STAGE_INPUT_AMD ? "Input" : "Present",
+                         frame_id.value_or(0), is_enabled());
+
+    VulkanHooks::o_vkAntiLagUpdateAMD(target, &antiLagData);
+}
 
 void AntiLagVk::get_sleep_status(SleepParams* sleep_params)
 {
@@ -26,80 +57,55 @@ void AntiLagVk::set_sleep_mode(SleepMode* sleep_mode)
 
 void AntiLagVk::sleep(std::optional<uint32_t> frame_id)
 {
-    // This can be supported but prefer using markers with frame ids instead
-    return;
+    // Inputs that sleep with the frame id (AntiLag Vk) also send its simulation start
+    if (frame_id.has_value())
+    {
+        if (!last_input_frame_id.has_value() || (uint32_t) *last_input_frame_id != *frame_id)
+        {
+            last_input_frame_id = *frame_id;
+            update(VK_ANTI_LAG_STAGE_INPUT_AMD, *frame_id);
+        }
+
+        return;
+    }
+
+    // Without one the input stage stays on the simulation start markers, which bring their device. A sleep brings none,
+    // and the one kept from an earlier marker can be gone (a recreated VkDevice). Upstream updates here after 20 sleeps
+    // without such a marker; left out until an AMD Vulkan run.
 }
 
 void AntiLagVk::set_marker(IUnknown* pDevice, const MarkerParams& marker_params)
 {
-    if (!pDevice)
-    {
-        LOG_ERROR("Invalid pointer");
-        return;
-    }
-
-    auto mode = is_enabled() ? VK_ANTI_LAG_MODE_ON_AMD : VK_ANTI_LAG_MODE_OFF_AMD;
-
-    static size_t call_count = 0;
-    static size_t last_oob_present = 0;
-    static bool using_oob_present = false;
-    constexpr size_t allowed_gap = 10;
+    if (pDevice != nullptr)
+        device = (VkDevice) pDevice;
 
     call_count++;
 
     if (marker_params.marker_type == MarkerType::OUT_OF_BAND_PRESENT_START)
     {
         last_oob_present = call_count;
-        if (!using_oob_present)
-            using_oob_present = true;
+        using_oob_present = true;
     }
 
-    if (using_oob_present && call_count - last_oob_present > allowed_gap)
+    if (using_oob_present && call_count - last_oob_present > 10)
         using_oob_present = false;
+
+    // Frame id 0 is what inputs without frame ids send, their sleep calls are the input stage
+    if (marker_params.frame_id == 0)
+        return;
 
     if (marker_params.marker_type == MarkerType::SIMULATION_START)
     {
-        // Before processing user input
-        VkAntiLagPresentationInfoAMD inputInfo = {};
-        inputInfo.sType = VK_STRUCTURE_TYPE_ANTI_LAG_PRESENTATION_INFO_AMD;
-        inputInfo.stage = VK_ANTI_LAG_STAGE_INPUT_AMD;
-        inputInfo.frameIndex = marker_params.frame_id;
-
-        VkAntiLagDataAMD antiLagDataInput = {};
-        antiLagDataInput.sType = VK_STRUCTURE_TYPE_ANTI_LAG_DATA_AMD;
-        antiLagDataInput.mode = mode;
-        antiLagDataInput.pPresentationInfo = &inputInfo;
-        antiLagDataInput.maxFPS = max_fps;
-
-        if (VulkanHooks::o_vkAntiLagUpdateAMD)
+        if (!last_input_frame_id.has_value() || (uint32_t) *last_input_frame_id != (uint32_t) marker_params.frame_id)
         {
-            LOG_TRACE_LOWLATENCY("AntiLag Input: {}, status: {}", marker_params.frame_id, is_enabled());
-
-            // TODO: somehow confirm that pDevice is actually VkDevice
-            VulkanHooks::o_vkAntiLagUpdateAMD((VkDevice) pDevice, &antiLagDataInput);
+            last_input_frame_id = marker_params.frame_id;
+            update(VK_ANTI_LAG_STAGE_INPUT_AMD, marker_params.frame_id);
         }
     }
 
     if ((marker_params.marker_type == MarkerType::PRESENT_START && !using_oob_present) ||
         marker_params.marker_type == MarkerType::OUT_OF_BAND_PRESENT_START)
     {
-        // Before calling vkQueuePresentKHR
-        VkAntiLagPresentationInfoAMD presentInfo = {};
-        presentInfo.sType = VK_STRUCTURE_TYPE_ANTI_LAG_PRESENTATION_INFO_AMD;
-        presentInfo.stage = VK_ANTI_LAG_STAGE_PRESENT_AMD;
-        presentInfo.frameIndex = marker_params.frame_id;
-
-        VkAntiLagDataAMD antiLagDataPresent = {};
-        antiLagDataPresent.sType = VK_STRUCTURE_TYPE_ANTI_LAG_DATA_AMD;
-        antiLagDataPresent.mode = mode;
-        antiLagDataPresent.pPresentationInfo = &presentInfo;
-        antiLagDataPresent.maxFPS = max_fps;
-
-        if (VulkanHooks::o_vkAntiLagUpdateAMD)
-        {
-            LOG_TRACE_LOWLATENCY("AntiLag Present: {}, status: {}", marker_params.frame_id, is_enabled());
-
-            VulkanHooks::o_vkAntiLagUpdateAMD((VkDevice) pDevice, &antiLagDataPresent);
-        }
+        update(VK_ANTI_LAG_STAGE_PRESENT_AMD, marker_params.frame_id);
     }
 }

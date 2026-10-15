@@ -136,7 +136,7 @@ Cal::Situation CalibrationSituation(const Config& cfg, bool usingAutoExposure, b
                                     bool gameExposureNow, bool colourConverted)
 {
     Cal::Situation s;
-    s.source = cfg.DlssNrWhitePointSource.value_or_default();
+    s.source = DlssNr::WhitePointSourceEffective(cfg);
     s.anchorKey = DlssNrGameScale::AnchorKey(g_nr.gamePreExposure, g_nr.gameExposure);
     s.proxyMode = cfg.DlssNrUseProxy.value_or_default();
     s.holdFrame = cfg.DlssNrHoldFrame.value_or_default();
@@ -160,8 +160,8 @@ Cal::Situation CalibrationSituation(const Config& cfg, bool usingAutoExposure, b
 // exposure or not (Cal::RelearnFollowOnStart has why).
 float CalibrationBase(const Config& cfg)
 {
-    if (cfg.DlssNrWhitePointSource.value_or_default() == 1)
-        return g_nr.gameExposure > 1e-6f ? DlssNrGameScale::WhiteBase(cfg.DlssNrGameExposureScale.value_or_default(),
+    if (DlssNr::WhitePointSourceEffective(cfg) == 1)
+        return g_nr.gameExposure > 1e-6f ? DlssNrGameScale::WhiteBase(DlssNr::GameExposureScaleEffective(cfg),
                                                                       g_nr.gamePreExposure, g_nr.gameExposure)
                                          : 0.0f;
 

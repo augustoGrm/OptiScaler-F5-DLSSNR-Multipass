@@ -15,6 +15,7 @@
 #include <misc/IdentifyGpu.h>
 
 #include "Hook_Utils.h"
+#include <proxies/XeLL_Proxy.h>
 
 #include "Amdxc64_Hooks.h"
 #pragma intrinsic(_ReturnAddress)
@@ -189,13 +190,76 @@ HMODULE WINAPI KernelHooks::hk_K32_GetModuleHandleW(LPCWSTR lpModuleName)
     return o_K32_GetModuleHandleW(lpModuleName);
 }
 
+// "libxell.dll" without case, ASCII only. No CRT locale (_stricmp can take its lock): the GetModuleHandleEx hooks can
+// run under the loader lock. Stops at the first mismatch, so it never reads past a shorter name.
+template <class C> static bool IsXellName(const C* name)
+{
+    static constexpr char xell[] = "libxell.dll";
+
+    for (size_t i = 0; i < sizeof(xell); ++i)
+    {
+        C c = name[i];
+
+        if (c >= 'A' && c <= 'Z')
+            c = static_cast<C>(c - 'A' + 'a');
+
+        if (c != static_cast<C>(xell[i]))
+            return false;
+    }
+
+    return true;
+}
+
 VALIDATE_HOOK(hk_K32_GetModuleHandleExA, Kernel32Proxy::PFN_GetModuleHandleExA)
+// XeFG finds the XeLL it pairs with by asking for libxell.dll by name. It gets the XeLL OptiScaler loaded, so XeFG and
+// OptiScaler share one XeLL (R1, R6) and no other copy has to be patched (XL16). Both A and W are answered: which one a
+// given XeFG build calls is not known here, and names are compared without case.
+bool KernelHooks::AnswerXellLookup(DWORD dwFlags, HMODULE* phModule, BOOL* result)
+{
+    if (dwFlags != 0 || phModule == nullptr)
+        return false;
+
+#ifdef LOW_LATENCY_INPUTS
+    *phModule = dllModule;
+    *result = TRUE;
+    return true;
+#else
+    const auto module = XeLLProxy::Module();
+
+    if (module == nullptr)
+        return false;
+
+    static std::atomic_bool logged { false };
+
+    if (!logged.exchange(true))
+    {
+        LOG_INFO("libxell.dll lookup answered with OptiScaler's XeLL: one XeLL for XeFG and OptiScaler");
+
+        // The game's own libxell.dll loaded first: an XeFG build that reaches XeLL another way than this lookup would
+        // bind to that copy and get a context made by ours. Said once, so a log shows it.
+        const HMODULE first = GetModuleHandleW(L"libxell.dll");
+
+        if (first != nullptr && first != module)
+            LOG_WARN("Another libxell.dll is loaded besides OptiScaler's XeLL; XeFG is steered to OptiScaler's only "
+                     "through this lookup");
+    }
+
+    // By address, through the system call: neither hook compares an address as a name, and it does not depend on one
+    // particular original (A or W) having been detoured
+    *result = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(module), phModule);
+    return true;
+#endif
+}
+
 BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExA(DWORD dwFlags, LPCSTR lpModuleName, HMODULE* phModule)
 {
-    if (lpModuleName && dwFlags == 0 && strcmp("libxell.dll", lpModuleName) == 0 && phModule)
+    // Flags first: with GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS lpModuleName is an address, not a name to compare
+    if (dwFlags == 0 && lpModuleName && IsXellName(lpModuleName))
     {
-        *phModule = dllModule;
-        return true;
+        BOOL result = FALSE;
+
+        if (AnswerXellLookup(dwFlags, phModule, &result))
+            return result;
     }
 
     return o_K32_GetModuleHandleExA(dwFlags, lpModuleName, phModule);
@@ -210,6 +274,15 @@ BOOL WINAPI KernelHooks::hk_K32_GetModuleHandleExW(DWORD dwFlags, LPCWSTR lpModu
         LOG_TRACE("Suspected SpecialK call for nvapi64");
         *phModule = LibraryLoadHooks::LoadNvApi();
         return true;
+    }
+
+    // Flags first: with GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS lpModuleName is an address, not a name to compare
+    if (dwFlags == 0 && lpModuleName && IsXellName(lpModuleName))
+    {
+        BOOL result = FALSE;
+
+        if (AnswerXellLookup(dwFlags, phModule, &result))
+            return result;
     }
 
     return o_K32_GetModuleHandleExW(dwFlags, lpModuleName, phModule);

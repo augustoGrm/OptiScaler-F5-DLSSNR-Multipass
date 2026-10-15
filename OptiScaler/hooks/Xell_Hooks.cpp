@@ -3,6 +3,7 @@
 #include <detours/detours.h>
 #include <magic_enum.hpp>
 #include <proxies/XeLL_Proxy.h>
+#include <low_latency/input/input_common.h>
 
 #define HOOK(name)                                                                                                     \
     if (o_##name)                                                                                                      \
@@ -129,6 +130,12 @@ xell_result_t XellHooks::hkxellAddMarkerData(xell_context_handle_t context, uint
     if (shouldBlock(context))
         return XELL_RESULT_SUCCESS;
     // spdlog::info("xellAddMarkerData {}: {}", magic_enum::enum_name(marker), frame_id);
+
+    // XeFG marks each batch of generated and real frames in its XeLL context (out of band render submit start/end):
+    // InputCommon follows them to report XeFG's presents to a Reflex or Anti-Lag 2 output next to it
+    if ((uint32_t) marker == 80860000 || (uint32_t) marker == 80860001)
+        InputCommon::xefg_marker(context, frame_id, (uint32_t) marker);
+
     return o_xellAddMarkerData(context, frame_id, marker);
 }
 xell_result_t XellHooks::hkxellGetVersion(xell_version_t* pVersion)

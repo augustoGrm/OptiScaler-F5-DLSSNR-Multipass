@@ -179,13 +179,6 @@ class XeLLProxy
 
             if (mainModule != nullptr)
             {
-                // We don't control which XeLL dll XeFG will pick
-                // Detouring GetModuleHandleExA seemingly isn't enough
-#ifndef LOW_LATENCY_INPUTS
-                if (_memoryDll && mainModule != _memoryDll)
-                    RedirectAllExports(_memoryDll, mainModule);
-#endif
-
                 break;
             }
         }
@@ -207,9 +200,10 @@ class XeLLProxy
     {
 #ifndef LOW_LATENCY_INPUTS
         return true;
-#endif
-
+#else
         // TODO: add hooks to redirect already loaded libxell into dllModule
+        // RedirectAllExports below detours the exports of another libxell copy, which patches code inside an Intel DLL.
+        // Replace it with the libxell lookup answer (KernelHooks::AnswerXellLookup) before LOW_LATENCY_INPUTS is on.
 
         HMODULE mainModule = nullptr;
 
@@ -235,6 +229,7 @@ class XeLLProxy
         }
 
         return false;
+#endif
     }
 
   public:

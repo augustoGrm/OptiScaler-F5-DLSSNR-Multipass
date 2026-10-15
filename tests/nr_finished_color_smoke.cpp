@@ -33,9 +33,15 @@ bool closeFloat(float a, float b) { return std::abs(a - b) < 0.0001f; }
 int main()
 try
 {
+    // The shader's cbuffer reads the first 32 bytes: mode, exposureScale, width, height, sceneIsLinear, (colour),
+    // (debug), maxRatio.
     static_assert(sizeof(DlssNrConstants) == 256);
-    static_assert(offsetof(DlssNrConstants, ResidualBlend) == 116);
-    static_assert(offsetof(DlssNrConstants, ResidualMotionBaseY) == 128);
+    static_assert(offsetof(DlssNrConstants, Mode) == 0);
+    static_assert(offsetof(DlssNrConstants, WhitePoint) == 4);
+    static_assert(offsetof(DlssNrConstants, Width) == 8);
+    static_assert(offsetof(DlssNrConstants, Height) == 12);
+    static_assert(offsetof(DlssNrConstants, TransferStrength) == 16);
+    static_assert(offsetof(DlssNrConstants, MaxRatio) == 28);
     ComPtr<ID3D11Device> device;
     ComPtr<ID3D11DeviceContext> ctx;
     check(D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0, D3D11_SDK_VERSION, &device, nullptr,

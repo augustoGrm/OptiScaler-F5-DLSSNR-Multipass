@@ -17,8 +17,6 @@ static auto drs_profile = reinterpret_cast<NvDRSProfileHandle>(&drs);
 
 static uint64_t ref_count = 0;
 
-static VkSemaphore low_latency_semaphore = VK_NULL_HANDLE;
-
 NvAPI_Status __cdecl NvAPI_Initialize();
 NvAPI_Status __cdecl NvAPI_GetInterfaceVersionString(NvAPI_ShortString desc);
 NvAPI_Status __cdecl NvAPI_EnumPhysicalGPUs(NvPhysicalGpuHandle handles[NVAPI_MAX_PHYSICAL_GPUS], NvU32* count);

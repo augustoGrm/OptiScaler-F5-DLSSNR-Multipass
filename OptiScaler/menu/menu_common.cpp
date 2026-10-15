@@ -1657,10 +1657,10 @@ void MenuCommon::HandleMenuShortcuts(RenderMenuContext& ctx)
             if (state.activeFgInput != FGInput::NoFG && state.activeFgOutput != FGOutput::NoFG &&
                 (state.currentFGSwapchain != nullptr || state.activeFgInput == FGInput::NvngxFG))
             {
-                config->FGEnabled = !config->FGEnabled.value_or_default();
-                LOG_DEBUG("FG toggle key pressed, setting FGEnabled to {}", config->FGEnabled.value_or_default());
+                config->FGEnabled = !config->IsFGEnabled();
+                LOG_DEBUG("FG toggle key pressed, setting FGEnabled to {}", config->IsFGEnabled());
 
-                if (config->FGEnabled.value_or_default())
+                if (config->IsFGEnabled())
                     state.fgChanged = true;
             }
         }
@@ -4314,6 +4314,61 @@ void MenuCommon::RenderFrameGenerationSelection(RenderMenuContext& ctx)
     }
 }
 
+// FG Input DLSSG: Frame Generation on/off and its multiplier can follow the game's own DLSS FG setting
+// (Enabled unset, framegen/FGFollowGameRule.h). Nothing is drawn where it can't (other inputs, Streamline 1).
+void MenuCommon::RenderFGFollowGame()
+{
+    if (!Config::FGCanFollowGame())
+        return;
+
+    auto* config = Config::Instance();
+    auto& state = State::Instance();
+
+    bool follow = config->FGFollowsGame();
+    if (ImGui::Checkbox("Follow game's DLSS FG", &follow))
+    {
+        if (follow)
+        {
+            config->FGEnabled.reset();
+        }
+        else
+        {
+            // Keep what runs now; from here the Active box below decides
+            config->FGEnabled = config->IsFGEnabled();
+        }
+
+        LOG_INFO("Frame Generation {} the game's DLSS FG setting", follow ? "follows" : "no longer follows");
+
+        if (config->IsFGEnabled())
+            state.fgChanged = true;
+    }
+    ShowHelpMarker("On: Frame Generation and its multiplier follow the game's own DLSS Frame Generation\n"
+                   "setting. Off: set them here.\n"
+                   "The multiplier is capped at what the selected FG output supports.\n"
+                   "ini: [FrameGen] Enabled=auto follows the game. Save Settings to keep it.");
+
+    if (!follow)
+        return;
+
+    ImGui::SameLine(0.0f, 16.0f);
+
+    const auto game = state.dlssgInputGameRequest.load();
+    if (!game.enabled)
+    {
+        ImGui::TextDisabled("Game: FG off");
+        return;
+    }
+
+    const int outputMax = state.currentFG != nullptr ? state.currentFG->GetMaxInterpolationCount() : 0;
+    const int running = config->FGInterpolationCount(1, outputMax);
+
+    if (running == game.count)
+        ImGui::TextColored(toneMapColor(ImVec4(0.f, 1.f, 0.25f, 1.f)), "Game: FG on %dx", game.count + 1);
+    else
+        ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)), "Game: FG on %dx, running %dx (output max)",
+                           game.count + 1, running + 1);
+}
+
 void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 {
     auto& state = ctx.state;
@@ -4368,15 +4423,19 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 }
             }
 
-            bool fgActive = config->FGEnabled.value_or_default();
+            RenderFGFollowGame();
+
+            ImGui::BeginDisabled(config->FGFollowsGame());
+            bool fgActive = config->IsFGEnabled();
             if (ImGui::Checkbox("Active##2", &fgActive))
             {
                 config->FGEnabled = fgActive;
                 LOG_DEBUG("FGEnabled set FGEnabled: {}", fgActive);
 
-                if (config->FGEnabled.value_or_default())
+                if (config->IsFGEnabled())
                     state.fgChanged = true;
             }
+            ImGui::EndDisabled();
             ShowHelpMarker("Enable Frame Generation");
 
             bool fgAsync = config->FGAsync.value_or_default();
@@ -4384,7 +4443,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             {
                 config->FGAsync = fgAsync;
 
-                if (config->FGEnabled.value_or_default())
+                if (config->IsFGEnabled())
                 {
                     state.fgChanged = true;
                     state.scChanged = true;
@@ -4400,7 +4459,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             {
                 config->FGDebugView = fgDV;
 
-                if (config->FGEnabled.value_or_default())
+                if (config->IsFGEnabled())
                 {
                     state.fgChanged = true;
                     LOG_DEBUG("DebugView set FGChanged");
@@ -4597,6 +4656,11 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         if (!correctMVs || state.realExclusiveFullscreen)
         {
             config->FGEnabled.reset();
+
+            // Unset now follows the game's DLSS FG with FG Input DLSSG, which could turn it back on: off for this run
+            if (Config::FGCanFollowGame())
+                config->FGEnabled.set_volatile_value(false);
+
             config->FGXeFGDebugView.reset();
         }
 
@@ -4645,15 +4709,22 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
 
         ImGui::BeginDisabled(!correctMVs || cantActivate);
 
-        bool fgActive = config->FGEnabled.value_or_default();
+        RenderFGFollowGame();
+
+        // While following, the game's DLSS FG setting drives these two
+        const bool followsGame = config->FGFollowsGame();
+
+        ImGui::BeginDisabled(followsGame);
+        bool fgActive = config->IsFGEnabled();
         if (ImGui::Checkbox("Active##3", &fgActive))
         {
             config->FGEnabled = fgActive;
             LOG_DEBUG("Enabled set FGEnabled: {}", fgActive);
 
-            if (config->FGEnabled.value_or_default())
+            if (config->IsFGEnabled())
                 state.fgChanged = true;
         }
+        ImGui::EndDisabled();
 
         ShowHelpMarker("Enable Frame Generation");
 
@@ -4662,6 +4733,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         if (maxInterpolationCount > 1)
         {
             ImGui::SameLine(0.0f, 16.0f);
+            ImGui::BeginDisabled(followsGame);
 
             auto currentSet = fgOutput->GetInterpolatedFrameCount() - 1;
 
@@ -4687,6 +4759,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             }
 
             ImGui::PopItemWidth();
+            ImGui::EndDisabled();
 
             ShowHelpMarker("Set XeFG interpolation count");
         }
@@ -4809,15 +4882,22 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.f, 0.f, 1.f)), "OFF");
         }
 
-        bool fgActive = config->FGEnabled.value_or_default();
+        RenderFGFollowGame();
+
+        // While following, the game's DLSS FG setting drives these two
+        const bool followsGame = config->FGFollowsGame();
+
+        ImGui::BeginDisabled(followsGame);
+        bool fgActive = config->IsFGEnabled();
         if (ImGui::Checkbox("Active##4", &fgActive))
         {
             config->FGEnabled = fgActive;
             LOG_DEBUG("Enabled set FGEnabled: {}", fgActive);
 
-            if (config->FGEnabled.value_or_default())
+            if (config->IsFGEnabled())
                 state.fgChanged = true;
         }
+        ImGui::EndDisabled();
 
         ShowHelpMarker("Enable Frame Generation");
 
@@ -4827,7 +4907,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
         {
             ImGui::SameLine(0.0f, 16.0f);
 
-            ImGui::BeginDisabled(config->FGDLSSGForceDMFG.value_or_default());
+            ImGui::BeginDisabled(config->FGDLSSGForceDMFG.value_or_default() || followsGame);
 
             auto currentSet = fgOutput->GetInterpolatedFrameCount() - 1;
 
@@ -5438,7 +5518,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 {
                     config->FGAsync = fgAsync;
 
-                    if (config->FGEnabled.value_or_default())
+                    if (config->IsFGEnabled())
                     {
                         state.fgChanged = true;
                         LOG_DEBUG("Async set FGChanged");
@@ -5452,7 +5532,7 @@ void MenuCommon::RenderFrameGenerationRuntimeSettings(RenderMenuContext& ctx)
                 {
                     config->FGDebugView = fgDV;
 
-                    if (config->FGEnabled.value_or_default())
+                    if (config->IsFGEnabled())
                     {
                         state.fgChanged = true;
                         LOG_DEBUG("DebugView set FGChanged");
@@ -5677,8 +5757,9 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
     auto config = ctx.config;
 
     SeparatorWithHelpMarker("Low latency", "Keeps the game's render queue short, so what you do shows up sooner.\n"
-                                           "Reflex on NVIDIA; Anti-Lag 2, XeLL or LatencyFlex through fakenvapi "
-                                           "elsewhere; with XeFG: XeLL, or Reflex or Anti-Lag 2 beside it.");
+                                           "Reflex on NVIDIA; Anti-Lag 2 (Anti-Lag Vk on Vulkan), XeLL or "
+                                           "LatencyFlex elsewhere; with XeFG: XeLL, or Reflex or Anti-Lag 2 beside "
+                                           "it.");
 
     const auto status = GetStatus();
     const auto input = config->FramerateLowLatencyInput.value_or_default();
@@ -5717,10 +5798,12 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         ImGui::TableNextColumn();
 
         Output shown = OutputShown(outputInputs, config->ForceXeLL.value_or_default(),
-                                   config->FN_ForceLatencyFlex.value_or_default());
+                                   config->FN_ForceLatencyFlex.value_or_default(),
+                                   config->FramerateFrameCapOnly.value_or_default());
         const Output shownBefore = shown;
 
-        const std::string autoLabel = std::string("Auto (") + status.output + ")";
+        const char* autoName = AutoEntryName(outputInputs);
+        const std::string autoLabel = autoName != nullptr ? autoName : std::string("Auto (") + status.output + ")";
         const bool xefgOutput = outputInputs.xefgOutput;
 
         // With XeFG the choices are the ones that pair with it (XeLL it always needs, Reflex or Anti-Lag 2 beside it);
@@ -5743,12 +5826,19 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         {
             outputOptions = {
                 { Output::Auto, autoLabel,
-                    "What the setup has: NVIDIA Reflex, or Anti-Lag 2 / XeLL through fakenvapi." },
+                    autoName != nullptr
+                        ? "Picked for this card: its driver's Reflex lowers latency and keeps the frame cap."
+                        : "Picked for this setup: NVIDIA Reflex, or Anti-Lag 2 / XeLL / LatencyFlex on other cards." },
                 { Output::XeLL, "XeLL",
-                    "Force XeLL. Works without frame generation on non-Intel cards.\n"
-                    "Takes the frame generation slot (disables FG). Needs a restart." },
+                    "XeLL on any card, without frame generation: OptiScaler's frame generation stays off.\n"
+                    "Needs a restart." },
                 { Output::LatencyFlex, "LatencyFlex",
-                    "Force LatencyFlex instead of Anti-Lag 2 or XeLL." },
+                    "LatencyFlex instead of Anti-Lag 2 or XeLL." },
+                { Output::FrameCapOnly, "Frame cap only",
+                    "Only moves the FPS Limit's wait to just before the game reads input. While the cap is reached\n"
+                    "that shows input up to a frame sooner; it does nothing else.\n"
+                    "Replaces Anti-Lag 2, XeLL or LatencyFlex, which lower latency more: use it when they misbehave\n"
+                    "in a game. Does nothing without an FPS Limit." },
             };
         }
         // clang-format on
@@ -5756,6 +5846,7 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
         for (auto& option : outputOptions)
         {
             const auto choice = OutputAvailability(option.value, outputInputs);
+            option.set_hidden(choice.hidden);
             option.set_disabled(!choice.available, choice.why);
         }
 
@@ -5768,23 +5859,24 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
             ShowTooltip("Nothing to lower while the Input is Off.");
         else if (outputLocked)
         {
-            ShowTooltip(outputInputs.antiLag2Failed
-                            ? "XeFG uses XeLL here: Anti-Lag 2 could not start."
-                            : "XeFG uses XeLL here. Reflex needs an NVIDIA card on its own nvapi (not fakenvapi), "
-                              "Anti-Lag 2 an AMD card with fakenvapi as the nvapi.");
+            // The details (Vulkan extensions, which nvapi) are in the log
+            ShowTooltip(outputInputs.antiLag2Failed ? "XeFG uses XeLL here: Anti-Lag 2 could not start in this game."
+                        : outputInputs.reflexFailed ? "XeFG uses XeLL here: Reflex could not start in this game."
+                                                    : "XeFG uses XeLL here: this setup has neither NVIDIA Reflex "
+                                                      "nor Anti-Lag 2 to put beside it.");
         }
 
         if (xefgOutput)
         {
             ShowHelpMarker("What lowers latency while XeFG generates frames. XeFG always keeps an XeLL; Reflex or "
                            "Anti-Lag 2 do the work instead when you pick them.\n"
-                           "Entries that do not fit this setup say why when hovered.");
+                           "Leave it as it is unless a game stutters or misbehaves with it.");
         }
         else
         {
-            ShowHelpMarker("What lowers latency. Auto uses what the setup has. XeLL and LatencyFlex force that method "
-                           "(fakenvapi's Force XeLL and Force LatencyFlex).\n"
-                           "Entries that do not fit this setup say why when hovered.");
+            ShowHelpMarker("What lowers latency. The first entry is picked for this setup: leave it there unless a "
+                           "game stutters or misbehaves with it.\n"
+                           "Frame cap only just moves the FPS Limit's wait to before the game reads input.");
         }
 
         if (!outputLocked && !inputOff && shown != shownBefore)
@@ -5800,6 +5892,7 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
             {
                 config->ForceXeLL = shown == Output::XeLL;
                 config->FN_ForceLatencyFlex = shown == Output::LatencyFlex;
+                config->FramerateFrameCapOnly = shown == Output::FrameCapOnly;
             }
         }
 
@@ -5842,8 +5935,10 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
     if (state.rtssReflexInjection)
         output += " (RTSS)";
 
-    if ((fakenvapi::isUsingAsMainNvapi() || fakenvapi::getCurrentMode() == LowLatencyMode::XeLL) &&
-        !fakenvapi::isLowLatencyActive() && state.reflexLimitsFps)
+    // Frame cap only waits whatever the game's low latency setting says
+    if ((fakenvapi::isUsingAsMainNvapi() || InputCommon::current_mode() == LowLatencyMode::XeLL) &&
+        InputCommon::current_mode() != LowLatencyMode::FpsLimiter && !InputCommon::low_latency_active() &&
+        state.reflexLimitsFps)
         output += " (inactive)";
 
     const char* who = ActiveInputText(status.decision, ReflexHooks::gameCalledReflex(), XellHooks::canLimit(),
@@ -5905,22 +6000,35 @@ void MenuCommon::RenderFramerateLowLatency(RenderMenuContext& ctx)
     if (const float cap = config->FramerateLimit.value_or_default(); cap > 0.0f)
     {
         std::string keeper = "OptiScaler's limiter";
+        bool outputKeeps = false; // the low latency output keeps it (not the limiter or the game's XeLL)
 
         if (status.decision == Decision::Run && status.path[0] != '\0')
         {
             if (status.capOwner != CapOwner::Limiter)
+            {
                 keeper = status.path;
+                outputKeeps = true;
+            }
         }
         else if (state.reflexLimitsFps)
         {
             keeper = status.output;
+            outputKeeps = true;
         }
         else if (XellHooks::canLimit())
         {
             keeper = "the game's XeLL";
         }
 
+        // Frame cap only is nothing but the cap: say where it waits
+        if (outputKeeps && InputCommon::current_mode() == LowLatencyMode::FpsLimiter)
+            keeper = "Frame cap only, before the game reads input";
+
         ImGui::TextDisabled("Frame cap %.0f fps: kept by %s", cap, keeper.c_str());
+    }
+    else if (InputCommon::current_mode() == LowLatencyMode::FpsLimiter)
+    {
+        ImGui::TextDisabled("Frame cap only does nothing until an FPS Limit is set.");
     }
 
     ImGui::Spacing();
@@ -5943,7 +6051,7 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
             "Framerate", "Uses Reflex when possible\nOn AMD/Intel cards, you can use Fakenvapi to substitute Reflex");
 
         if (state.rtssReflexInjection && state.reflexLimitsFps &&
-            fakenvapi::getCurrentMode() == LowLatencyMode::AntiLag2 &&
+            InputCommon::current_mode() == LowLatencyMode::AntiLag2 &&
             config->FGOutput.value_or_default() == FGOutput::FSRFG)
             ImGui::TextColored(toneMapColor(ImVec4(1.f, 0.8f, 0.f, 1.f)),
                                "Using RTSS Reflex injection with FSR Anti-Lag 2.0 and FSR FG "
@@ -5988,7 +6096,7 @@ void MenuCommon::RenderFramerateSettings(RenderMenuContext& ctx)
 
             float refreshRateF = static_cast<float>(refreshRate);
             // it's fine to use with real reflex, we only care about antilag
-            auto fpsLimitTech = fakenvapi::getCurrentMode();
+            auto fpsLimitTech = InputCommon::current_mode();
             constexpr float margin = 0.3f; // in ms
             float frameCap = std::round(10000.f / (1000.f / refreshRateF + margin)) / 10.f;
 
@@ -6038,7 +6146,7 @@ void MenuCommon::RenderFakenvapiSettings(RenderMenuContext& ctx)
     // clang-format on
 
     // Only while LatencyFlex is what lowers latency
-    if (fakenvapi::getCurrentMode() == LowLatencyMode::LatencyFlex)
+    if (InputCommon::current_mode() == LowLatencyMode::LatencyFlex)
         PopulateCombo("LatencyFlex mode", config->FN_LatencyFlexMode, lfx_modes);
 
     // clang-format off
@@ -6048,115 +6156,6 @@ void MenuCommon::RenderFakenvapiSettings(RenderMenuContext& ctx)
     // clang-format on
 
     PopulateCombo("Force Reflex", config->FN_ForceReflex, reflex_modes);
-}
-
-template <typename T> std::string GetMenuOptionLabel(const std::vector<MenuOption<T>>& options, T targetValue)
-{
-    auto it = std::find_if(options.begin(), options.end(),
-                           [targetValue](const MenuOption<T>& option) { return option.value == targetValue; });
-
-    if (it != options.end())
-    {
-        return it->label;
-    }
-
-    return "Unknown";
-}
-
-void MenuCommon::RenderLowLatencySettings(RenderMenuContext& ctx)
-{
-    auto& state = ctx.state;
-    auto config = ctx.config;
-
-    // Low Latency ---------------------------
-    ImGui::SeparatorText("Low Latency");
-
-    static std::vector<MenuOption<LowLatencyInput>> lowLatencyInput = {
-        { LowLatencyInput::None, "None (Off)" },    { LowLatencyInput::Auto, "Auto" },
-        { LowLatencyInput::AntiLag2, "AntiLag 2" }, { LowLatencyInput::Reflex, "Reflex" },
-        { LowLatencyInput::XeLL, "XeLL" },          { LowLatencyInput::UeLowLatency, "UeLowLatency" },
-    };
-
-    static std::vector<MenuOption<LowLatencyMode>> lowLatencyOutput = {
-        { LowLatencyMode::None, "None (Off)" },
-        { LowLatencyMode::Auto, "Auto" },
-        { LowLatencyMode::LatencyFlex, "LatencyFlex" },
-        { LowLatencyMode::AntiLag2, "AntiLag 2" },
-        { LowLatencyMode::XeLL, "XeLL" },
-        { LowLatencyMode::AntiLagVk, "AntiLag Vk" },
-        { LowLatencyMode::Reflex, "Reflex" },
-    };
-
-    LowLatencyInput activeInput {};
-    LowLatencyMode activeOutput {};
-
-    if (ImGui::BeginTable("lowLatencyActive", 2, ImGuiTableFlags_SizingStretchSame))
-    {
-        InputCommon::get_currently_active(activeInput, activeOutput);
-
-        ImGui::TableNextColumn();
-
-        ImGui::Text("Active input: %s", GetMenuOptionLabel(lowLatencyInput, activeInput).c_str());
-
-        ImGui::TableNextColumn();
-
-        ImGui::Text("Active output: %s", GetMenuOptionLabel(lowLatencyOutput, activeOutput).c_str());
-
-        ImGui::EndTable();
-    }
-
-    if (ImGui::BeginTable("lowLatencySelection", 2, ImGuiTableFlags_SizingStretchSame))
-    {
-        ImGui::TableNextColumn();
-
-        auto avalibleInputs = InputCommon::get_avaliable_inputs();
-
-        lowLatencyInput[(uint32_t) LowLatencyInput::AntiLag2].set_disabled(!avalibleInputs[LowLatencyInput::AntiLag2]);
-        lowLatencyInput[(uint32_t) LowLatencyInput::Reflex].set_disabled(!avalibleInputs[LowLatencyInput::Reflex]);
-        lowLatencyInput[(uint32_t) LowLatencyInput::XeLL].set_disabled(!avalibleInputs[LowLatencyInput::XeLL]);
-        lowLatencyInput[(uint32_t) LowLatencyInput::UeLowLatency].set_disabled(
-            !avalibleInputs[LowLatencyInput::UeLowLatency]);
-
-        // need to have a value before combo
-        if (!config->LowLatencyInput.has_value())
-            config->LowLatencyInput = config->LowLatencyInput.value_or_default();
-
-        PopulateCombo("Input", config->LowLatencyInput, lowLatencyInput);
-
-        ImGui::TableNextColumn();
-
-        lowLatencyOutput[(uint32_t) LowLatencyMode::AntiLagVk].set_disabled(true, "No support");
-        lowLatencyOutput[(uint32_t) LowLatencyMode::Reflex].set_disabled(true, "No support");
-
-        // need to have a value before combo
-        if (!config->LowLatencyOutput.has_value())
-            config->LowLatencyOutput = config->LowLatencyOutput.value_or_default();
-
-        PopulateCombo("Output", config->LowLatencyOutput, lowLatencyOutput);
-
-        ImGui::EndTable();
-    }
-
-    if (activeOutput == LowLatencyMode::LatencyFlex)
-    {
-        static const std::vector<MenuOption<LFXMode>> lfx_modes = {
-            { LFXMode::Conservative, "Conservative", "The safest, but might not reduce latency well" },
-            { LFXMode::Aggressive, "Aggressive",
-              "Improves latency, but in some cases will lower FPS more than expected" },
-            { LFXMode::ReflexIDs, "Reflex ID",
-              "Best when can be used, some games are not compatible (e.g. Cyberpunk)\n"
-              "and will fallback to Aggressive" }
-        };
-
-        PopulateCombo("LatencyFlex mode", config->FN_LatencyFlexMode, lfx_modes);
-    }
-
-    static std::vector<MenuOption<ForceReflex>> lowlatency_states = { { ForceReflex::InGame, "Follow in-game" },
-                                                                      { ForceReflex::ForceDisable, "Force Disable" },
-                                                                      { ForceReflex::ForceEnable, "Force Enable" } };
-
-    ImGui::SetNextItemWidth(150.0f * ctx.menuResScale);
-    PopulateCombo("Force State", config->FN_ForceReflex, lowlatency_states);
 }
 
 void MenuCommon::RenderActiveImageSettings(RenderMenuContext& ctx)
@@ -6887,6 +6886,12 @@ void MenuCommon::RenderAdvancedSettings(RenderMenuContext& ctx)
             state.newBackend = currentBackend;
             MARK_ALL_BACKENDS_CHANGED();
         }
+
+        if (bool asiPlugins = config->LoadAsiPlugins.value_or_default();
+            ImGui::Checkbox("Load ASI plugins", &asiPlugins))
+            config->LoadAsiPlugins = asiPlugins;
+        ShowHelpMarker("Let OptiScaler load *.asi files from the plugins folder\n"
+                       "ini: [Plugins] LoadAsiPlugins. Save Settings and restart to apply.");
 
         // DRS
         ImGui::SeparatorText("DRS (Dynamic Resolution Scaling)");
@@ -8081,11 +8086,7 @@ void MenuCommon::RenderMainMenuPages(RenderMenuContext& ctx)
         case Page::Framerate:
             section(RenderFramerateLowLatency);
             section(RenderFramerateSettings);
-#ifdef LOW_LATENCY_INPUTS
-            section(RenderLowLatencySettings);
-#else
             section(RenderFakenvapiSettings);
-#endif
             break;
         case Page::OverlayLook:
             section(RenderFpsOverlaySettings, true);

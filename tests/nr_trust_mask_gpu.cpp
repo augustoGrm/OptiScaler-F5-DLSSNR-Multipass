@@ -184,7 +184,18 @@ struct Gpu
     }
 
     // The mask (R8) as bytes, tightly packed.
-    std::vector<uint8_t> ReadMask(ID3D12Resource* tex)
+    std::vector<uint8_t> ReadMask(ID3D12Resource* tex) { return Read(tex, 1); }
+
+    std::vector<float> ReadFloat(ID3D12Resource* tex)
+    {
+        const auto bytes = Read(tex, 4);
+        std::vector<float> out(bytes.size() / 4);
+        memcpy(out.data(), bytes.data(), out.size() * 4);
+        return out;
+    }
+
+    // A texture in NON_PIXEL_SHADER_RESOURCE, `bytesPerPixel` a pixel, rows packed
+    std::vector<uint8_t> Read(ID3D12Resource* tex, uint32_t bytesPerPixel)
     {
         const auto desc = tex->GetDesc();
         D3D12_PLACED_SUBRESOURCE_FOOTPRINT fp {};
@@ -212,15 +223,25 @@ struct Gpu
         list->ResourceBarrier(1, &b);
         Submit();
 
-        std::vector<uint8_t> out((size_t) desc.Width * desc.Height);
+        const size_t row = (size_t) desc.Width * bytesPerPixel;
+        std::vector<uint8_t> out(row * desc.Height);
         uint8_t* data = nullptr;
         readback->Map(0, nullptr, (void**) &data);
         for (uint32_t y = 0; y < desc.Height; ++y)
-            memcpy(&out[(size_t) y * desc.Width], data + (size_t) y * fp.Footprint.RowPitch, desc.Width);
+            memcpy(&out[(size_t) y * row], data + (size_t) y * fp.Footprint.RowPitch, row);
         readback->Unmap(0, nullptr);
         return out;
     }
 };
+
+// An IEEE half (as an R16 float texture stores it) as a float
+float HalfToFloat(uint16_t h)
+{
+    const uint32_t sign = (h >> 15) & 1, exponent = (h >> 10) & 0x1F, mantissa = h & 0x3FF;
+    float v = exponent == 0 ? std::ldexp((float) mantissa, -24)
+                            : std::ldexp((float) (mantissa | 0x400), (int) exponent - 25);
+    return sign ? -v : v;
+}
 
 // A scene: a still background and a square at x, with a depth map where near is 1 (reversed-Z, near plane 0.1).
 struct Scene
@@ -262,7 +283,8 @@ ComPtr<ID3D12Resource> Colour(Gpu& gpu, const Scene& s)
                       });
 }
 
-ComPtr<ID3D12Resource> Depth(Gpu& gpu, const Scene& s, int mode = 0)
+// normal: the same depth in the other convention (near is 0, 1 - d)
+ComPtr<ID3D12Resource> Depth(Gpu& gpu, const Scene& s, int mode = 0, bool normal = false)
 {
     return gpu.Upload(DXGI_FORMAT_R32_FLOAT, 4,
                       [&](uint32_t x, uint32_t y, uint8_t* px)
@@ -273,6 +295,9 @@ ComPtr<ID3D12Resource> Depth(Gpu& gpu, const Scene& s, int mode = 0)
                           // A copy holding only part of the scene has nothing (far, 0 when reversed) elsewhere.
                           if ((mode == 1 && !square) || (mode == 2 && square))
                               d = 0.0f;
+
+                          if (normal)
+                              d = 1.0f - d;
 
                           memcpy(px, &d, 4);
                       });
@@ -599,6 +624,126 @@ int main()
         else
             printf("  %-58s %6.3f   (reported: %s)\n", "share fully distrusted a few frames later",
                    run.trust.DistrustedShare(), run.trust.SceneCutSeen() ? "seen" : "not seen");
+    }
+
+    // 9. the guide depth is reversed-Z (near is 1) whatever the game's convention: the consumers (the virtual upscaler
+    // and frame generation) never see the direction flip when the depth finder's pick changes buffers
+    {
+        printf("guide depth convention\n");
+        Runner run(gpu);
+        if (!run.ok)
+            return 1;
+
+        const Scene scene { 7, 300, 20.0f, 5.0f };
+        run.Frame(scene);
+        run.Frame(scene);
+
+        for (const bool normal : { false, true })
+        {
+            auto colour = Colour(gpu, scene);
+            auto depth = Depth(gpu, scene, 0, normal);
+            run.flow.Dispatch(gpu.list.Get(), colour.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
+
+            TrustMaskDx12::Inputs in;
+            in.flow = run.flow.Flow();
+            in.flowWidth = run.flow.FlowWidth();
+            in.flowHeight = run.flow.FlowHeight();
+            in.fullPerFlow = 2.0f;
+            in.lumaNow = run.flow.LumaOfLastFrame();
+            in.lumaBefore = run.flow.LumaOfFrameBefore();
+            in.depths[0] = depth.Get();
+            in.depthCount = 1;
+            in.depthFormat = DXGI_FORMAT_R32_FLOAT;
+            in.depthWidth = kWidth;
+            in.depthHeight = kHeight;
+            in.depthReversed = !normal;
+            run.trust.Dispatch(gpu.list.Get(), in);
+            const bool built = run.trust.BuildGuides(gpu.list.Get(), in, kWidth, kHeight);
+            gpu.Submit();
+
+            if (!built || run.trust.GuideDepth() == nullptr)
+            {
+                ok &= Check("guide depth built", 0.0, false);
+                continue;
+            }
+
+            const auto guide = gpu.ReadFloat(run.trust.GuideDepth());
+            const float square = guide[(size_t) 360 * kWidth + 400]; // inside the square
+            const float background = guide[(size_t) 100 * kWidth + 100];
+            const char* what = normal ? "normal-Z input: guide is reversed (square 0.02, background 0.005)"
+                                      : "reversed-Z input: guide unchanged (square 0.02, background 0.005)";
+            ok &= Check(what, square, std::fabs(square - 0.02f) < 1e-5f && std::fabs(background - 0.005f) < 1e-5f);
+        }
+    }
+
+    // 10. the motion guide reads the guide depth as reversed-Z whatever the game's convention: a normal-Z game gets the
+    // same per-surface motion at an outline as a reversed-Z one (it took the other surface's motion when the guide depth
+    // was decoded by the game's convention)
+    {
+        printf("motion guide by surface, both depth conventions\n");
+        // x motion (towards the previous frame) at pixels either side of the square's left edge, per convention
+        float outside[2] = {}, inside[2] = {};
+
+        for (const bool normal : { false, true })
+        {
+            Runner run(gpu);
+            if (!run.ok)
+                return 1;
+
+            // The square moves right 10 pixels a frame over a still background
+            run.Frame(Scene { 7, 280, 20.0f, 5.0f });
+            run.Frame(Scene { 7, 290, 20.0f, 5.0f });
+            run.Frame(Scene { 7, 300, 20.0f, 5.0f });
+            run.Frame(Scene { 7, 310, 20.0f, 5.0f });
+
+            const Scene scene { 7, 320, 20.0f, 5.0f };
+            auto colour = Colour(gpu, scene);
+            auto depth = Depth(gpu, scene, 0, normal);
+            run.flow.Dispatch(gpu.list.Get(), colour.Get(), DXGI_FORMAT_R8G8B8A8_UNORM);
+
+            TrustMaskDx12::Inputs in;
+            in.flow = run.flow.Flow();
+            in.flowWidth = run.flow.FlowWidth();
+            in.flowHeight = run.flow.FlowHeight();
+            in.fullPerFlow = 2.0f;
+            in.lumaNow = run.flow.LumaOfLastFrame();
+            in.lumaBefore = run.flow.LumaOfFrameBefore();
+            in.depths[0] = depth.Get();
+            in.depthCount = 1;
+            in.depthFormat = DXGI_FORMAT_R32_FLOAT;
+            in.depthWidth = kWidth;
+            in.depthHeight = kHeight;
+            in.depthReversed = !normal;
+            run.trust.Dispatch(gpu.list.Get(), in);
+            const bool built = run.trust.BuildGuides(gpu.list.Get(), in, kWidth, kHeight);
+            gpu.Submit();
+
+            if (!built || run.trust.GuideMotion() == nullptr)
+            {
+                ok &= Check("motion guide built", 0.0, false);
+                continue;
+            }
+
+            // R16G16B16A16_FLOAT: x is the first half
+            const auto motion = gpu.Read(run.trust.GuideMotion(), 8);
+            const auto motionX = [&](uint32_t x, uint32_t y)
+            {
+                uint16_t h;
+                memcpy(&h, &motion[((size_t) y * kWidth + x) * 8], 2);
+                return HalfToFloat(h);
+            };
+            outside[normal ? 1 : 0] = motionX(319, 360);
+            inside[normal ? 1 : 0] = motionX(321, 360);
+        }
+
+        printf("  reversed-Z: outside %.2f inside %.2f   normal-Z: outside %.2f inside %.2f\n", outside[0], inside[0],
+               outside[1], inside[1]);
+        ok &= Check("the background next to the outline keeps the background's motion (about 0)", outside[0],
+                    std::fabs(outside[0]) < 2.0f);
+        ok &= Check("normal-Z: the same motion as reversed-Z just outside the outline", outside[1],
+                    std::fabs(outside[1] - outside[0]) < 1.0f);
+        ok &= Check("normal-Z: the same motion as reversed-Z just inside the outline", inside[1],
+                    std::fabs(inside[1] - inside[0]) < 1.0f);
     }
 
     printf(ok ? "all passed\n" : "FAILED\n");

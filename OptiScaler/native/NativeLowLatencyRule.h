@@ -200,7 +200,6 @@ struct Inputs
     bool forceXell = false;                 // fakenvapi's Force XeLL (it takes the frame generation slot and runs XeLL)
     bool otherFrameGenerationOwner = false; // frame generation that runs Reflex itself (DLSS FG, an external owner)
     bool apiAvailable = true;               // the Reflex function table could be found
-    bool deviceAvailable = true;            // the device can do it (a Vulkan device without a working sleep semaphore cannot)
 };
 
 enum class Decision
@@ -214,8 +213,7 @@ enum class Decision
     ForceReflexDisabled,
     ForceXell,
     FrameGenerationOwnsReflex,
-    NoApi,
-    DeviceUnavailable
+    NoApi
 };
 
 // Order matters: what the player can change comes first, then what stops us for another reason.
@@ -249,9 +247,6 @@ inline Decision Decide(const Inputs& in)
     if (!in.apiAvailable)
         return Decision::NoApi;
 
-    if (!in.deviceAvailable)
-        return Decision::DeviceUnavailable;
-
     return Decision::Run;
 }
 
@@ -275,18 +270,20 @@ inline RunsFor RunReason(const Inputs& in)
     return in.fsrFgRunning ? RunsFor::FsrFg : RunsFor::F5Low;
 }
 
-// The Framerate page's "Output": what lowers latency. Auto leaves it to the setup (NVIDIA Reflex on real nvapi, Anti-Lag 2
-// or XeLL through fakenvapi, XeLL with XeFG); XeLL is fakenvapi's Force XeLL (a restart, it takes the frame generation
-// slot); LatencyFlex is fakenvapi's Force LatencyFlex. Nothing here is a new method.
-// With XeFG as the frame generation output the entries are XeLL (its own), Reflex and Anti-Lag 2 ([XeFG] LowLatencyOutput);
-// Reflex and Anti-Lag 2 are offered only then (without XeFG, Auto already is Reflex or Anti-Lag 2).
+// The Framerate page's "Output": what lowers latency. Auto leaves it to the setup (NVIDIA Reflex on real nvapi, else
+// InputCommon's Anti-Lag 2 / Anti-Lag Vk, XeLL or LatencyFlex; XeLL with XeFG); XeLL is the Force XeLL setting (a
+// restart, it takes the frame generation slot); LatencyFlex is the Force LatencyFlex setting; Frame cap only is
+// [Framerate] FrameCapOnly (InputCommon's FpsLimiter: it only waits for the cap, where the game is about to read
+// input). With XeFG as the frame generation output the entries are XeLL (its own), Reflex and Anti-Lag 2 ([XeFG]
+// LowLatencyOutput); Reflex and Anti-Lag 2 are offered only then (without XeFG, Auto already is Reflex or Anti-Lag 2).
 enum class Output
 {
     Auto,
     XeLL,
     LatencyFlex,
     Reflex,
-    AntiLag2
+    AntiLag2,
+    FrameCapOnly
 };
 
 struct OutputInputs
@@ -295,7 +292,13 @@ struct OutputInputs
     bool xefgOutput = false;    // XeFG is the frame generation output
     bool amdGpu = false;        // an AMD card is the primary GPU (Anti-Lag 2 and Anti-Lag Vk are AMD's)
     bool nvidiaGpu = false;     // an NVIDIA card is the primary GPU (Reflex is NVIDIA's)
-    bool antiLag2Failed = false; // fakenvapi's second Anti-Lag 2 context could not start (XeFG falls back to XeLL)
+    // The driver's Reflex is (or will be) the output without XeFG: an NVIDIA card on its own nvapi, or InputCommon runs
+    // Reflex anyway (a Vulkan device with VK_NV_low_latency2 under fakenvapi; OutputRule.h PlanOutput's realNvapi).
+    // Nothing forced replaces it there.
+    bool driverReflex = false;
+    bool antiLag2Failed = false; // the Anti-Lag 2 output next to XeFG's XeLL could not start (XeFG falls back to XeLL)
+    bool reflexFailed = false; // the Reflex output next to XeFG's XeLL could not start (a Vulkan device without either
+                               // VK_NV_low_latency2 or NVIDIA's NvAPI Vulkan Reflex): XeFG falls back to XeLL
     XefgLatency xefgLatency = XefgLatency::XeLL; // [XeFG] LowLatencyOutput as chosen, whether the setup has it or not
 };
 
@@ -303,16 +306,19 @@ struct OutputChoice
 {
     bool available = true;
     const char* why = ""; // the reason when it is not
+    // The reason holds for the whole session (the card, the nvapi, the driver's Reflex): the menu hides the entry
+    // rather than greying it. Greyed stays for what can pass (an output that could not start).
+    bool hidden = false;
 };
 
-// With XeFG: whether the setup has this way of lowering latency. Reflex is the driver's, so it needs the real nvapi on an
-// NVIDIA card; Anti-Lag 2 is fakenvapi's on an AMD card, unless its second context failed to start.
+// With XeFG: whether the setup has this way of lowering latency. Reflex is the driver's, so it needs the real nvapi on
+// an NVIDIA card; Anti-Lag 2 is fakenvapi's on an AMD card. Neither once its output failed to start.
 inline bool XefgLatencyAvailable(XefgLatency latency, const OutputInputs& in)
 {
     switch (latency)
     {
     case XefgLatency::Reflex:
-        return !in.fakenvapiMain && in.nvidiaGpu;
+        return !in.fakenvapiMain && in.nvidiaGpu && !in.reflexFailed;
     case XefgLatency::AntiLag2:
         return in.fakenvapiMain && in.amdGpu && !in.antiLag2Failed;
     default:
@@ -336,34 +342,48 @@ inline OutputChoice OutputAvailability(Output output, const OutputInputs& in)
         case Output::XeLL:
             return { true, "" };
         case Output::Reflex:
-            return XefgLatencyAvailable(XefgLatency::Reflex, in)
-                       ? OutputChoice { true, "" }
-                       : OutputChoice { false, "Needs an NVIDIA card with its own Reflex" };
+            if (XefgLatencyAvailable(XefgLatency::Reflex, in))
+                return { true, "" };
+
+            if (!in.fakenvapiMain && in.nvidiaGpu && in.reflexFailed)
+                return { false, "Reflex could not start in this game" };
+
+            return { false, in.nvidiaGpu ? "Needs the driver's nvapi, not fakenvapi" : "Needs an NVIDIA card", true };
         case Output::AntiLag2:
             if (XefgLatencyAvailable(XefgLatency::AntiLag2, in))
                 return { true, "" };
 
             if (in.fakenvapiMain && in.amdGpu && in.antiLag2Failed)
-                return { false, "Anti-Lag 2 could not start" };
+                return { false, "Anti-Lag 2 could not start in this game" };
 
-            return { false, "Needs an AMD card with fakenvapi as the game's nvapi" };
+            return { false, in.amdGpu ? "Needs fakenvapi as the game's nvapi" : "Needs an AMD card", true };
         default:
-            return { false, "XeFG uses XeLL, Reflex or Anti-Lag 2" };
+            return { false, "XeFG uses XeLL, Reflex or Anti-Lag 2", true };
         }
     }
 
     if (output == Output::Reflex || output == Output::AntiLag2)
-        return { false, "Only with XeFG as the frame generation output" };
+        return { false, "Only with XeFG as the frame generation output", true };
+
+    // The driver's Reflex waits at the same point and lowers latency too (OutputRule.h PlanOutput keeps it)
+    if ((output == Output::LatencyFlex || output == Output::FrameCapOnly) && in.driverReflex)
+        return { false, "NVIDIA Reflex runs here: it lowers latency and keeps the cap itself", true };
 
     if (output == Output::LatencyFlex && !in.fakenvapiMain)
-        return { false, "Needs fakenvapi as the game's nvapi" };
+        return { false, "Needs fakenvapi as the game's nvapi", true };
 
     return { true, "" };
 }
 
-// What the combo shows: with XeFG its choice if the setup has it, else from the two fakenvapi flags it writes (XeLL wins
-// when both are set, as it takes the slot)
-inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLatencyFlex)
+// The Auto entry's name (without XeFG). Where the driver's Reflex is the output nothing else can be picked for it, so
+// the entry is that method by name; elsewhere "Auto (<what runs>)", as it could read like the forced XeLL or
+// LatencyFlex entry beside it. Null: the caller builds "Auto (...)".
+inline const char* AutoEntryName(const OutputInputs& in) { return in.driverReflex ? "NVIDIA Reflex" : nullptr; }
+
+// What the combo shows: with XeFG its choice if the setup has it, else from the flags it writes (Force XeLL and Force
+// LatencyFlex in [fakenvapi], [Framerate] FrameCapOnly): XeLL wins, as it takes the slot, then Frame cap only, as in
+// PlanOutput, and nothing forced where the driver's Reflex runs
+inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLatencyFlex, bool frameCapOnly = false)
 {
     if (in.xefgOutput)
     {
@@ -379,8 +399,13 @@ inline Output OutputShown(const OutputInputs& in, bool forceXell, bool forceLate
     if (forceXell)
         return Output::XeLL;
 
+    // As PlanOutput: before LatencyFlex, never on NVIDIA Reflex (Auto shows there)
+    if (frameCapOnly)
+        return OutputAvailability(Output::FrameCapOnly, in).available ? Output::FrameCapOnly : Output::Auto;
+
     // Forced in the ini on a setup that does not offer it (real nvapi): Auto shows, not a greyed entry
-    return forceLatencyFlex && in.fakenvapiMain ? Output::LatencyFlex : Output::Auto;
+    return forceLatencyFlex && OutputAvailability(Output::LatencyFlex, in).available ? Output::LatencyFlex
+                                                                                     : Output::Auto;
 }
 
 // Boost is NVIDIA Reflex's, and OptiScaler's calls carry it: real Reflex on an NVIDIA card as the output (no fakenvapi,
@@ -710,8 +735,6 @@ inline const char* DecisionText(Decision decision, bool gameReflexFeedsXell = fa
         return "The frame generation in use runs Reflex itself";
     case Decision::NoApi:
         return "No Reflex or fakenvapi interface could be found";
-    case Decision::DeviceUnavailable:
-        return "Unavailable on this device";
     default:
         return "";
     }
@@ -777,6 +800,7 @@ struct CapInputs
     bool xefgGenerating = false;     // XeFG is generating frames (not paused, not off, not in exclusive full screen)
     bool fakenvapiXell = false;      // Method::Fakenvapi has picked XeLL (Anti-Lag 2 missing: fakenvapi falls back)
     uint32_t shownPerRendered = 1;   // frames XeFG shows per frame the game renders (1 + generated); 1 when it generates none
+    bool xefgVsync = false;          // frame generation presents with V-Sync (State::fgPresentVsync)
 };
 
 // Frames shown per frame the game renders: 1 + the generated ones, but only while frame generation generates. Stood
@@ -815,6 +839,11 @@ inline bool SplitLimiterKeepsCap(XefgLatency side, bool d3d11Bridge)
 {
     return side == XefgLatency::Reflex && d3d11Bridge;
 }
+
+// Whether XeFG's XeLL can keep the frame cap: not with V-Sync. XeLL then lines its frames up with the refresh rate
+// instead (Arkham Knight, NVIDIA: cap 90 with XeFG 2x gave 60 rendered on a 120 Hz screen, 56 gave about 33); with
+// V-Sync off it held the cap. OptiScaler's limiter keeps it then, XeLL gets no interval and still lowers latency.
+inline bool XellKeepsCap(bool xefgVsync) { return !xefgVsync; }
 
 struct CapPlan
 {
@@ -864,6 +893,10 @@ inline CapPlan PlanCap(const CapInputs& in)
     if (XellIdle(in))
         return { CapOwner::Limiter, 0 };
 
+    // XeFG's XeLL with V-Sync goes by the refresh rate, not the cap
+    if (in.method == Method::XellWithXefg && !XellKeepsCap(in.xefgVsync))
+        return { CapOwner::Limiter, 0 };
+
     if (in.capFps <= 0.0f)
         return { CapOwner::LowLatency, 0 };
 
@@ -894,7 +927,8 @@ struct CapSettle
     bool started = false;
     CapPlan applied;
     CapPlan pending;
-    int held = 0; // presents `pending` has held
+    int held = 0;                       // presents `pending` has held
+    Method method = Method::RealReflex; // the method `applied` was planned for (the overload with a method)
 };
 
 inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, int needed = kCapSettlePresents)
@@ -926,6 +960,19 @@ inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, int needed =
     return settle.applied;
 }
 
+// The same for the method in use. A changed method (XeFG's Output switched) counts frames its own way, XeLL shown ones
+// and the others rendered ones: its plan is taken at once, the interval settled for the method before would be wrong
+// for it (Arkham Knight: XeLL kept Reflex's per-rendered 25000 us, half the cap, for 0.7 s after the switch).
+inline CapPlan SettleCap(CapSettle& settle, const CapPlan& planned, Method method, int needed = kCapSettlePresents)
+{
+    if (settle.started && settle.method != method)
+        settle.started = false;
+
+    const auto cap = SettleCap(settle, planned, needed);
+    settle.method = method;
+    return cap;
+}
+
 // What one SetSleepMode of ours carried, and whether the method took it
 struct SleepModeCall
 {
@@ -933,8 +980,8 @@ struct SleepModeCall
     const void* device = nullptr;
     uint32_t minimumIntervalUs = 0;
     bool boost = false;
-    uint32_t xellGeneration = 0; // fakenvapi::forcedModeGeneration while XeFG's XeLL is the method, else 0
-    uint32_t side = 0;           // XefgLatency in force with XeFG (XeLL, Reflex or Anti-Lag 2), else 0
+    uint32_t xellGeneration = 0; // InputCommon::xefg_xell_generation while XeFG's XeLL is the method, else 0
+    uint32_t side = 0;           // XefgLatency in force (XeLL, Reflex or Anti-Lag 2; XeLL without XeFG)
 };
 
 inline bool SameSleepMode(const SleepModeCall& a, const SleepModeCall& b)

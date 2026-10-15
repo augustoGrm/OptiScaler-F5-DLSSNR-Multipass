@@ -187,7 +187,10 @@ void Trust(uint3 id : SV_DispatchThreadID, uint gi : SV_GroupIndex)
         Counter.InterlockedAdd(0, gDistrusted);
 }
 
-// The raw depth for the model at the picture's size (size): the nearest surface over the copies, in the convention they have.
+// The depth for the consumers at the picture's size (size): the nearest surface over the copies, always reversed-Z (near
+// is 1.0) whatever convention the copies have. A flip of the depth finder's pick then never reaches the consumers: the
+// virtual upscaler rebuilt its backend for each one (and restarted frame generation with it). 1 - d is exact for the
+// far half of a normal depth, where its precision is.
 [numthreads(8, 8, 1)]
 void GuideDepth(uint3 id : SV_DispatchThreadID)
 {
@@ -205,7 +208,7 @@ void GuideDepth(uint3 id : SV_DispatchThreadID)
             value = reversed != 0 ? max(value, d) : min(value, d);
         }
 
-    OutFloat[id.xy] = value;
+    OutFloat[id.xy] = reversed != 0 ? value : 1.0 - value;
 }
 
 // Whether the content at flow pixel p, moving by motion (picture pixels, towards the previous frame), lay behind a
@@ -352,9 +355,9 @@ void GuideMotion(uint3 id : SV_DispatchThreadID)
     Flow.GetDimensions(flowWidth, flowHeight);
     const int2 flowHi = int2(flowWidth, flowHeight) - 1;
 
-    // This pixel's distance, as the depth proxy has it (larger is farther).
+    // This pixel's distance, as the depth proxy has it (larger is farther). The guide depth is always reversed-Z.
     const float raw = GuideRawDepth.Load(int3(id.xy, 0));
-    const float here = min(1.0 / max(reversed != 0 ? raw : 1.0 - raw, 1e-6), 1e6);
+    const float here = min(1.0 / max(raw, 1e-6), 1e6);
 
     const float2 f = uv * float2(flowWidth, flowHeight) - 0.5;
     const int2 f0 = int2(floor(f));

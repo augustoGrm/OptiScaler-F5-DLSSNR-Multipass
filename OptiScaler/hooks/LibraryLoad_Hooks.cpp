@@ -64,7 +64,7 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
         const auto filename = std::filesystem::path(normalizedPath).filename().wstring();
         const bool streamline = filename.starts_with(L"sl.") && filename.ends_with(L".dll");
         const bool otaFg = normalizedPath.contains(L"\\versions\\") &&
-            (normalizedPath.contains(L"\\sl_") || normalizedPath.contains(L"\\dlssg\\"));
+                           (normalizedPath.contains(L"\\sl_") || normalizedPath.contains(L"\\dlssg\\"));
         if (streamline || otaFg || filename == L"nvngx_dlssg.dll")
             return nullptr; // not handled: preserve the original loader/unlocker's path
     }
@@ -615,6 +615,10 @@ HMODULE LibraryLoadHooks::LoadLibraryCheckW(std::wstring libName, LPCWSTR lpLibF
         LOG_INFO("{} call!", libNameA);
 
         auto module = NtdllProxy::LoadLibraryExW_Ldr(libName.c_str(), NULL, NULL);
+
+        // GetProcAddress with no module would look in the game's exe
+        if (module == nullptr)
+            return module;
 
         auto setTickStartCallback =
             (PFN_setTickCallback) KernelBaseProxy::GetProcAddress_()(module, "setTickStartCallback");

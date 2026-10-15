@@ -21,26 +21,6 @@ bool LowLatency::update_low_latency_tech(IUnknown* pDevice)
 
     if (!currently_active_tech.load())
     {
-        // The second context (fakenvapi::companion*): Anti-Lag 2 next to XeFG's XeLL, no other tech and no second try
-        if (forced_low_latency_tech == LowLatencyMode::AntiLag2)
-        {
-            if (forced_init_failed)
-                return false;
-
-            auto new_tech_al2 = std::make_shared<AntiLag2>();
-            if (new_tech_al2->init(pDevice))
-            {
-                LOG_INFO("LowLatency algo: FSR Anti-Lag 2.0 (next to XeFG's XeLL)");
-                new_tech_al2->set_sleep_mode(&last_sleep_mode);
-                currently_active_tech.store(std::move(new_tech_al2));
-                return true;
-            }
-
-            forced_init_failed = true;
-            LOG_WARN("FSR Anti-Lag 2.0 could not start next to XeFG's XeLL, no low latency from it");
-            return false;
-        }
-
         if (forced_low_latency_tech == LowLatencyMode::XeLL)
         {
             auto new_tech_xell = std::make_shared<XeLL>();
@@ -101,12 +81,6 @@ bool LowLatency::update_low_latency_tech(IUnknown* pDevice)
     // Don't allow for deinit with forced mode
     if (forced_low_latency_tech != LowLatencyMode::None)
         return true;
-
-    if (State::Instance().fakenvapiReloadLowLatency)
-    {
-        change_detected = true;
-        State::Instance().fakenvapiReloadLowLatency = false;
-    }
 
     auto try_reinit = [&]() -> bool
     {
@@ -194,7 +168,7 @@ void LowLatency::get_latency_result(NV_LATENCY_RESULT_PARAMS* pGetLatencyParams)
 
 void LowLatency::add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarkerParams)
 {
-    auto current_timestamp = get_timestamp() / 1000;
+    auto current_timestamp = Util::GetTimestamp() / 1000;
 
     if (last_sim_start == 0)
         last_sim_start = second_last_sim_start = current_timestamp;
@@ -219,26 +193,26 @@ void LowLatency::add_marker_to_report(NV_LATENCY_MARKER_PARAMS* pSetLatencyMarke
     {
     case SIMULATION_START:
         second_last_sim_start = last_sim_start;
-        last_sim_start = get_timestamp() / 1000;
+        last_sim_start = Util::GetTimestamp() / 1000;
         current_report->simStartTime = last_sim_start;
         break;
     case SIMULATION_END:
-        current_report->simEndTime = get_timestamp() / 1000;
+        current_report->simEndTime = Util::GetTimestamp() / 1000;
         break;
     case RENDERSUBMIT_START:
-        current_report->renderSubmitStartTime = get_timestamp() / 1000;
+        current_report->renderSubmitStartTime = Util::GetTimestamp() / 1000;
         break;
     case RENDERSUBMIT_END:
-        current_report->renderSubmitEndTime = get_timestamp() / 1000;
+        current_report->renderSubmitEndTime = Util::GetTimestamp() / 1000;
         break;
     case PRESENT_START:
-        current_report->presentStartTime = get_timestamp() / 1000;
+        current_report->presentStartTime = Util::GetTimestamp() / 1000;
         break;
     case PRESENT_END:
-        current_report->presentEndTime = get_timestamp() / 1000;
+        current_report->presentEndTime = Util::GetTimestamp() / 1000;
         break;
     case INPUT_SAMPLE:
-        current_report->inputSampleTime = get_timestamp() / 1000;
+        current_report->inputSampleTime = Util::GetTimestamp() / 1000;
         break;
     default:
         break;

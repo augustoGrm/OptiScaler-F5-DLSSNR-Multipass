@@ -17,6 +17,7 @@
 #include <native/NativeDriverDx12.h>
 #include <native/NativeLowLatency.h>
 #include <native/VkPresentBridge.h>
+#include <low_latency/input/input_common.h>
 
 #include <misc/FrameLimit.h>
 
@@ -383,15 +384,13 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
         }
     }
 
-    // On the Vulkan bridge (native/VkPresentBridge.h) this is frame generation's D3D12 swapchain for a Vulkan game, whose
-    // own present also calls update() with isVulkan: the same answer from both, or reflexLimitsFps flips every frame
-    // and setFPSLimit resends the cap each time
-    const bool vulkanGame = State::Instance().swapchainInteropApi == SwapchainInteropApi::VkwDx12;
+    // The game's own present runs the frame's low latency update (OutputRule.h RunsLowLatencyUpdate), a dxvk game's on
+    // the game's thread. On the Vulkan bridge (native/VkPresentBridge.h) a D3D12 present here is frame generation's for
+    // a Vulkan game, whose own Vulkan present runs it.
+    const bool bridgeOutput = State::Instance().swapchainInteropApi == SwapchainInteropApi::VkwDx12 && !isD3D11;
     auto fg = State::Instance().currentFG;
-    if (willPresent && fg != nullptr)
-        ReflexHooks::update(fg->IsActive(), vulkanGame);
-    else
-        ReflexHooks::update(false, vulkanGame);
+
+    ReflexHooks::presentUpdate(lloutput::PresentSite::Dxgi, bridgeOutput);
 
     XellHooks::update();
 
@@ -616,11 +615,23 @@ static HRESULT LocalPresent(IDXGISwapChain* pSwapChain, UINT SyncInterval, UINT 
             native::lowlatency::OnPresentBegin(lowLatencyDevice);
     }
 
+    // XeFG with Reflex or Anti-Lag 2 lowering latency next to its XeLL: each of its presents, generated or real, as
+    // DLSSG reports them, with the frame id of the batch XeFG marked (out of band present markers; Anti-Lag 2 takes the
+    // frame type from them). InputCommon::fg_output_present does nothing while XeLL is the output.
+    const bool xefgPresent = willPresent && cq != nullptr && fg != nullptr &&
+                             State::Instance().activeFgOutput == FGOutput::XeFG && fg->IsGenerating();
+
+    if (xefgPresent)
+        InputCommon::fg_output_present(cq, false);
+
     // swapchain present
     if (pPresentParameters == nullptr)
         presentResult = pSwapChain->Present(SyncInterval, Flags);
     else
         presentResult = ((IDXGISwapChain1*) pSwapChain)->Present1(SyncInterval, Flags, pPresentParameters);
+
+    if (xefgPresent)
+        InputCommon::fg_output_present(cq, true);
 
     if (lowLatencyDevice != nullptr)
         native::lowlatency::OnPresentEnd(lowLatencyDevice);
@@ -1004,7 +1015,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers(UINT BufferCount
     DXGI_SWAP_CHAIN_DESC desc {};
     _real->GetDesc(&desc);
 
-    if (Config::Instance()->FGEnabled.value_or_default())
+    if (Config::Instance()->IsFGEnabled())
     {
         State::Instance().fgResetCapturedResources = true;
         State::Instance().fgOnlyUseCapturedResources = false;
@@ -1453,7 +1464,7 @@ HRESULT STDMETHODCALLTYPE WrappedIDXGISwapChain4::ResizeBuffers1(UINT BufferCoun
     DXGI_SWAP_CHAIN_DESC desc {};
     _real->GetDesc(&desc);
 
-    if (Config::Instance()->FGEnabled.value_or_default())
+    if (Config::Instance()->IsFGEnabled())
     {
         State::Instance().fgResetCapturedResources = true;
         State::Instance().fgOnlyUseCapturedResources = false;

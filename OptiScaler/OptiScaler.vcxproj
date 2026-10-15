@@ -337,6 +337,7 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="framegen\dlssg\MfgUnlockFlip.h" />
     <ClInclude Include="framegen\dlssg\AmpereMfgLoader.h" />
     <ClInclude Include="dlssnr\PassProfiles.h" />
+    <ClInclude Include="dlssnr\DlssNr_LookPresets.h" />
     <ClInclude Include="framegen\ffx\FSRFG_Dx12.h" />
     <ClInclude Include="framegen\IFGFeature.h" />
     <ClInclude Include="framegen\IFGFeature_Dx12.h" />
@@ -368,7 +369,16 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="include\device_info\device_info.hpp" />
     <ClInclude Include="inputs\FG\Upscaler_Inputs_Dx11wDx12.h" />
     <ClInclude Include="low_latency\input\input_common.h" />
+    <ClInclude Include="low_latency\input\UeInputRule.h" />
+    <ClInclude Include="low_latency\input\OutputRule.h" />
+    <ClInclude Include="low_latency\input\VkLatencyMode.h" />
     <ClInclude Include="low_latency\input\input_reflex.h" />
+    <ClInclude Include="low_latency\low_latency_tech\ll_reflex_vk.h" />
+    <ClInclude Include="low_latency\low_latency_tech\ll_reflex_nvapi_vk.h" />
+    <ClInclude Include="low_latency\low_latency_tech\ll_reflex.h" />
+    <ClInclude Include="low_latency\low_latency_tech\ll_fps_limiter.h" />
+    <ClInclude Include="low_latency\input\input_antilag_vk.h" />
+    <ClInclude Include="low_latency\input\input_reflex_vk.h" />
     <ClInclude Include="low_latency\input\input_xell.h" />
     <ClInclude Include="low_latency\input\input_antilag2.h" />
     <ClInclude Include="shaders\magnifier\Magnifier_Dx11.h" />
@@ -520,6 +530,8 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClInclude Include="menu\font\Hack_Compressed.h" />
     <ClInclude Include="menu\font\Inter_Compressed.h" />
     <ClInclude Include="misc\FrameLimit.h" />
+    <ClInclude Include="misc\PathUnder.h" />
+    <ClInclude Include="menu\MenuLifetimeRule.h" />
     <ClInclude Include="misc\Quirks.h" />
     <ClInclude Include="OwnedMutex.h" />
     <ClInclude Include="proxies\D3D12_Proxy.h" />
@@ -728,6 +740,12 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="inputs\FG\Upscaler_Inputs_Dx11wDx12.cpp" />
     <ClCompile Include="low_latency\input\input_common.cpp" />
     <ClCompile Include="low_latency\input\input_reflex.cpp" />
+    <ClCompile Include="low_latency\low_latency_tech\ll_reflex_vk.cpp" />
+    <ClCompile Include="low_latency\low_latency_tech\ll_reflex_nvapi_vk.cpp" />
+    <ClCompile Include="low_latency\low_latency_tech\ll_reflex.cpp" />
+    <ClCompile Include="low_latency\low_latency_tech\ll_fps_limiter.cpp" />
+    <ClCompile Include="low_latency\input\input_antilag_vk.cpp" />
+    <ClCompile Include="low_latency\input\input_reflex_vk.cpp" />
     <ClCompile Include="low_latency\input\input_xell.cpp" />
     <ClCompile Include="low_latency\input\input_antilag2.cpp" />
     <ClCompile Include="shaders\magnifier\Magnifier_Dx11.cpp" />
@@ -755,7 +773,6 @@ copy NUL "$(SolutionDir)x64\Release\a\!! EXTRACT ALL FILES TO GAME FOLDER !!" /Y
     <ClCompile Include="low_latency\low_latency_tech\ll_antilag_vk.cpp" />
     <ClCompile Include="low_latency\low_latency_tech\ll_latencyflex.cpp" />
     <ClCompile Include="low_latency\low_latency_tech\ll_xell.cpp" />
-    <ClCompile Include="nvapi\fakenvapi\low_latency_vk.cpp" />
     <ClCompile Include="nvapi\fakenvapi\nvapi_calls.cpp" />
     <ClCompile Include="framegen\nvngx\Nvngx_FFX.cpp" />
     <ClCompile Include="framegen\nvngx\Nvngx_Nukems.cpp" />

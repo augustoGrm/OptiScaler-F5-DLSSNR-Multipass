@@ -29,11 +29,26 @@ class IFeature_Dx12 : public virtual IFeature
 
   protected:
     ID3D12Device* Device = nullptr;
+    // The in-upscaler menu (old overlay), shared by every feature and kept past them: menu/MenuLifetimeRule.h
     static inline std::unique_ptr<Menu_Dx12> Imgui = nullptr;
-    // Imgui is shared by every feature, and a replaced feature is destroyed on another thread (Util::DelayedDestroy): its
-    // destructor resetting Imgui raced the render thread drawing with it, and two features dropped together reset it at
-    // once (RE2 crash on a backend switch with the old overlay). Recursive: a feature destroyed while the menu is drawn.
+    // Imgui is drawn on the render thread and retired or destroyed on another (Util::DelayedDestroy). Recursive: a
+    // feature destroyed while the menu is drawn.
     static inline std::recursive_mutex ImguiMutex;
+    // A retired menu is waiting for its delay: no new one until it is gone (ImGui's DX12 backend is a global)
+    static inline std::atomic<bool> ImguiRetiring = false;
+    // Live D3D12 features: the menu goes with the last one
+    static inline std::atomic<int> LiveFeatures = 0;
+
+    // A menu taken out of use, destroyed by Util::DelayedDestroy once its lists are off the GPU
+    struct RetiredImgui
+    {
+        explicit RetiredImgui(std::unique_ptr<Menu_Dx12> menu) : menu(std::move(menu)) {}
+        ~RetiredImgui();
+        std::unique_ptr<Menu_Dx12> menu;
+    };
+
+    // ImguiMutex held
+    static void RetireImgui(const char* why);
     std::unique_ptr<OS_Dx12> OutputScaler = nullptr;
     std::unique_ptr<RCAS_Dx12> RCAS = nullptr;
     std::unique_ptr<Bias_Dx12> Bias = nullptr;

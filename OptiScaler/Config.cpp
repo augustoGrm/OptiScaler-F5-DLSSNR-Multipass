@@ -320,6 +320,8 @@ bool Config::Reload(std::filesystem::path iniPath)
                     inputPresent, inputPresent ? inputText.c_str() : nullptr,
                     legacy.has_value() ? legacy->c_str() : nullptr));
             }
+
+            FramerateFrameCapOnly.set_from_config(readBool("Framerate", "FrameCapOnly"));
         }
 
         // FSR Common
@@ -533,7 +535,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrScanExposure.set_from_config(readBool("DlssNr", "ScanExposure"));
             DlssNrWhitePointSource.set_from_config(readUInt("DlssNr", "WhitePointSource"));
             DlssNrGameExposureScale.set_from_config(readUInt("DlssNr", "GameExposureScale"));
-            if (DlssNrGameExposureScale.has_value() && DlssNrGameExposureScale.value() > 1)
+            if (DlssNrGameExposureScale.has_value() && DlssNrGameExposureScale.value() > 2)
                 DlssNrGameExposureScale.reset();
             DlssNrAutoExposureTrim.set_from_config(readFloat("DlssNr", "AutoExposureTrim"));
             DlssNrAutoExposureShadowProtection.set_from_config(readFloat("DlssNr", "AutoExposureShadowProtection"));
@@ -549,6 +551,7 @@ bool Config::Reload(std::filesystem::path iniPath)
             DlssNrNativeMotion.set_from_config(readBool("DlssNr", "NativeMotion"));
             DlssNrNativeInput.set_from_config(readBool("DlssNr", "NativeInput"));
             DlssNrNativeUpscaler.set_from_config(readBool("DlssNr", "NativeUpscaler"));
+            DlssNrNativeUpscalerPass.set_from_config(readBool("DlssNr", "NativeUpscalerPass"));
             DlssNrNativeFrameGenerationOnly.set_from_config(readBool("DlssNr", "NativeFrameGenerationOnly"));
             DlssNrNativeLowLatencyBoost.set_from_config(readBool("DlssNr", "NativeLowLatencyBoost"));
             DlssNrNativeLowLatencyDxvkGameThread.set_from_config(readBool("DlssNr", "NativeLowLatencyDxvkGameThread"));
@@ -1451,6 +1454,8 @@ bool Config::SaveIni()
 
         ini.SetValue("Framerate", "LowLatencyInput", native::lowlatency::InputIniText(input));
         ini.SetValue("DlssNr", "NativeLowLatency", native::lowlatency::LegacySettingText(input));
+        ini.SetValue("Framerate", "FrameCapOnly",
+                     GetBoolValue(Instance()->FramerateFrameCapOnly.value_for_config()).c_str());
     }
 
     // Output Scaling
@@ -1628,6 +1633,8 @@ bool Config::SaveIni()
     ini.SetValue("DlssNr", "NativeInput", GetBoolValue(Instance()->DlssNrNativeInput.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeUpscaler",
                  GetBoolValue(Instance()->DlssNrNativeUpscaler.value_for_config()).c_str());
+    ini.SetValue("DlssNr", "NativeUpscalerPass",
+                 GetBoolValue(Instance()->DlssNrNativeUpscalerPass.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeFrameGenerationOnly",
                  GetBoolValue(Instance()->DlssNrNativeFrameGenerationOnly.value_for_config()).c_str());
     ini.SetValue("DlssNr", "NativeLowLatencyBoost",
@@ -2230,6 +2237,37 @@ void Config::CheckUpscalerFiles()
     {
         LOG_INFO("libxess.dll found in game folder");
     }
+}
+
+bool Config::FGCanFollowGame()
+{
+    const auto& state = State::Instance();
+    return FGFollowGame::CanFollow(state.activeFgInput == FGInput::DLSSG, state.streamlineVersion.major);
+}
+
+bool Config::FGFollowsGame() const { return FGFollowGame::Follows(FGEnabled.has_value(), FGCanFollowGame()); }
+
+bool Config::IsFGEnabled() const
+{
+    const bool follows = FGFollowsGame();
+    auto& state = State::Instance();
+
+    if (follows)
+    {
+        const auto format = state.currentSwapchainDesc.BufferDesc.Format;
+        const bool floatSwapchain = format >= DXGI_FORMAT_R32G32B32A32_TYPELESS && format <= DXGI_FORMAT_R16G16B16A16_SINT;
+
+        if (FGFollowGame::FollowBlocked(state.activeFgOutput == FGOutput::XeFG, FGXeFGIgnoreInitChecks.value_or_default(),
+                                        state.realExclusiveFullscreen, floatSwapchain))
+            return false;
+    }
+
+    return FGFollowGame::Enabled(follows, state.dlssgInputGameRequest.load(), FGEnabled.value_or_default());
+}
+
+int Config::FGInterpolationCount(int menuCount, int outputMax) const
+{
+    return FGFollowGame::Count(FGFollowsGame(), State::Instance().dlssgInputGameRequest.load(), menuCount, outputMax);
 }
 
 std::vector<std::string> Config::GetConfigLog() { return _log; }

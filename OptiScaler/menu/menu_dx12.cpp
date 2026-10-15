@@ -85,6 +85,7 @@ bool Menu_Dx12::Render(ID3D12GraphicsCommandList* pCmdList, ID3D12Resource* outT
         { return g_pd3dSrvDescHeapAlloc.Free(cpu_handle, gpu_handle); };
 
         _dx12Init = ImGui_ImplDX12_Init(&initInfo);
+        _rtvFormat = outDesc.Format;
 
         ImGui_ImplDX12_Data* bd =
             ImGui::GetCurrentContext() ? (ImGui_ImplDX12_Data*) ImGui::GetIO().BackendRendererUserData : nullptr;
@@ -265,10 +266,16 @@ void Menu_Dx12::CreateRenderTarget(const D3D12_RESOURCE_DESC& InDesc)
     {
         auto rtDesc = _renderTargetResource[0]->GetDesc();
 
-        if (InDesc.Width != rtDesc.Width || InDesc.Height != rtDesc.Height || InDesc.Format != rtDesc.Format)
+        // The copies are made in the typed format (below): compared against the raw one, a typeless output never matched
+        // and the copies were remade, and delay-released, every frame
+        if (InDesc.Width != rtDesc.Width || InDesc.Height != rtDesc.Height ||
+            TranslateTypelessFormats(InDesc.Format) != rtDesc.Format)
         {
-            SAFE_RELEASE(_renderTargetResource[0]);
-            SAFE_RELEASE(_renderTargetResource[1]);
+            // Last frames' copies may still be on the GPU
+            Util::DelayedRelease(_renderTargetResource[0]);
+            Util::DelayedRelease(_renderTargetResource[1]);
+            _renderTargetResource[0] = nullptr;
+            _renderTargetResource[1] = nullptr;
         }
         else
             return;

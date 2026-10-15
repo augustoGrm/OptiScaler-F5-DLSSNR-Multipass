@@ -3,6 +3,7 @@
 
 #include "DlssNr.h"
 #include "DlssNr_ExposureScan.h"
+#include "DlssNr_LookPresets.h"
 #include "DlssNrNative.h"
 
 
@@ -39,6 +40,7 @@
 #include "DlssNr_ColourEncodingStatus.h"
 #include "DlssNr_GameDefaults.h"
 #include "DlssNr_NativeMode.h"
+#include "DlssNr_TierPlacement.h"
 #include "DlssNr_LutStatus.h"
 #include "DlssNrDetailReuseHost.h"
 
@@ -592,27 +594,10 @@ static bool InheritedProfileCombo(const char* label, CustomOptional<uint32_t, No
     return true;
 }
 
-// Per-pass profile values the pass presets write. One table shared by ApplyPassPreset and
-// PassPresetActive (the button highlight), so what a preset sets and what counts as "that preset is
-// in effect" can't drift apart.
-struct PassProfile
-{
-    uint32_t style; // 0 Standard, 1 Natural, 2 Cinematic
-    float intensity;
-    float structure;
-    float tone;
-    float skin;
-};
-
-static constexpr PassProfile PresetPass1 { 1u, 1.8f, 1.8f, 1.8f, -1.0f };    // Natural
-static constexpr PassProfile PresetPass2 { 1u, 1.0f, 1.0f, 1.0f, -1.0f };    // Natural
-static constexpr PassProfile PresetPass3 { 1u, 0.75f, 1.5f, 0.46f, 1.0f };   // Natural
-
-// This fork's recommended starting points for the "Model passes" slider, one per pass count.
-// Each button touches only the settings named below (including Pass 2/3 overrides once the
-// preset's pass count reaches them); anything else in the panel (skin/environment sliders,
-// Compare, Debug view, Hold frame, Downscaler, exposure-scan settings, etc.) is left exactly as
-// the user had it.
+// This fork's starting point for the "Model passes" slider, one per pass count: the count, and NR on, on FP8 and with
+// the model applied. How each pass looks is the look presets' (DlssNr_LookPresets.h), so picking a pass count never
+// undoes a look and a look never undoes this; the multipass profiles these buttons used to write are the Natural
+// look's.
 static void ApplyPassPreset(Config* config, unsigned int passes)
 {
     config->DlssNrEnabled = true;
@@ -622,96 +607,139 @@ static void ApplyPassPreset(Config* config, unsigned int passes)
     config->DlssNrPasses = passes;
 
     // Upscale Method, Upscale Mode and Final Image Composition are deliberately not set here: the Pre-SR/Post-SR
-    // tiers set them, and writing them from a pass preset would clear that tier's highlight.
-    // Reuse bottleneck is not set here either: it is a speed/quality choice per kernel set, not part of a look, so a
-    // preset leaves both checkboxes as the user had them.
-    config->DlssNrTransferStrength = 1.0f;      // Detail strength
-    config->DlssNrColourStrength = 1.0f;
-    config->DlssNrStyle = PresetPass1.style;
-    config->DlssNrIntensity = PresetPass1.intensity;
-    config->DlssNrLocalStructure = PresetPass1.structure;
-    config->DlssNrLocalTone = PresetPass1.tone;
-    config->DlssNrSkinStructure = PresetPass1.skin;
-    config->DlssNrAutoMask = true;
-    // Automatic exposure at its default brightness (DlssNr_AutoTrimDefault.h). Game exposure at 1x, which
-    // this used to set, gave NBA 2K27 a model input with a median of 0.07-0.32 (measured 2026-09-25).
-    config->DlssNrWhitePointSource = 3u;        // Automatic exposure
+    // tiers and the looks set them. Reuse bottleneck is not set here either: it is a speed/quality choice per kernel
+    // set, not part of a look, so a preset leaves both checkboxes as the user had them.
+    // Exposure back to its default (DlssNr_ExposureDefault.h: Game exposure when the game hands one over, on the scale
+    // measured for the game, else Automatic at its default brightness).
+    config->DlssNrWhitePointSource = DlssNrExposureDefault::kSourceAuto;
     config->DlssNrAutoExposureTrim = std::nullopt;
     config->DlssNrMaxRatio = 2.0f;               // Highlight guard
-
-    if (passes >= 2u)
-    {
-        config->DlssNrPass2Style = PresetPass2.style;
-        config->DlssNrPass2Intensity = PresetPass2.intensity;
-        config->DlssNrPass2LocalStructure = PresetPass2.structure;
-        config->DlssNrPass2LocalTone = PresetPass2.tone;
-        config->DlssNrPass2SkinStructure = PresetPass2.skin;
-        config->DlssNrPass2AutoMask = true;
-    }
-
-    if (passes >= 3u)
-    {
-        config->DlssNrPass3Style = PresetPass3.style;
-        config->DlssNrPass3Intensity = PresetPass3.intensity;
-        config->DlssNrPass3LocalStructure = PresetPass3.structure;
-        config->DlssNrPass3LocalTone = PresetPass3.tone;
-        config->DlssNrPass3SkinStructure = PresetPass3.skin;
-        config->DlssNrPass3AutoMask = true;
-    }
 }
 
-static bool NearlyEqual(float a, float b)
-{
-    return std::fabs(a - b) < 0.005f;
-}
-
-// Pass 2/3 settings are optional (absent = inherit pass 1), so an absent one never matches a preset.
-template <typename FloatOpt>
-static bool OptionalIs(FloatOpt& opt, float value)
-{
-    return opt.has_value() && NearlyEqual(opt.value(), value);
-}
-
-static bool Pass1Is(Config* config, const PassProfile& p)
-{
-    return config->DlssNrStyle.value_or_default() == p.style &&
-           NearlyEqual(config->DlssNrIntensity.value_or_default(), p.intensity) &&
-           NearlyEqual(config->DlssNrLocalStructure.value_or_default(), p.structure) &&
-           NearlyEqual(config->DlssNrLocalTone.value_or_default(), p.tone) &&
-           NearlyEqual(config->DlssNrSkinStructure.value_or_default(), p.skin);
-}
-
-static bool Pass2Is(Config* config, const PassProfile& p)
-{
-    return config->DlssNrPass2Style.has_value() && config->DlssNrPass2Style.value() == p.style &&
-           OptionalIs(config->DlssNrPass2Intensity, p.intensity) &&
-           OptionalIs(config->DlssNrPass2LocalStructure, p.structure) &&
-           OptionalIs(config->DlssNrPass2LocalTone, p.tone) &&
-           OptionalIs(config->DlssNrPass2SkinStructure, p.skin);
-}
-
-static bool Pass3Is(Config* config, const PassProfile& p)
-{
-    return config->DlssNrPass3Style.has_value() && config->DlssNrPass3Style.value() == p.style &&
-           OptionalIs(config->DlssNrPass3Intensity, p.intensity) &&
-           OptionalIs(config->DlssNrPass3LocalStructure, p.structure) &&
-           OptionalIs(config->DlssNrPass3LocalTone, p.tone) &&
-           OptionalIs(config->DlssNrPass3SkinStructure, p.skin);
-}
-
-// Whether a pass preset is what is currently in effect, for highlighting its button. Derived from
-// the config (not remembered), like ResolutionTierActive: the pass count plus each pass's own
-// profile must match. Detail/Colour strength, white point and the like are left out on purpose so
-// tuning them doesn't drop the highlight.
+// Whether a pass preset is in effect, for highlighting its button: its pass count. Derived from the config (not
+// remembered), like ResolutionTierActive.
 static bool PassPresetActive(Config* config, unsigned int passes)
 {
-    return config->DlssNrPasses.value_or_default() == passes && Pass1Is(config, PresetPass1) &&
-           (passes < 2u || Pass2Is(config, PresetPass2)) &&
-           (passes < 3u || Pass3Is(config, PresetPass3));
+    return config->DlssNrPasses.value_or_default() == passes;
 }
 
-// A button drawn green while its preset is the one in effect (the overlay's existing success green).
-static bool PresetButton(const char* label, bool active)
+// A later pass's override (Pass 2 / Pass 3 keys): absent when none of its keys is set; a key not set takes pass 1's
+// value, Local tone 0 (as PassProfiles.h runs it).
+template <typename StyleOpt, typename FloatOpt, typename BoolOpt>
+static std::optional<DlssNrLook::Profile>
+ReadOverride(const StyleOpt& style, const FloatOpt& intensity, const FloatOpt& structure, const FloatOpt& tone,
+             const FloatOpt& skin, const BoolOpt& mask, const DlssNrLook::Profile& base)
+{
+    if (!style.has_value() && !intensity.has_value() && !structure.has_value() && !tone.has_value() &&
+        !skin.has_value() && !mask.has_value())
+        return std::nullopt;
+
+    return DlssNrLook::Profile { style.has_value() ? style.value() : base.style,
+                                 intensity.has_value() ? intensity.value() : base.intensity,
+                                 structure.has_value() ? structure.value() : base.structure,
+                                 tone.has_value() ? tone.value() : 0.0f,
+                                 skin.has_value() ? skin.value() : base.skin,
+                                 mask.has_value() ? mask.value() : base.autoMask };
+}
+
+template <typename StyleOpt, typename FloatOpt, typename BoolOpt>
+static void WriteOverride(StyleOpt& style, FloatOpt& intensity, FloatOpt& structure, FloatOpt& tone, FloatOpt& skin,
+                          BoolOpt& mask, const std::optional<DlssNrLook::Profile>& profile)
+{
+    if (!profile.has_value())
+    {
+        style = std::optional<uint32_t> {};
+        intensity = std::optional<float> {};
+        structure = std::optional<float> {};
+        tone = std::optional<float> {};
+        skin = std::optional<float> {};
+        mask = std::optional<bool> {};
+        return;
+    }
+
+    style = profile->style;
+    intensity = profile->intensity;
+    structure = profile->structure;
+    tone = profile->tone;
+    skin = profile->skin;
+    mask = profile->autoMask;
+}
+
+// What the config has of the settings a look owns
+static DlssNrLook::Settings ReadLook(Config* config)
+{
+    DlssNrLook::Settings s;
+    s.pass1 = { config->DlssNrStyle.value_or_default(),          config->DlssNrIntensity.value_or_default(),
+                config->DlssNrLocalStructure.value_or_default(), config->DlssNrLocalTone.value_or_default(),
+                config->DlssNrSkinStructure.value_or_default(),  config->DlssNrAutoMask.value_or_default() };
+    s.pass2 = ReadOverride(config->DlssNrPass2Style, config->DlssNrPass2Intensity, config->DlssNrPass2LocalStructure,
+                           config->DlssNrPass2LocalTone, config->DlssNrPass2SkinStructure, config->DlssNrPass2AutoMask,
+                           s.pass1);
+    s.pass3 = ReadOverride(config->DlssNrPass3Style, config->DlssNrPass3Intensity, config->DlssNrPass3LocalStructure,
+                           config->DlssNrPass3LocalTone, config->DlssNrPass3SkinStructure, config->DlssNrPass3AutoMask,
+                           s.pass1);
+
+    for (const auto& extra : config->DlssNrExtraPasses)
+    {
+        if (extra.style.has_value() || extra.intensity.has_value() || extra.structure.has_value() ||
+            extra.tone.has_value() || extra.skin.has_value() || extra.autoMask.has_value())
+            s.laterOverrides = true;
+    }
+
+    s.curve = config->DlssNrReversibleMode.value_or_default();
+    s.detail = config->DlssNrTransferStrength.value_or_default();
+    s.colour = config->DlssNrColourStrength.value_or_default();
+    s.skinSplit = config->DlssNrSkinProtection.value_or_default();
+    s.skinTone = config->DlssNrSkinToneEnabled.value_or_default();
+    s.skinDetail = config->DlssNrSkinDetail.value_or_default();
+    s.skinColour = config->DlssNrSkinColour.value_or_default();
+    s.envDetail = config->DlssNrEnvironmentDetail.value_or_default();
+    s.envColour = config->DlssNrEnvironmentColour.value_or_default();
+    s.inputStyle = config->DlssNrInputStyle.value_or_default();
+    s.inputStrength = config->DlssNrInputStyleStrength.value_or_default();
+    s.facesOnly = config->DlssNrInputStyleFacesOnly.value_or_default();
+    return s;
+}
+
+// A look: every setting it owns, the ones it does not mention back to their defaults
+static void WriteLook(Config* config, const DlssNrLook::Settings& s)
+{
+    config->DlssNrStyle = s.pass1.style;
+    config->DlssNrIntensity = s.pass1.intensity;
+    config->DlssNrLocalStructure = s.pass1.structure;
+    config->DlssNrLocalTone = s.pass1.tone;
+    config->DlssNrSkinStructure = s.pass1.skin;
+    config->DlssNrAutoMask = s.pass1.autoMask;
+    WriteOverride(config->DlssNrPass2Style, config->DlssNrPass2Intensity, config->DlssNrPass2LocalStructure,
+                  config->DlssNrPass2LocalTone, config->DlssNrPass2SkinStructure, config->DlssNrPass2AutoMask, s.pass2);
+    WriteOverride(config->DlssNrPass3Style, config->DlssNrPass3Intensity, config->DlssNrPass3LocalStructure,
+                  config->DlssNrPass3LocalTone, config->DlssNrPass3SkinStructure, config->DlssNrPass3AutoMask, s.pass3);
+
+    for (auto& extra : config->DlssNrExtraPasses)
+        WriteOverride(extra.style, extra.intensity, extra.structure, extra.tone, extra.skin, extra.autoMask,
+                      std::nullopt);
+
+    config->DlssNrReversibleMode = s.curve;
+    config->DlssNrTransferStrength = s.detail;
+    config->DlssNrColourStrength = s.colour;
+    config->DlssNrSkinProtection = s.skinSplit;
+    config->DlssNrSkinToneEnabled = s.skinTone;
+    config->DlssNrSkinDetail = s.skinDetail;
+    config->DlssNrSkinColour = s.skinColour;
+    config->DlssNrEnvironmentDetail = s.envDetail;
+    config->DlssNrEnvironmentColour = s.envColour;
+    config->DlssNrInputStyle = s.inputStyle;
+    config->DlssNrInputStyleStrength = s.inputStrength;
+    config->DlssNrInputStyleFacesOnly = s.facesOnly;
+}
+
+// "##lookbase": Natural and Cinematic are also look buttons on the same page, and ImGui takes the label as the ID
+static constexpr const char* LookBaseNames[] = { "Standard##lookbase", "Natural##lookbase", "Cinematic##lookbase" };
+static_assert(IM_ARRAYSIZE(LookBaseNames) == DlssNrLook::kBaseCount);
+
+// A button drawn green while its preset is the one in effect (the overlay's existing success green). `width` 0: as wide
+// as its label.
+static bool PresetButton(const char* label, bool active, float width = 0.0f)
 {
     if (active)
     {
@@ -720,7 +748,7 @@ static bool PresetButton(const char* label, bool active)
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.16f, 0.45f, 0.20f, 1.0f));
     }
 
-    const bool pressed = ImGui::Button(label);
+    const bool pressed = ImGui::Button(label, ImVec2(width, 0.0f));
 
     if (active)
         ImGui::PopStyleColor(3);
@@ -728,73 +756,91 @@ static bool PresetButton(const char* label, bool active)
     return pressed;
 }
 
+static constexpr const char* PassPresetNames[] = { "1 Pass", "2 Pass", "3 Pass" };
+
 // Quality tiers (High/Medium/Low/Potato) for running NR at a reduced model resolution, offered as
 // two preset rows that differ only in where NR runs: Pre-SR (Before Super Resolution) and Post-SR
-// (After Super Resolution). Each touches only Upscale Mode, Upscale Method, Model resolution,
-// Final Image Composition and (where the tier lists one) Restore Sharpness, plus Auto model
+// (After Super Resolution). Each touches only Upscale Mode, Upscale Method and Model resolution, plus Auto model
 // resolution -- turned off because Auto overrides the Model resolution slider when NR runs
 // post-SR, which would make the tier's resolution a silent no-op. Each also sets "NR Pass at:",
 // which includes turning off Generate-before-SR/apply-after-SR (DLSS): that mode generates pre-SR
-// and disables the placement choice, so leaving it on would contradict the row's name.
+// and disables the placement choice, so leaving it on would contradict the row's name. All four run composed: a
+// Replace composition goes back to composed (DlssNrLook::TierCurve), and a composed curve a look chose stays, so a
+// look and a tier never undo each other.
 struct ResolutionTier
 {
     const char* name;
     uint32_t upscaleMethod;      // 0 Bilinear, 1 SGSR1
     float workingScale;          // model resolution as a fraction (1.0 = 100%)
-    uint32_t composition;        // 1 Reversible curve + composed, 2 Reversible curve + replace
-    float restoreSharpness;      // < 0: leave the current value (composed mode hides the slider)
-    float detailStrength;        // < 0: leave the current value
-    float colourStrength;        // < 0: leave the current value
 };
 
 static constexpr ResolutionTier ResolutionTiers[] = {
-    { "High",   1u, 1.00f, 1u, -1.0f, 1.0f, 1.0f },
-    { "Medium", 1u, 0.80f, 2u,  1.50f, -1.0f, -1.0f },
-    { "Low",    0u, 0.65f, 2u,  1.50f, -1.0f, -1.0f },
-    { "Potato", 0u, 0.50f, 2u,  1.70f, -1.0f, -1.0f },
+    { "High", 1u, 1.00f },
+    { "Medium", 1u, 0.80f },
+    { "Low", 0u, 0.65f },
+    { "Potato", 0u, 0.50f },
 };
+
+// One width for every preset button on the status page (looks, pass presets, both tier rows): the widest label's, so
+// the rows line up as columns instead of each button hugging its own label. From the current font, so it follows the
+// menu's scale.
+static float PresetButtonWidth()
+{
+    float widest = 0.0f;
+
+    for (const auto& look : DlssNrLook::kLooks)
+        widest = std::max(widest, ImGui::CalcTextSize(look.name).x);
+
+    for (const char* name : PassPresetNames)
+        widest = std::max(widest, ImGui::CalcTextSize(name).x);
+
+    for (const auto& tier : ResolutionTiers)
+        widest = std::max(widest, ImGui::CalcTextSize(tier.name).x);
+
+    return widest + 2.0f * ImGui::GetStyle().FramePadding.x;
+}
 
 static void ApplyResolutionTier(Config* config, int& pendingScale, const ResolutionTier& tier,
                                 bool beforeSuperResolution)
 {
+    // With Finished Picture on (NR Only mode) the placement stays: the tier is about the model's size, and clearing it
+    // would switch NR Only off (DlssNr_TierPlacement.h).
+    const auto placement = DlssNrTierPlacement::AfterTier(
+        { config->DlssNrFinishedPicture.value_or_default(), config->DlssNrRunBeforeSr.value_or_default(),
+          config->DlssNrDeferredDlss.value_or_default() },
+        beforeSuperResolution);
+
     // Same rule as the "NR Pass at:" combo: leaving Finished Picture clears a session failure.
-    if (config->DlssNrFinishedPicture.value_or_default())
+    if (config->DlssNrFinishedPicture.value_or_default() && !placement.finishedPicture)
         RetryNr();
-    config->DlssNrFinishedPicture = false;
-    config->DlssNrRunBeforeSr = beforeSuperResolution;
-    config->DlssNrDeferredDlss = false;
+    config->DlssNrFinishedPicture = placement.finishedPicture;
+    config->DlssNrRunBeforeSr = placement.runBeforeSr;
+    config->DlssNrDeferredDlss = placement.deferred;
 
     config->DlssNrTransfer = 2u; // Upscale Mode: NVIDIA residual
     config->DlssNrReducedUpscaleMethod = tier.upscaleMethod;
     config->DlssNrModelResolutionAuto = false;
     config->DlssNrWorkingScale = tier.workingScale;
     pendingScale = -1; // clear any in-flight drag
-    config->DlssNrReversibleMode = tier.composition;
-
-    if (tier.restoreSharpness >= 0.0f)
-        config->DlssNrReplaceDetailStrength = tier.restoreSharpness;
-
-    if (tier.detailStrength >= 0.0f)
-        config->DlssNrTransferStrength = tier.detailStrength;
-
-    if (tier.colourStrength >= 0.0f)
-        config->DlssNrColourStrength = tier.colourStrength;
+    config->DlssNrReversibleMode = DlssNrLook::TierCurve(config->DlssNrReversibleMode.value_or_default());
 }
 
 // Whether a tier's settings are what is currently in effect, for highlighting its button. Derived
 // from the config rather than remembered, so it can never claim a preset the settings have since
-// drifted from, and it survives a restart. Restore Sharpness is left out of the comparison on
-// purpose: fine-tuning it after picking a tier shouldn't drop the highlight. At most one button
-// can match -- tiers have distinct resolutions and the two rows differ in placement.
+// drifted from, and it survives a restart. The curve is left out: it is the look's (a look picked after a tier keeps
+// the tier green). Tiers have distinct resolutions, so one tier at most matches. Its two rows differ in placement, which
+// tells them apart, except with Finished Picture on: placement does not apply there and both rows of that tier match
+// (DlssNr_TierPlacement.h).
 static bool ResolutionTierActive(Config* config, const ResolutionTier& tier, bool beforeSuperResolution)
 {
-    return !config->DlssNrFinishedPicture.value_or_default() &&
-           config->DlssNrRunBeforeSr.value_or_default() == beforeSuperResolution &&
+    return DlssNrTierPlacement::RowMatchesPlacement(
+               { config->DlssNrFinishedPicture.value_or_default(), config->DlssNrRunBeforeSr.value_or_default(),
+                 config->DlssNrDeferredDlss.value_or_default() },
+               beforeSuperResolution) &&
            config->DlssNrTransfer.value_or_default() == 2u &&
            config->DlssNrReducedUpscaleMethod.value_or_default() == tier.upscaleMethod &&
            !config->DlssNrModelResolutionAuto.value_or_default() &&
-           std::fabs(config->DlssNrWorkingScale.value_or_default() - tier.workingScale) < 0.005f &&
-           config->DlssNrReversibleMode.value_or_default() == tier.composition;
+           std::fabs(config->DlssNrWorkingScale.value_or_default() - tier.workingScale) < 0.005f;
 }
 
 // Which API's Optical F5Low drivers and depth finder this game uses: a game presents with one of them. A dxvk game
@@ -1033,8 +1079,9 @@ static void RenderNativeMode(Config* config, bool nrEnabled, bool& finishedPictu
 
     HelpMarker("For games that don't call an upscaler: Optical F5Low works out the motion itself so NR can run.\n"
                "NR only: NR on the finished picture. Cheapest; no frame generation.\n"
-               "NR + upscaler & frame generation: adds OptiScaler's upscaler to keep the picture steady; needed for "
-               "frame generation. Costs more.\n"
+               "NR + upscaler & frame generation: adds OptiScaler's upscaler, which gives frame generation its input; "
+               "needed for frame generation. With NR on, NR works on the game's picture and the upscaler does not "
+               "process it.\n"
                "FG only (Vulkan): frame generation for Vulkan games that call DLSS, FSR or XeSS themselves.\n"
                "Needs Enable Neural Rendering. On Vulkan, set up frame generation before the game starts.");
 
@@ -1056,8 +1103,7 @@ static void RenderNativeMode(Config* config, bool nrEnabled, bool& finishedPictu
     // a native Vulkan game, on dxvk's own Vulkan swapchain.
     const bool vulkanNoBridge = api == NativeApi::Vulkan && !VkPresentBridge::IsUp();
     const Warning warning =
-        WarningFor(shown, nrEnabled, finishedPicture, DlssNr::NativeInputBlockedBySwapChainInterop(), gameUpscaler,
-                   vulkanNoBridge, VulkanFeatureIsOn12());
+        WarningFor(shown, nrEnabled, finishedPicture, gameUpscaler, vulkanNoBridge, VulkanFeatureIsOn12());
     const char* warningText = nullptr;
 
     switch (warning)
@@ -1065,10 +1111,6 @@ static void RenderNativeMode(Config* config, bool nrEnabled, bool& finishedPictu
     case Warning::GameUpscaler:
         warningText = "The game is calling an upscaler of its own, so this stands aside and NR runs on that call. "
                       "Choose Off, or turn the game's upscaler off to use this.";
-        break;
-    case Warning::Dx11FrameGeneration:
-        warningText = "NR only does nothing while OptiScaler's frame generation has replaced this D3D11 game's swap "
-                      "chain. Choose NR + upscaler & frame generation.";
         break;
     case Warning::VulkanNeedsRestart:
         warningText = "Waiting for the game to make a new swapchain for frame generation (it was told to). If nothing "
@@ -1616,18 +1658,95 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
     if (ImGui::SmallButton("Open Optical F5Low##statuslink"))
         MenuPages::RequestPage(MenuPages::Page::NrF5Low);
 
+    const float presetWidth = PresetButtonWidth();
+
+    ImGui::SeparatorText("Look Presets");
+    {
+        const auto now = ReadLook(config);
+        // The input styles are skipped above 100% model resolution and on the deferred path (Config.h DlssNrInputStyle)
+        const bool inputStyleOff = config->DlssNrWorkingScale.value_or_default() > 1.0f + 0.005f ||
+                                   config->DlssNrDeferredDlss.value_or_default();
+
+        // The base the second row is built on is derived from the settings when one of those looks is in effect, else
+        // it is this session's last pick (Standard at start) and changes nothing until a look is clicked
+        static DlssNrLook::Base pickedBase = DlssNrLook::Base::Standard;
+        const auto inEffect = DlssNrLook::SecondRowInEffect(now);
+
+        if (inEffect)
+            pickedBase = inEffect->base;
+
+        for (size_t i = 0; i < DlssNrLook::kLookCount; ++i)
+        {
+            const auto& look = DlssNrLook::kLooks[i];
+
+            // Two rows: the everyday looks, then the ones that aim at part of the picture or restyle it
+            if (i != 0 && i != 4)
+                ImGui::SameLine();
+
+            const bool active = look.isModifier ? inEffect && inEffect->look == look.id
+                                                : DlssNrLook::Matches(now, look.settings);
+
+            if (PresetButton(look.name, active, presetWidth))
+                WriteLook(config, look.isModifier ? DlssNrLook::ComposeLook(look.id, pickedBase) : look.settings);
+
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s%s", look.tip,
+                                  look.experimental && inputStyleOff
+                                      ? "\nNo effect right now: the input style is skipped above 100% model "
+                                        "resolution and on the deferred path."
+                                      : "");
+        }
+
+        // Directly under the row it changes. Picking a base while one of these looks is on moves that look onto it.
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextUnformatted("Built on:");
+
+        for (size_t b = 0; b < DlssNrLook::kBaseCount; ++b)
+        {
+            ImGui::SameLine();
+
+            if (ImGui::RadioButton(LookBaseNames[b], pickedBase == (DlssNrLook::Base) b))
+            {
+                pickedBase = (DlssNrLook::Base) b;
+
+                if (inEffect)
+                    WriteLook(config, DlssNrLook::ComposeLook(inEffect->look, pickedBase));
+            }
+        }
+
+        ImGui::SameLine();
+        HelpMarker("Which look Faces, Painterly, Soft canvas and Structure start from: its style, strength and "
+                   "curve. The look then adds its own skin, detail or input changes. Picking a base while one of "
+                   "these looks is on applies it right away; with none on, it only sets what the next click uses.");
+
+        // An input style that is skipped does nothing: say so where the look is, not only in its tooltip
+        if (inEffect && inputStyleOff && DlssNrLook::Get(inEffect->look).experimental)
+        {
+            const char* name = DlssNrLook::Get(inEffect->look).name;
+
+            if (config->DlssNrDeferredDlss.value_or_default())
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f), "%s: no effect with \"Generate before SR, apply after SR\".",
+                                   name);
+            else
+                ImGui::TextColored(ImVec4(0.9f, 0.6f, 0.25f, 1.0f),
+                                   "%s: no effect at %.0f%% model resolution (works at 100%% or below).", name,
+                                   config->DlssNrWorkingScale.value_or_default() * 100.0f);
+        }
+    }
+    HelpMarker("How NR's edit looks: each pass's style and strengths, the curve, Detail and Colour strength, skin and "
+               "scenery, and the input style. Leaves the pass count, the quality tier and exposure alone. Green = in "
+               "effect; changing one of its settings clears it.");
+
     ImGui::SeparatorText("Multipass Presets");
-    if (PresetButton("1 Pass", PassPresetActive(config, 1u)))
-        ApplyPassPreset(config, 1u);
-    ImGui::SameLine();
-    if (PresetButton("2 Pass", PassPresetActive(config, 2u)))
-        ApplyPassPreset(config, 2u);
-    ImGui::SameLine();
-    if (PresetButton("3 Pass", PassPresetActive(config, 3u)))
-        ApplyPassPreset(config, 3u);
-    HelpMarker("Sets this fork's recommended start for that pass count: FP8 precision, game-exposure white point, "
-               "and the extra passes' overrides. Leaves upscaling and composition alone. Green = in effect; changing "
-               "a pass setting clears it.");
+    for (uint32_t passes = 1; passes <= IM_ARRAYSIZE(PassPresetNames); ++passes)
+    {
+        if (passes > 1)
+            ImGui::SameLine();
+        if (PresetButton(PassPresetNames[passes - 1], PassPresetActive(config, passes), presetWidth))
+            ApplyPassPreset(config, passes);
+    }
+    HelpMarker("Sets the pass count, with NR on FP8 and the default exposure. How each pass looks is the Look "
+               "presets'. Green = in effect; changing the pass count clears it.");
 
     // Directly under the pass presets, since those buttons set this slider's value. This page
     // has no page-wide item width, so this block pushes its own to keep the slider's width.
@@ -1691,7 +1810,7 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
             if (i > 0)
                 ImGui::SameLine();
             if (PresetButton(ResolutionTiers[i].name,
-                             ResolutionTierActive(config, ResolutionTiers[i], beforeSuperResolution)))
+                             ResolutionTierActive(config, ResolutionTiers[i], beforeSuperResolution), presetWidth))
                 ApplyResolutionTier(config, pendingScale, ResolutionTiers[i], beforeSuperResolution);
         }
         ImGui::PopID();
@@ -1700,14 +1819,14 @@ static void RenderStatusPage(Config* config, float menuResScale, const NrCommon&
     ImGui::SeparatorText("Pre-SR Presets");
     tierRow("pre", true);
     HelpMarker("Quality tiers for NR before SR, from High (full resolution, best) to Potato (50%, cheapest). Sets "
-               "Upscale Mode and Method, Model resolution and Final Image Composition. Green = in effect; changing "
-               "those clears it.");
+               "Upscale Mode and Method and Model resolution, and runs composed. The look is the Look presets'. "
+               "Green = in effect; changing those clears it.");
 
     ImGui::SeparatorText("Post-SR Presets");
     tierRow("post", false);
     HelpMarker("Quality tiers for NR after SR, from High (full resolution, best) to Potato (50%, cheapest). Sets "
-               "Upscale Mode and Method, Model resolution and Final Image Composition. Green = in effect; changing "
-               "those clears it.");
+               "Upscale Mode and Method and Model resolution, and runs composed. The look is the Look presets'. "
+               "Green = in effect; changing those clears it.");
 }
 
 // NR Exposure, drawn at the end of the NR Input page.
@@ -1784,21 +1903,30 @@ static void RenderExposureSection(Config* config, float menuResScale)
                                              "Scanned exposure (experimental)",
                                              "Automatic exposure from HDR frame" };
 
-        int source = (int) config->DlssNrWhitePointSource.value_or_default();
+        // Auto first, naming what it is now; the other entries are the values 0-3
+        const uint32_t configuredSource = config->DlssNrWhitePointSource.value_or_default();
+        const std::string autoSource =
+            std::string("Auto (") + sourceNames[DlssNr::WhitePointSourceEffective(*config)] + ")";
+        const char* sourceItems[] = { autoSource.c_str(), sourceNames[0], sourceNames[1], sourceNames[2],
+                                      sourceNames[3] };
+        int sourceItem = configuredSource == DlssNrExposureDefault::kSourceAuto
+                             ? 0
+                             : (int) std::min(configuredSource, DlssNrExposureDefault::kSourceAutomatic) + 1;
 
-        if (source < 0 || source > 3)
-            source = 0;
-
-        if (ImGui::Combo("White point source", &source, sourceNames, IM_ARRAYSIZE(sourceNames)))
+        if (ImGui::Combo("White point source", &sourceItem, sourceItems, IM_ARRAYSIZE(sourceItems)))
         {
-            config->DlssNrWhitePointSource = (uint32_t) source;
+            config->DlssNrWhitePointSource =
+                sourceItem == 0 ? DlssNrExposureDefault::kSourceAuto : (uint32_t) (sourceItem - 1);
 
             // Nothing else to set. The scan asks the source whether it is wanted, so choosing
             // it here is the whole of switching it on -- there is no second flag to keep in
             // step, and so no way for the two to disagree.
         }
 
+        const int source = (int) DlssNr::WhitePointSourceEffective(*config);
+
         HelpMarker("Where NR's brightness reference comes from.\n"
+                   "Auto: the game's exposure when the game gives one, else Automatic exposure.\n"
                    "Manual: Paper white.\n"
                    "Game exposure: the game's own value.\n"
                    "Scanned exposure: read from game buffers; needs calibration.\n"
@@ -1824,7 +1952,7 @@ static void RenderExposureSection(Config* config, float menuResScale)
                         DlssNrTrim::Parse(config->DlssNrGameExposureTrimAnchors.value_or_default());
                     const float trim = DlssNrTrim::TrimForKey(
                         anchorKey, config->DlssNrWhitePointTrim.value_or_default(), trimAnchors, false);
-                    const bool asIs = config->DlssNrGameExposureScale.value_or_default() == DlssNrGameScale::kAsIs;
+                    const bool asIs = DlssNr::GameExposureScaleEffective(*config) == DlssNrGameScale::kAsIs;
                     const float whiteAsIs =
                         DlssNrGameScale::WhiteBase(DlssNrGameScale::kAsIs, ex.preExposure, ex.exposure) * trim;
                     const float whiteWithExposure =
@@ -1943,7 +2071,7 @@ static void RenderExposureSection(Config* config, float menuResScale)
     // The scan before it is anchored is the exception, and it has to be: anchoring captures an
     // absolute white point, so there must be an absolute slider to set. Showing a trim there
     // asked people to "set paper white below" next to a control that was not paper white.
-    const int wpSource = (int) config->DlssNrWhitePointSource.value_or_default();
+    const int wpSource = (int) DlssNr::WhitePointSourceEffective(*config);
 
     // Which anchor row the paper-white slider edits, or -1 for the live unanchored point. Menu-
     // local and not persisted; the anchor block below sets it when a row is clicked. Declared
@@ -2033,19 +2161,28 @@ static void RenderExposureSection(Config* config, float menuResScale)
         // stops around 1x, which is why the slider runs further towards darker than towards brighter.
         // Index = DlssNrGameScale value: 0 with the game's exposure, 1 as is.
         static const char* scaleNames[] = { "Game's setting", "Native look" };
-        int scale = (int) config->DlssNrGameExposureScale.value_or_default();
+        // Auto first, naming what it is for this game; the other entries are the values 0-1
+        const uint32_t configuredScale = config->DlssNrGameExposureScale.value_or_default();
+        const std::string autoScale =
+            std::string("Auto (") + scaleNames[DlssNr::GameExposureScaleEffective(*config)] + ")";
+        const char* scaleItems[] = { autoScale.c_str(), scaleNames[0], scaleNames[1] };
+        int scale = configuredScale == DlssNrExposureDefault::kScaleAuto
+                        ? 0
+                        : (int) std::min(configuredScale, DlssNrExposureDefault::kScaleAsIs) + 1;
 
-        if (scale < 0 || scale > 1)
-            scale = 0;
-
-        if (ImGui::Combo("Starting point##gameexposure", &scale, scaleNames, IM_ARRAYSIZE(scaleNames)))
+        if (ImGui::Combo("Starting point##gameexposure", &scale, scaleItems, IM_ARRAYSIZE(scaleItems)))
         {
-            config->DlssNrGameExposureScale = (uint32_t) scale;
-            // A Trim set on one scale means something else on the other, so the slider starts again at 0 EV.
-            config->DlssNrWhitePointTrim = DlssNrExposureCalibrate::kGameExposureNeutralTrim;
+            const uint32_t before = DlssNr::GameExposureScaleEffective(*config);
+            config->DlssNrGameExposureScale = scale == 0 ? DlssNrExposureDefault::kScaleAuto : (uint32_t) (scale - 1);
+
+            // A Trim set on one scale means something else on the other, so the slider starts again at 0 EV. Pinning the
+            // scale Auto already gave (Auto (Native look) -> Native look) keeps it.
+            if (DlssNr::GameExposureScaleEffective(*config) != before)
+                config->DlssNrWhitePointTrim = DlssNrExposureCalibrate::kGameExposureNeutralTrim;
         }
 
-        HelpMarker("Native look: like games with built-in NR (e.g. NBA 2K27). Try first.\n"
+        HelpMarker("Auto: Native look for games measured to need it (NBA 2K27), else Game's setting.\n"
+                   "Native look: like games with built-in NR (e.g. NBA 2K27).\n"
                    "Game's setting: the game's brightness value. Use if Native look is far too dark (e.g. RDR2).\n"
                    "Changing it resets the brightness slider to 0.");
 
@@ -3618,19 +3755,20 @@ bool RenderHeaderBanner(Config* config, HeaderBanner::Feature feature, bool upsc
         ImGui::TextColored(offerColour, "No upscaler files found. Optical F5Low can still run NR without one.");
         break;
     case Line::F5LowNrAndFrameGen:
-        ImGui::TextDisabled("Optical F5Low: NR and frame generation on the finished picture (%s as stabiliser).",
+        ImGui::TextDisabled("Optical F5Low: NR and frame generation on the finished picture (%s gives frame generation "
+                            "its input).",
                             backendName.c_str());
         break;
     case Line::F5LowNrNoFrameGen:
-        ImGui::TextDisabled("Optical F5Low: NR on the finished picture (%s as stabiliser), frame generation off.",
-                            backendName.c_str());
+        ImGui::TextDisabled("Optical F5Low: NR on the finished picture, frame generation off.");
         break;
     case Line::F5LowFrameGenNoNr:
-        ImGui::TextDisabled("Optical F5Low: frame generation on the finished picture (%s as stabiliser), NR off.",
+        ImGui::TextDisabled("Optical F5Low: frame generation on the finished picture (%s gives it its input), NR off.",
                             backendName.c_str());
         break;
     case Line::F5LowStabiliser:
-        ImGui::TextDisabled("Optical F5Low: %s keeps the picture steady; NR and frame generation are off.",
+        ImGui::TextDisabled("Optical F5Low: %s is ready to give frame generation its input; NR and frame generation "
+                            "are off.",
                             backendName.c_str());
         break;
     case Line::F5LowNrOnly:
@@ -3683,8 +3821,8 @@ bool RenderHeaderBanner(Config* config, HeaderBanner::Feature feature, bool upsc
 void RenderF5LowUpscalerNote()
 {
     ImGui::TextWrapped(
-        "Driven by Optical F5Low (the game makes no upscaler call): this upscaler runs at the same size as a "
-        "stabiliser.");
+        "Driven by Optical F5Low (the game makes no upscaler call): this upscaler runs at the same size as the game's "
+        "picture. With NR on, NR works on the game's picture and this upscaler only gives frame generation its input.");
 
     if (ImGui::SmallButton("Optical F5Low settings##upscalernote"))
         MenuPages::RequestPage(MenuPages::Page::NrF5Low);

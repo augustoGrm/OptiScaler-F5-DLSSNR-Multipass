@@ -34,7 +34,7 @@ struct NativeFrame
     ID3D12Resource* historyDistrust = nullptr; // the trust mask (TrustMaskDx12::Mask()): how little the last frame's
                                                // history can be trusted at each pixel, R8_UNORM at the flow's size,
                                                // in a state readable by a non-pixel shader, which the consumer leaves
-    bool depthReversed = false;
+    bool depthReversed = true;                 // always: the guide depth is reversed-Z (TrustMaskDx12::BuildGuides)
     bool reset = false;               // the frame does not continue the last one
 };
 

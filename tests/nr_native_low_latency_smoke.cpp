@@ -259,21 +259,6 @@ int main()
         CHECK(t.api == Api::Vulkan && t.device == &vkDevice);
     }
 
-    // A device that cannot do the Vulkan pair: its own reason, after the reasons the player can change and before nothing
-    {
-        Inputs d;
-        d.f5lowRunning = true;
-        d.deviceAvailable = false;
-        CHECK(Decide(d) == Decision::DeviceUnavailable);
-        CHECK(DecisionText(Decision::DeviceUnavailable)[0] != '\0');
-        CHECK(strcmp(StatusLabel(Decision::DeviceUnavailable), "Off") == 0);
-        d.setting = Setting::Off;
-        CHECK(Decide(d) == Decision::SettingOff);
-        d.setting = Setting::Auto;
-        d.gameCallsReflex = true;
-        CHECK(Decide(d) == Decision::GameRunsReflex);
-    }
-
     // The Vulkan Sleep pair (NativeLowLatencyVkSync.h): init once, strictly rising values from 1, a wait on each value
     {
         int initCalls = 0, sleepCalls = 0, waitCalls = 0;
@@ -462,6 +447,19 @@ int main()
         CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
         CHECK(PlanCap(cap).minimumIntervalUs == 8333);
 
+        // ... with V-Sync XeLL goes by the refresh rate: the limiter keeps the cap, XeLL still lowers latency
+        cap.xefgVsync = true;
+        CHECK(!XellIdle(cap));
+        CHECK(PlanCap(cap).owner == CapOwner::Limiter);
+        CHECK(PlanCap(cap).minimumIntervalUs == 0);
+
+        // ... V-Sync is XeLL's alone: Reflex in the split keeps its cap
+        cap.method = Method::RealReflexWithXefg;
+        CHECK(PlanCap(cap).owner == CapOwner::LowLatency);
+        CHECK(PlanCap(cap).minimumIntervalUs == 8333);
+        cap.method = Method::XellWithXefg;
+        cap.xefgVsync = false;
+
         // ... on Intel XeLL works without XeFG generating
         cap.xefgGenerating = false;
         cap.intelGpu = true;
@@ -542,6 +540,15 @@ int main()
 
             // A pause that lasts: taken on its kCapSettlePresents-th present
             CHECK(SettleCap(settle, limiter) == limiter);
+
+            // A changed method takes its plan at once: Reflex's per-rendered interval is wrong for XeLL
+            CapSettle byMethod;
+            const CapPlan reflex { CapOwner::LowLatency, 25000 };
+            const CapPlan xellNow { CapOwner::LowLatency, 12500 };
+            CHECK(SettleCap(byMethod, reflex, Method::RealReflexWithXefg) == reflex);
+            CHECK(SettleCap(byMethod, xellNow, Method::XellWithXefg) == xellNow);
+            // ... the same method still settles
+            CHECK(SettleCap(byMethod, reflex, Method::XellWithXefg) == xellNow);
             CHECK(SettleCap(settle, limiter) == limiter);
 
             // A plan that keeps changing never settles on any of its passing values
@@ -691,7 +698,7 @@ int main()
         CHECK(history.Contains(xefg::FrameIdHistory::kSize + 1));
     }
 
-    // A bridged Vulkan game's own Reflex feeding XeFG's XeLL (native/XefgReflexRule.h)
+    // XeFG on the Vulkan present bridge, and the sleep modes (native/XefgReflexRule.h)
     {
         using namespace native::xefgreflex;
 
@@ -702,32 +709,7 @@ int main()
         CHECK(!ShouldForward(true, true, true));   // dxvk with no Vulkan bridge: the D3D hooks and dxvk own it
         CHECK(!ShouldForward(true, false, true));
 
-        // VkLatencyMarkerNV against NVAPI's NV_LATENCY_MARKER_TYPE (NVAPI has PC_LATENCY_PING at 8)
-        static_assert(VK_LATENCY_MARKER_SIMULATION_START_NV == 0 && VK_LATENCY_MARKER_TRIGGER_FLASH_NV == 7);
-        static_assert(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV == 8 &&
-                      VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV == 11);
-        uint32_t nv = 99;
-
-        for (uint32_t vk = 0; vk <= 7; ++vk)
-        {
-            CHECK(NvApiMarkerFromVulkanNV(vk, &nv) && nv == vk);
-        }
-
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_START_NV, &nv) && nv == 9);
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_RENDERSUBMIT_END_NV, &nv) && nv == 10);
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_START_NV, &nv) && nv == 11);
-        CHECK(NvApiMarkerFromVulkanNV(VK_LATENCY_MARKER_OUT_OF_BAND_PRESENT_END_NV, &nv) && nv == kNvApiLastMarker);
-        CHECK(!NvApiMarkerFromVulkanNV(12, &nv));
-        CHECK(!NvApiMarkerFromVulkanNV(0x7FFFFFFF, &nv));
-
-        // XeLL takes the six frame markers only
-        for (uint32_t marker = 0; marker <= kNvApiLastMarker; ++marker)
-        {
-            CHECK(XellTakesMarker(marker) == (marker <= 5));
-        }
-
-        // The sleep mode: XeLL keeps the game's values (the cap replaces the interval when one is set), the driver's is
-        // all off, the interval too (only one of the two may wait)
+        // The sleep mode: XeLL keeps the game's values (the cap replaces the interval when one is set)
         SleepMode game;
         game.lowLatency = true;
         game.boost = true;
@@ -738,8 +720,6 @@ int main()
         CHECK(xell.lowLatency && xell.boost && xell.minimumIntervalUs == 16667 && xell.useMarkersToOptimize);
         xell = SleepModeForOutput(game, 8333, true, false);
         CHECK(xell.lowLatency && xell.minimumIntervalUs == 8333);
-        CHECK(!kDriverSleepMode.lowLatency && !kDriverSleepMode.boost && kDriverSleepMode.minimumIntervalUs == 0);
-        CHECK(!kDriverSleepMode.useMarkersToOptimize);
 
         // The rule the D3D hooks share: XeFG is the output -> low latency on whatever the game says, the cap in place
         // of the game's interval; only fakenvapi's Force Disable turns it off; no XeFG -> the game's mode as it is
@@ -759,13 +739,15 @@ int main()
         CHECK(out.lowLatency && out.boost); // Force Disable is fakenvapi's own business without XeFG
 
         // Who keeps the cap the game's Reflex hands XeLL: XeLL while it can, OptiScaler's limiter otherwise
-        CHECK(XellHoldsCap(false, false, true));   // NVIDIA/AMD, XeFG generating
-        CHECK(!XellHoldsCap(false, false, false)); // NVIDIA/AMD, XeFG paused or off: XeLL idle
-        CHECK(XellHoldsCap(false, true, false));   // Intel: XeLL works on its own
-        CHECK(XellHoldsCap(false, true, true));
-        CHECK(!XellHoldsCap(true, true, true));    // Force Disable
-        CHECK(!XellHoldsCap(true, false, true));   // Force Disable on NVIDIA/AMD while XeFG generates
-        CHECK(!XellHoldsCap(true, true, false));
+        CHECK(XellHoldsCap(false, false, true, false));   // NVIDIA/AMD, XeFG generating
+        CHECK(!XellHoldsCap(false, false, false, false)); // NVIDIA/AMD, XeFG paused or off: XeLL idle
+        CHECK(XellHoldsCap(false, true, false, false));   // Intel: XeLL works on its own
+        CHECK(XellHoldsCap(false, true, true, false));
+        CHECK(!XellHoldsCap(true, true, true, false));  // Force Disable
+        CHECK(!XellHoldsCap(true, false, true, false)); // Force Disable on NVIDIA/AMD while XeFG generates
+        CHECK(!XellHoldsCap(true, true, false, false));
+        CHECK(!XellHoldsCap(false, false, true, true)); // V-Sync: XeLL goes by the refresh rate
+        CHECK(!XellHoldsCap(false, true, true, true));
 
         // Reflex off in the game's menu: XeLL still runs (its sleeps carry the cap) and gets the cap
         SleepMode off;
@@ -908,6 +890,7 @@ int main()
     {
         OutputInputs real; // NVIDIA, real nvapi, no XeFG
         real.nvidiaGpu = true;
+        real.driverReflex = true; // as CurrentOutputInputs sets it
         CHECK(OutputAvailability(Output::Auto, real).available);
         CHECK(OutputAvailability(Output::XeLL, real).available);
         CHECK(!OutputAvailability(Output::LatencyFlex, real).available);
@@ -936,6 +919,50 @@ int main()
         // shows, not a greyed LatencyFlex
         CHECK(OutputShown(real, false, true) == Output::Auto);
         CHECK(OutputShown(fake, true, true) == Output::XeLL);
+
+        // Frame cap only: offered without XeFG wherever the driver's Reflex is not the output
+        CHECK(!OutputAvailability(Output::FrameCapOnly, real).available);
+        CHECK(OutputAvailability(Output::FrameCapOnly, real).why[0] != '\0');
+        CHECK(OutputAvailability(Output::FrameCapOnly, fake).available);
+        OutputInputs amdReal; // an AMD card on its own nvapi: InputCommon's Anti-Lag 2, or Frame cap only
+        amdReal.amdGpu = true;
+        CHECK(OutputAvailability(Output::FrameCapOnly, amdReal).available);
+        CHECK(!OutputAvailability(Output::FrameCapOnly, xefg).available);
+        CHECK(OutputShown(fake, false, false, true) == Output::FrameCapOnly);
+        CHECK(OutputShown(fake, false, true, true) == Output::FrameCapOnly); // ahead of LatencyFlex, as PlanOutput
+        CHECK(OutputShown(fake, true, false, true) == Output::XeLL);         // Force XeLL takes the slot
+        CHECK(OutputShown(real, false, false, true) == Output::Auto);        // set in the ini on NVIDIA Reflex
+        CHECK(OutputShown(xefg, false, false, true) == Output::XeLL);
+
+        // NVIDIA with fakenvapi as the nvapi: offered; but where InputCommon runs the driver's Reflex anyway (a Vulkan
+        // device with VK_NV_low_latency2) neither forced entry is, and Auto shows what runs
+        OutputInputs nvFake;
+        nvFake.nvidiaGpu = true;
+        nvFake.fakenvapiMain = true;
+        CHECK(OutputAvailability(Output::FrameCapOnly, nvFake).available);
+        CHECK(OutputAvailability(Output::LatencyFlex, nvFake).available);
+        nvFake.driverReflex = true;
+        CHECK(!OutputAvailability(Output::FrameCapOnly, nvFake).available);
+        CHECK(!OutputAvailability(Output::LatencyFlex, nvFake).available);
+        CHECK(OutputShown(nvFake, false, false, true) == Output::Auto);
+        CHECK(OutputShown(nvFake, false, true, false) == Output::Auto);
+
+        // The menu hides entries whose reason holds for the whole session and greys only the passing ones. Where the
+        // driver's Reflex runs, the Auto entry is that method by name, and it is what OutputShown selects there.
+        CHECK(OutputAvailability(Output::LatencyFlex, real).hidden);
+        CHECK(OutputAvailability(Output::FrameCapOnly, real).hidden);
+        CHECK(OutputAvailability(Output::FrameCapOnly, nvFake).hidden);
+        CHECK(!OutputAvailability(Output::XeLL, real).hidden && !OutputAvailability(Output::Auto, real).hidden);
+        OutputInputs amdNoFake; // LatencyFlex needs fakenvapi, which the session does not get later
+        amdNoFake.amdGpu = true;
+        CHECK(OutputAvailability(Output::LatencyFlex, amdNoFake).hidden);
+        CHECK(!OutputAvailability(Output::FrameCapOnly, amdNoFake).hidden);
+        CHECK(AutoEntryName(real) != nullptr && std::strcmp(AutoEntryName(real), "NVIDIA Reflex") == 0);
+        CHECK(AutoEntryName(nvFake) != nullptr);
+        CHECK(AutoEntryName(fake) == nullptr && AutoEntryName(amdReal) == nullptr);
+        for (const bool frameCapOnly : { false, true })
+            for (const bool forceLatencyFlex : { false, true })
+                CHECK(OutputShown(real, false, forceLatencyFlex, frameCapOnly) == Output::Auto);
 
         // Boost: only with real Reflex as the output, and only while OptiScaler makes the calls
         CHECK(BoostAvailable(Input::Auto, real, false));
@@ -1049,11 +1076,28 @@ int main()
             CHECK(!XefgLatencyAvailable(XefgLatency::AntiLag2, failed));
             CHECK(!OutputAvailability(Output::AntiLag2, failed).available);
             CHECK(std::strstr(OutputAvailability(Output::AntiLag2, failed).why, "could not start") != nullptr);
+            CHECK(!OutputAvailability(Output::AntiLag2, failed).hidden); // can pass: greyed, not hidden
             CHECK(OutputShown(failed, false, false) == Output::XeLL);
             CHECK(EffectiveXefgLatency(failed, false, false) == XefgLatency::XeLL);
             CHECK(OutputLocked(failed));
             // ... the other reasons keep their own words
             CHECK(std::strstr(OutputAvailability(Output::AntiLag2, nvidia).why, "could not start") == nullptr);
+        }
+
+        // Reflex that failed to start (a Vulkan device with neither VK_NV_low_latency2 nor NVIDIA's NvAPI Vulkan
+        // Reflex): the same, XeFG goes back to XeLL
+        {
+            OutputInputs failed = nvidia;
+            failed.xefgLatency = XefgLatency::Reflex;
+            failed.reflexFailed = true;
+            CHECK(!XefgLatencyAvailable(XefgLatency::Reflex, failed));
+            CHECK(!OutputAvailability(Output::Reflex, failed).available);
+            CHECK(std::strstr(OutputAvailability(Output::Reflex, failed).why, "could not start") != nullptr);
+            CHECK(!OutputAvailability(Output::Reflex, failed).hidden); // can pass: greyed, not hidden
+            CHECK(OutputShown(failed, false, false) == Output::XeLL);
+            CHECK(EffectiveXefgLatency(failed, false, false) == XefgLatency::XeLL);
+            CHECK(OutputLocked(failed));
+            CHECK(std::strstr(OutputAvailability(Output::Reflex, amd).why, "could not start") == nullptr);
         }
 
         // Without XeFG the two are not offered
@@ -1102,27 +1146,6 @@ int main()
         OutputInputs xellChosen = nvidia;
         xellChosen.xefgLatency = XefgLatency::XeLL;
         CHECK(EffectiveXefgLatency(xellChosen, false, false) == XefgLatency::XeLL);
-
-        // Routing per call. XeLL keeps what it had: everything, driver nothing.
-        for (const auto call : { Call::SetSleepMode, Call::Sleep, Call::Marker, Call::GetLatency })
-        {
-            const auto r = RouteFor(XefgLatency::XeLL, call);
-            CHECK(r.xell && !r.driver);
-        }
-
-        for (const auto side : { XefgLatency::Reflex, XefgLatency::AntiLag2 })
-        {
-            // The mode goes to both (XeLL's with low latency off), the Sleep to the driver alone (XeLL never sleeps),
-            // markers to both (XeLL's frame ID bookkeeping), the latency report from the driver
-            auto r = RouteFor(side, Call::SetSleepMode);
-            CHECK(r.xell && r.driver);
-            r = RouteFor(side, Call::Sleep);
-            CHECK(!r.xell && r.driver);
-            r = RouteFor(side, Call::Marker);
-            CHECK(r.xell && r.driver);
-            r = RouteFor(side, Call::GetLatency);
-            CHECK(!r.xell && r.driver);
-        }
 
         // The two sleep modes
         SleepMode game;
