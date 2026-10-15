@@ -733,7 +733,8 @@ static void WriteLook(Config* config, const DlssNrLook::Settings& s)
     config->DlssNrInputStyleFacesOnly = s.facesOnly;
 }
 
-static constexpr const char* LookBaseNames[] = { "Standard", "Natural", "Cinematic" };
+// "##lookbase": Natural and Cinematic are also look buttons on the same page, and ImGui takes the label as the ID
+static constexpr const char* LookBaseNames[] = { "Standard##lookbase", "Natural##lookbase", "Cinematic##lookbase" };
 static_assert(IM_ARRAYSIZE(LookBaseNames) == DlssNrLook::kBaseCount);
 
 // A button drawn green while its preset is the one in effect (the overlay's existing success green). `width` 0: as wide
