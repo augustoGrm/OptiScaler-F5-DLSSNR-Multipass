@@ -110,6 +110,131 @@ int main()
         CHECK(!Get(Look::Native).experimental && !Get(Look::Natural).experimental);
     }
 
+    // Built on Standard is today's four second-row looks, bit for bit. The literals are the old definitions, copied
+    // before the split into base + modifier.
+    {
+        auto lit = [](Profile p1, uint32_t curve)
+        {
+            Settings s;
+            s.pass1 = p1;
+            s.curve = curve;
+            return s;
+        };
+        auto exact = [](const Settings& a, const Settings& b)
+        {
+            return a.pass1.style == b.pass1.style && a.pass1.intensity == b.pass1.intensity &&
+                   a.pass1.structure == b.pass1.structure && a.pass1.tone == b.pass1.tone &&
+                   a.pass1.skin == b.pass1.skin && a.pass1.autoMask == b.pass1.autoMask &&
+                   a.pass2.has_value() == b.pass2.has_value() && a.pass3.has_value() == b.pass3.has_value() &&
+                   a.laterOverrides == b.laterOverrides && a.curve == b.curve && a.detail == b.detail &&
+                   a.colour == b.colour && a.skinSplit == b.skinSplit && a.skinTone == b.skinTone &&
+                   a.skinDetail == b.skinDetail && a.skinColour == b.skinColour && a.envDetail == b.envDetail &&
+                   a.envColour == b.envColour && a.inputStyle == b.inputStyle &&
+                   a.inputStrength == b.inputStrength && a.facesOnly == b.facesOnly;
+        };
+
+        Settings faces = lit({ 0, 1.0f, 1.0f, 1.0f, 1.0f, true }, kCurveSoftKnee);
+        faces.skinSplit = true;
+        faces.envDetail = 0.6f;
+
+        Settings painterly = lit({ 0, 1.0f, 1.0f, 1.0f, -1.0f, true }, kCurveSoftKnee);
+        painterly.inputStyle = kInputWatercolour;
+        painterly.detail = 1.5f;
+
+        Settings soft = lit({ 0, 1.0f, 1.0f, 1.0f, -1.0f, true }, kCurveHlg);
+        soft.inputStyle = kInputSmoothCanvas;
+        soft.detail = 2.0f;
+
+        Settings structure = lit({ 0, 1.0f, 1.0f, 1.0f, 0.75f, true }, kCurveHlg);
+        structure.inputStyle = kInputStructureHint;
+        structure.inputStrength = 1.25f;
+
+        CHECK(exact(Compose(Base::Standard, Get(Look::Faces).modifier), faces));
+        CHECK(exact(Compose(Base::Standard, Get(Look::Painterly).modifier), painterly));
+        CHECK(exact(Compose(Base::Standard, Get(Look::SoftCanvas).modifier), soft));
+        CHECK(exact(Compose(Base::Standard, Get(Look::Structure).modifier), structure));
+        CHECK(exact(Get(Look::Faces).settings, faces));
+        CHECK(exact(Get(Look::Painterly).settings, painterly));
+        CHECK(exact(Get(Look::SoftCanvas).settings, soft));
+        CHECK(exact(Get(Look::Structure).settings, structure));
+    }
+
+    // Built on Natural or Cinematic
+    {
+        const Settings facesNat = ComposeLook(Look::Faces, Base::Natural);
+        CHECK(facesNat.pass1.style == 1 && facesNat.pass1.intensity == 1.4f && facesNat.pass1.structure == 1.4f &&
+              facesNat.pass1.tone == 1.4f);
+        CHECK(facesNat.pass1.skin == 1.0f && facesNat.pass2 && facesNat.pass2->skin == 1.0f && facesNat.pass3 &&
+              facesNat.pass3->skin == 1.0f);
+        CHECK(facesNat.pass2->style == 1 && facesNat.pass3->structure == 1.5f && facesNat.pass3->tone == 0.46f);
+        CHECK(facesNat.skinSplit && facesNat.envDetail == 0.6f && facesNat.curve == kCurveHlg);
+
+        const Settings structNat = ComposeLook(Look::Structure, Base::Natural);
+        CHECK(structNat.pass1.structure <= 1.0f && structNat.pass2->structure <= 1.0f &&
+              structNat.pass3->structure <= 1.0f);
+        CHECK(structNat.curve == kCurveHlg && structNat.inputStyle == kInputStructureHint &&
+              structNat.inputStrength == 1.25f);
+        CHECK(structNat.pass1.skin == 0.75f && structNat.pass3->skin == 0.75f);
+        // The cap only lowers: Natural's intensity and tone stay
+        CHECK(structNat.pass1.intensity == 1.4f && structNat.pass1.tone == 1.4f && structNat.pass3->tone == 0.46f);
+
+        const Settings paintCin = ComposeLook(Look::Painterly, Base::Cinematic);
+        CHECK(paintCin.pass1.style == 2 && paintCin.pass1.intensity == 1.2f && paintCin.curve == kCurveSoftKnee &&
+              paintCin.detail == 1.5f && paintCin.inputStyle == kInputWatercolour);
+
+        CHECK(ComposeLook(Look::SoftCanvas, Base::Cinematic).curve == kCurveHlg);
+        CHECK(ComposeLook(Look::SoftCanvas, Base::Natural).curve == kCurveHlg);
+        CHECK(ComposeLook(Look::Faces, Base::Cinematic).curve == kCurveSoftKnee);
+        CHECK(ComposeLook(Look::Faces, Base::Cinematic).pass1.style == 2);
+
+        // Only the second-row looks are modifiers
+        for (size_t i = 0; i < kLookCount; ++i)
+            CHECK(kLooks[i].isModifier == (i >= (size_t) Look::Faces));
+    }
+
+    // At most one green button: no two (base, look) pairs are equal, and none equals a first-row look
+    for (size_t i = 0; i < kLookCount; ++i)
+    {
+        if (!kLooks[i].isModifier)
+            continue;
+
+        for (size_t b = 0; b < kBaseCount; ++b)
+        {
+            const Settings a = ComposeLook(kLooks[i].id, (Base) b);
+
+            for (size_t j = 0; j < kLookCount; ++j)
+                if (!kLooks[j].isModifier)
+                    CHECK(!Matches(a, kLooks[j].settings));
+
+            for (size_t k = 0; k < kLookCount; ++k)
+                for (size_t c = 0; c < kBaseCount; ++c)
+                    if (kLooks[k].isModifier && (k != i || c != b))
+                        CHECK(!Matches(a, ComposeLook(kLooks[k].id, (Base) c)));
+        }
+    }
+
+    // DerivedBase: the base of the matching pair, or none
+    {
+        for (size_t i = 0; i < kLookCount; ++i)
+        {
+            if (!kLooks[i].isModifier)
+            {
+                CHECK(!DerivedBase(kLooks[i].settings).has_value());
+                continue;
+            }
+
+            for (size_t b = 0; b < kBaseCount; ++b)
+            {
+                const auto got = DerivedBase(ComposeLook(kLooks[i].id, (Base) b));
+                CHECK(got.has_value() && *got == (Base) b);
+            }
+        }
+
+        Settings edited = ComposeLook(Look::Faces, Base::Natural);
+        edited.detail = 1.3f;
+        CHECK(!DerivedBase(edited).has_value());
+    }
+
     // Tiers make the composition composed and leave a composed curve alone, so a look stays in effect after one
     CHECK(TierCurve(kCurveReplace) == kCurveComposed);
     CHECK(TierCurve(kCurveReplaceBalanced) == kCurveComposed);
