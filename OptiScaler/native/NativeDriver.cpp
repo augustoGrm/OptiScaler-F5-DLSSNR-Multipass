@@ -260,9 +260,10 @@ void NativeDriver::DrawStatus()
             }
         }
         else if (_virtualUpscaler != nullptr && !_virtualUpscaler->Error().empty())
-            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "Stabiliser: %s", _virtualUpscaler->Error().c_str());
+            ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.35f, 1.0f), "Upscaler for frame generation: %s",
+                               _virtualUpscaler->Error().c_str());
         else
-            ImGui::TextDisabled("Stabiliser: waiting for the motion estimate.");
+            ImGui::TextDisabled("Upscaler for frame generation: waiting for the motion estimate.");
     }
     else if (_nativeRan)
     {

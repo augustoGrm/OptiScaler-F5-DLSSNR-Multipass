@@ -232,10 +232,21 @@ bool KernelHooks::AnswerXellLookup(DWORD dwFlags, HMODULE* phModule, BOOL* resul
     static std::atomic_bool logged { false };
 
     if (!logged.exchange(true))
+    {
         LOG_INFO("libxell.dll lookup answered with OptiScaler's XeLL: one XeLL for XeFG and OptiScaler");
 
-    *result =
-        o_K32_GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCSTR>(module), phModule);
+        // The game's own libxell.dll loaded first: an XeFG build that reaches XeLL another way than this lookup would
+        // bind to that copy and get a context made by ours. Said once, so a log shows it.
+        const HMODULE first = GetModuleHandleW(L"libxell.dll");
+
+        if (first != nullptr && first != module)
+            LOG_WARN("Another libxell.dll is loaded besides OptiScaler's XeLL; XeFG is steered to OptiScaler's only "
+                     "through this lookup");
+    }
+
+    // By address, through the system call: neither hook compares an address as a name, and it does not depend on one
+    // particular original (A or W) having been detoured
+    *result = GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, reinterpret_cast<LPCWSTR>(module), phModule);
     return true;
 #endif
 }

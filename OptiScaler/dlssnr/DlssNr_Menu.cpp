@@ -2121,9 +2121,13 @@ static void RenderExposureSection(Config* config, float menuResScale)
 
         if (ImGui::Combo("Starting point##gameexposure", &scale, scaleItems, IM_ARRAYSIZE(scaleItems)))
         {
+            const uint32_t before = DlssNr::GameExposureScaleEffective(*config);
             config->DlssNrGameExposureScale = scale == 0 ? DlssNrExposureDefault::kScaleAuto : (uint32_t) (scale - 1);
-            // A Trim set on one scale means something else on the other, so the slider starts again at 0 EV.
-            config->DlssNrWhitePointTrim = DlssNrExposureCalibrate::kGameExposureNeutralTrim;
+
+            // A Trim set on one scale means something else on the other, so the slider starts again at 0 EV. Pinning the
+            // scale Auto already gave (Auto (Native look) -> Native look) keeps it.
+            if (DlssNr::GameExposureScaleEffective(*config) != before)
+                config->DlssNrWhitePointTrim = DlssNrExposureCalibrate::kGameExposureNeutralTrim;
         }
 
         HelpMarker("Auto: Native look for games measured to need it (NBA 2K27), else Game's setting.\n"
@@ -3708,11 +3712,12 @@ bool RenderHeaderBanner(Config* config, HeaderBanner::Feature feature, bool upsc
         ImGui::TextDisabled("Optical F5Low: NR on the finished picture, frame generation off.");
         break;
     case Line::F5LowFrameGenNoNr:
-        ImGui::TextDisabled("Optical F5Low: frame generation on the finished picture (%s as stabiliser), NR off.",
+        ImGui::TextDisabled("Optical F5Low: frame generation on the finished picture (%s gives it its input), NR off.",
                             backendName.c_str());
         break;
     case Line::F5LowStabiliser:
-        ImGui::TextDisabled("Optical F5Low: %s keeps the picture steady; NR and frame generation are off.",
+        ImGui::TextDisabled("Optical F5Low: %s is ready to give frame generation its input; NR and frame generation "
+                            "are off.",
                             backendName.c_str());
         break;
     case Line::F5LowNrOnly:
