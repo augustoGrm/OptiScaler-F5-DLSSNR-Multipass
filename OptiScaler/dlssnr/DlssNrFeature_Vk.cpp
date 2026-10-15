@@ -852,7 +852,12 @@ static void EvaluateAtSeamVk(VkCommandBuffer cmdBuffer, NVSDK_NGX_Parameter* par
     }
 
     g_vk.exposureOffered = exposure != nullptr;
-    DlssNr::NoteExposureFrame(cfg, g_vk.exposureOffered, g_vk.gameExposure > 1e-6f);
+    // For WhitePointSource auto, only a texture the reader below can read (an image view), from a game that did not
+    // leave exposure to the upscaler (AutoExposure flag), counts as the game's exposure, as on D3D12
+    const bool gameExposureReadable = exposure != nullptr && exposure->Type == NVSDK_NGX_RESOURCE_VK_TYPE_VK_IMAGEVIEW &&
+                                      exposure->Resource.ImageViewInfo.ImageView != VK_NULL_HANDLE &&
+                                      (GameCreateFlags(params) & NVSDK_NGX_DLSS_Feature_Flags_AutoExposure) == 0;
+    DlssNr::NoteExposureFrame(cfg, gameExposureReadable, g_vk.gameExposure > 1e-6f);
 
     if (havePre && std::isfinite(preExposure) && preExposure > 0.0f)
         g_vk.gamePreExposure = preExposure;

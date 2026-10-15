@@ -3703,7 +3703,8 @@ void DlssNr_Dx12::Dispatch(ID3D12GraphicsCommandList* cmdList, ID3D12Resource* c
     //
     // The ring carries the game's exposure or the automatic one, and a slot written for one source must
     // never be read as the other's, so a change of source starts it over.
-    DlssNr::NoteExposureFrame(cfg, frame.ExposureTexture != nullptr, g_nr.gameExposure > 1e-6f);
+    DlssNr::NoteExposureFrame(cfg, frame.ExposureTexture != nullptr && !frame.GameAutoExposure,
+                              g_nr.gameExposure > 1e-6f);
     const uint32_t whitePointSource = DlssNr::WhitePointSourceEffective(cfg);
 
     if (whitePointSource != g_nr.exposureReadbackSource)
@@ -5789,6 +5790,7 @@ void EvaluateInternal(ID3D12GraphicsCommandList* cmdList, NVSDK_NGX_Parameter* p
         g_nr.exposureFrames++;
 
         const bool autoExposureFlag = (createFlags & NVSDK_NGX_DLSS_Feature_Flags_AutoExposure) != 0;
+        frame.GameAutoExposure = autoExposureFlag;
 
         struct ExposureReport
         {

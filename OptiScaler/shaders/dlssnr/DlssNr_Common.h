@@ -149,6 +149,11 @@ struct DlssNrFrameInfo
     // so whoever consumes it holds the last good value rather than falling back to a default.
     void* ExposureTexture = nullptr;
 
+    // The game created its feature with the AutoExposure flag: it leaves exposure to the upscaler, so a texture it still
+    // passes (an FSR or XeSS input forwarding its own, or a scale) is not the game's exposure. WhitePointSource auto does
+    // not count it as offered.
+    bool GameAutoExposure = false;
+
     // The scale the game multiplied its buffer by for float precision, which DLSS is told so it can
     // undo it. Usually 1. Divided out before the exposure is applied, exactly as FSR's PrepareRgb does.
     float PreExposure = 1.0f;
