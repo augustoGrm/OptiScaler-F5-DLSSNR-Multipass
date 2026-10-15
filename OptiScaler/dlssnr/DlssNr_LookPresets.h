@@ -30,6 +30,7 @@ inline constexpr uint32_t kCurveLinear = 7;          // linear + composed: what 
 // [DlssNr] InputStyle
 inline constexpr uint32_t kInputOff = 0;
 inline constexpr uint32_t kInputWatercolour = 1;
+inline constexpr uint32_t kInputStructureHint = 2;
 inline constexpr uint32_t kInputSmoothCanvas = 3;
 
 inline bool IsReplace(uint32_t curve) { return curve == kCurveReplace || curve == kCurveReplaceBalanced; }
@@ -80,6 +81,7 @@ enum class Look
     Faces,
     Painterly,
     SoftCanvas,
+    Structure,
 };
 
 struct Entry
@@ -145,6 +147,20 @@ inline Settings SoftCanvas()
     s.detail = 2.0f;
     return s;
 }
+
+// The structure hint shows the model the picture with its fine contrast raised, so it paints more surface structure;
+// Composed hands back only what it painted beyond that picture, so the boost itself never reaches the screen. The boost
+// is on brightness with one scale per pixel, capped below clipping, so no hue moves. Strength 2: 1 was weak in NBA 2K27
+// (the shader's note). The model's own Local structure and Detail strength stay at 1, so the boost is not stacked on a
+// second one (the model already over-sharpens mids and highlights); skin structure 0.75, the value games with built-in
+// NR use, keeps pores from turning harsh; HLG keeps the gradation in the darks, where the boost would band on Linear.
+inline Settings Structure()
+{
+    Settings s = Make({ 0, 1.0f, 1.0f, 1.0f, 0.75f, true }, kCurveHlg);
+    s.inputStyle = kInputStructureHint;
+    s.inputStrength = 2.0f;
+    return s;
+}
 } // namespace detail
 
 inline const Entry kLooks[] = {
@@ -161,6 +177,10 @@ inline const Entry kLooks[] = {
     { Look::SoftCanvas, "Soft canvas",
       "Experimental: smooth canvas input on the HLG curve, Detail strength 2: smooth surfaces, strong detail.", true,
       detail::SoftCanvas() },
+    { Look::Structure, "Structure",
+      "Experimental: the model is shown the picture with its fine contrast raised (brightness only, colours stay) and "
+      "paints more surface structure. HLG curve, gentler on skin.",
+      true, detail::Structure() },
 };
 
 inline constexpr size_t kLookCount = sizeof(kLooks) / sizeof(kLooks[0]);
